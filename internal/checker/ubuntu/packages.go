@@ -33,26 +33,44 @@ func runAptUpdate(ctx context.Context, aptConfigPath string) error {
 	return nil
 }
 
+// checkUpgradable calls apt-check twice: -p (--package-names) and the
+// default counts mode are mutually exclusive in a single invocation — with
+// -p, apt-check writes package names to stderr *instead of* "total;security",
+// not in addition to it (confirmed by reading /usr/lib/update-notifier/apt-check).
 func checkUpgradable(ctx context.Context, aptConfigPath string) (packageResult, error) {
-	cmd := exec.CommandContext(ctx, aptCheckPath, "--package-names")
-	cmd.Env = aptEnv(aptConfigPath)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return packageResult{}, fmt.Errorf("apt-check: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-
-	total, security, err := parseAptCheckCounts(stderr.String())
+	total, security, err := aptCheckCounts(ctx, aptConfigPath)
 	if err != nil {
 		return packageResult{}, err
 	}
 
-	return packageResult{
-		Total:    total,
-		Security: security,
-		Names:    parsePackageNames(stdout.String()),
-	}, nil
+	names, err := aptCheckPackageNames(ctx, aptConfigPath)
+	if err != nil {
+		return packageResult{}, err
+	}
+
+	return packageResult{Total: total, Security: security, Names: names}, nil
+}
+
+func aptCheckCounts(ctx context.Context, aptConfigPath string) (total int, security int, err error) {
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, aptCheckPath)
+	cmd.Env = aptEnv(aptConfigPath)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return 0, 0, fmt.Errorf("apt-check: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return parseAptCheckCounts(stderr.String())
+}
+
+func aptCheckPackageNames(ctx context.Context, aptConfigPath string) ([]string, error) {
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, aptCheckPath, "--package-names")
+	cmd.Env = aptEnv(aptConfigPath)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("apt-check --package-names: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return parsePackageNames(stderr.String()), nil
 }
 
 // parseAptCheckCounts parses apt-check's stderr output, which is a single
