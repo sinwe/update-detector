@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+
+FROM golang:1.22-alpine AS builder
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/update-aggregator ./cmd/update-aggregator
+
+# update-aggregator is a pure Go HTTP service with no OS-specific tooling
+# dependencies, so unlike the agent image it doesn't need an Ubuntu base.
+FROM alpine:3
+RUN addgroup -S update-aggregator \
+    && adduser -S -D -H -u 10001 -G update-aggregator update-aggregator \
+    && mkdir -p /var/lib/update-aggregator \
+    && chown -R update-aggregator:update-aggregator /var/lib/update-aggregator
+
+COPY --from=builder /out/update-aggregator /usr/local/bin/update-aggregator
+
+USER update-aggregator
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/update-aggregator"]

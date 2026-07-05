@@ -1,0 +1,38 @@
+services:
+  update-detector:
+    image: update-detector:latest
+    build: .
+    restart: unless-stopped
+    # Recommended: set this explicitly per host so Gatus/Telegram messages
+    # are unambiguous. Falls back to the shell's $HOSTNAME if unset.
+    environment:
+      - HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-${HOSTNAME:-}}
+      - CHECK_INTERVAL=6h
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - NOTIFY_ON_STARTUP=false
+      # Optional: point at a central update-aggregator (see
+      # docker-compose.aggregator.yml) to show this host on a Homepage
+      # dashboard. Purely additive — local /status, Gatus, and Telegram
+      # keep working even if the aggregator is unreachable.
+      # - AGGREGATOR_URL=http://aggregator-host:9090
+    ports:
+      - "8080:8080"
+    volumes:
+      # Host apt/dpkg state, read-only. update-detector never writes to any
+      # of these; its own writable apt cache lives in the named volume below.
+      - /etc/apt/sources.list:/host/etc/apt/sources.list:ro
+      - /etc/apt/sources.list.d:/host/etc/apt/sources.list.d:ro
+      - /var/lib/dpkg:/host/var/lib/dpkg:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /var/run:/host/var/run:ro
+      # Optional: only present if update-manager-core is installed. Remove
+      # this line if the path doesn't exist on your host — the agent
+      # defaults to LTS-only upgrade checking when it's missing.
+      - /etc/update-manager:/host/etc/update-manager:ro
+      # Container-owned state: last-known status (for diffing across
+      # restarts) and the agent's own apt package-list cache.
+      - update-detector-state:/var/lib/update-detector
+
+volumes:
+  update-detector-state:

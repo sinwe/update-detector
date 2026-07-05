@@ -1,0 +1,17 @@
+# Standalone compose file for the central aggregator. This runs once,
+# wherever you want it (e.g. next to Homepage) — it's not per-host like
+# docker-compose.yml. Agents connect out to it via AGGREGATOR_URL.
+services:
+  update-aggregator:
+    image: update-aggregator:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.aggregator
+    restart: unless-stopped
+    ports:
+      - "9090:8080"
+    volumes:
+      - update-aggregator-data:/var/lib/update-aggregator
+
+volumes:
+  update-aggregator-data:
