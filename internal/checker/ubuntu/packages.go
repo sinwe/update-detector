@@ -77,10 +77,18 @@ func aptListUpgradable(ctx context.Context, aptConfigPath string) ([]checker.Pac
 	return parseUpgradableList(stdout.String()), nil
 }
 
-// parseAptCheckCounts parses apt-check's stderr output, which is a single
-// line of the form "total;security".
+// parseAptCheckCounts parses apt-check's stderr output. The final line is
+// "total;security", but apt-check (a Python script) can print diagnostic
+// warnings to stderr before it — e.g. about a missing
+// /var/lib/ubuntu-advantage directory — so only the last non-empty line is
+// treated as the counts; everything before it is ignored. Confirmed by
+// hitting this exact case against a real host: without this, a transient
+// warning line made parsing fail and silently fall back to a stale
+// previously-cached count.
 func parseAptCheckCounts(raw string) (total int, security int, err error) {
-	line := strings.TrimSpace(raw)
+	trimmed := strings.TrimSpace(raw)
+	lines := strings.Split(trimmed, "\n")
+	line := strings.TrimSpace(lines[len(lines)-1])
 	parts := strings.SplitN(line, ";", 2)
 	if len(parts) != 2 {
 		return 0, 0, fmt.Errorf("apt-check: unexpected output %q", raw)

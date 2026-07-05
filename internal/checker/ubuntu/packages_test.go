@@ -22,6 +22,14 @@ func TestParseAptCheckCounts(t *testing.T) {
 		{name: "missing separator", raw: "not-valid-output\n", wantErr: true},
 		{name: "non-numeric", raw: "a;b\n", wantErr: true},
 		{name: "empty", raw: "", wantErr: true},
+		{
+			name: "leading python warnings before the real counts line",
+			raw: "/usr/lib/update-notifier/apt-check:351: Warning: W:Unable to read " +
+				"/var/lib/ubuntu-advantage/apt-esm/etc/apt/apt.conf.d/ - DirectoryExists " +
+				"(2: No such file or directory)\n  apt_pkg.init()\n5;2",
+			wantTotal:    5,
+			wantSecurity: 2,
+		},
 	}
 
 	for _, tt := range tests {
