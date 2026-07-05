@@ -8,18 +8,22 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"update-detector/internal/checker"
 )
 
 // aptCheckPath is Ubuntu's own upgradable-package counter, shipped by the
 // update-notifier-common package. It already knows how to distinguish
 // security updates from regular ones via python-apt, which is far more
-// robust than re-parsing `apt-get -s dist-upgrade` output ourselves.
+// robust than re-parsing `apt-get -s dist-upgrade` output ourselves. It
+// can't report version numbers though, so `apt list --upgradable` covers
+// that separately.
 const aptCheckPath = "/usr/lib/update-notifier/apt-check"
 
 type packageResult struct {
 	Total    int
 	Security int
-	Names    []string
+	Upgrades []checker.PackageUpgrade
 }
 
 func runAptUpdate(ctx context.Context, aptConfigPath string) error {
@@ -33,22 +37,21 @@ func runAptUpdate(ctx context.Context, aptConfigPath string) error {
 	return nil
 }
 
-// checkUpgradable calls apt-check twice: -p (--package-names) and the
-// default counts mode are mutually exclusive in a single invocation — with
-// -p, apt-check writes package names to stderr *instead of* "total;security",
-// not in addition to it (confirmed by reading /usr/lib/update-notifier/apt-check).
+// checkUpgradable gets counts from apt-check (python-apt's own
+// security-vs-regular classification) and names+versions from
+// `apt list --upgradable` (apt-check has no flag that reports versions).
 func checkUpgradable(ctx context.Context, aptConfigPath string) (packageResult, error) {
 	total, security, err := aptCheckCounts(ctx, aptConfigPath)
 	if err != nil {
 		return packageResult{}, err
 	}
 
-	names, err := aptCheckPackageNames(ctx, aptConfigPath)
+	upgrades, err := aptListUpgradable(ctx, aptConfigPath)
 	if err != nil {
 		return packageResult{}, err
 	}
 
-	return packageResult{Total: total, Security: security, Names: names}, nil
+	return packageResult{Total: total, Security: security, Upgrades: upgrades}, nil
 }
 
 func aptCheckCounts(ctx context.Context, aptConfigPath string) (total int, security int, err error) {
@@ -62,15 +65,16 @@ func aptCheckCounts(ctx context.Context, aptConfigPath string) (total int, secur
 	return parseAptCheckCounts(stderr.String())
 }
 
-func aptCheckPackageNames(ctx context.Context, aptConfigPath string) ([]string, error) {
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, aptCheckPath, "--package-names")
+func aptListUpgradable(ctx context.Context, aptConfigPath string) ([]checker.PackageUpgrade, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "apt", "list", "--upgradable")
 	cmd.Env = aptEnv(aptConfigPath)
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("apt-check --package-names: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("apt list --upgradable: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return parsePackageNames(stderr.String()), nil
+	return parseUpgradableList(stdout.String()), nil
 }
 
 // parseAptCheckCounts parses apt-check's stderr output, which is a single
@@ -92,20 +96,38 @@ func parseAptCheckCounts(raw string) (total int, security int, err error) {
 	return total, security, nil
 }
 
-// parsePackageNames parses apt-check --package-names's stdout output: one
-// package name per line.
-func parsePackageNames(raw string) []string {
-	var names []string
+// parseUpgradableList parses `apt list --upgradable` output, e.g.:
+//
+//	docker-compose-plugin/noble 5.3.0-1~ubuntu.24.04~noble amd64 [upgradable from: 5.2.0-1~ubuntu.24.04~noble]
+//
+// apt itself warns this format isn't a stable CLI contract, but it's the
+// only source of upgrade version numbers available without linking against
+// python-apt directly, and the format has been stable for years in practice.
+func parseUpgradableList(raw string) []checker.PackageUpgrade {
+	var upgrades []checker.PackageUpgrade
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "Listing...") {
 			continue
 		}
-		if fields := strings.Fields(line); len(fields) > 0 {
-			names = append(names, fields[0])
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
 		}
+
+		name := fields[0]
+		if idx := strings.Index(name, "/"); idx >= 0 {
+			name = name[:idx]
+		}
+
+		u := checker.PackageUpgrade{Name: name, CandidateVersion: fields[1]}
+		const marker = "[upgradable from: "
+		if idx := strings.Index(line, marker); idx >= 0 {
+			u.CurrentVersion = strings.TrimSuffix(line[idx+len(marker):], "]")
+		}
+		upgrades = append(upgrades, u)
 	}
-	return names
+	return upgrades
 }
 
 func aptEnv(aptConfigPath string) []string {

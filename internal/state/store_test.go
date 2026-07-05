@@ -25,7 +25,11 @@ func TestStoreSaveAndLoadRoundTrip(t *testing.T) {
 		Hostname:  "web01",
 		Platform:  "ubuntu",
 		CheckedAt: time.Date(2026, 7, 5, 10, 0, 0, 0, time.UTC),
-		Packages:  checker.PackageInfo{UpgradableTotal: 5, UpgradableSecurity: 2, Names: []string{"curl", "openssl"}},
+		Packages: checker.PackageInfo{
+			UpgradableTotal:    5,
+			UpgradableSecurity: 2,
+			Upgrades:           []checker.PackageUpgrade{{Name: "curl", CandidateVersion: "7.81.0-1ubuntu1.16"}},
+		},
 		OK:        false,
 	}
 

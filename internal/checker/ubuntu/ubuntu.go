@@ -76,7 +76,7 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		status.Packages = checker.PackageInfo{
 			UpgradableTotal:    pkgResult.Total,
 			UpgradableSecurity: pkgResult.Security,
-			Names:              pkgResult.Names,
+			Upgrades:           pkgResult.Upgrades,
 		}
 	}
 

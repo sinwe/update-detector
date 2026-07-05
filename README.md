@@ -106,7 +106,14 @@ Example `/status` response:
   "checked_at": "2026-07-05T10:00:00Z",
   "reboot_required": false,
   "os": { "current_version": "22.04", "update_available": false },
-  "packages": { "upgradable_total": 5, "upgradable_security": 2, "names": ["curl", "openssl"] },
+  "packages": {
+    "upgradable_total": 5,
+    "upgradable_security": 2,
+    "upgrades": [
+      { "name": "curl", "current_version": "7.81.0-1ubuntu1.15", "candidate_version": "7.81.0-1ubuntu1.16" },
+      { "name": "openssl", "current_version": "3.0.2-0ubuntu1.15", "candidate_version": "3.0.2-0ubuntu1.16" }
+    ]
+  },
   "ok": false
 }
 ```

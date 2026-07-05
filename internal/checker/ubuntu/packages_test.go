@@ -3,6 +3,8 @@ package ubuntu
 import (
 	"reflect"
 	"testing"
+
+	"update-detector/internal/checker"
 )
 
 func TestParseAptCheckCounts(t *testing.T) {
@@ -41,21 +43,40 @@ func TestParseAptCheckCounts(t *testing.T) {
 	}
 }
 
-func TestParsePackageNames(t *testing.T) {
+func TestParseUpgradableList(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
-		want []string
+		want []checker.PackageUpgrade
 	}{
 		{name: "empty", raw: "", want: nil},
-		{name: "single", raw: "curl\n", want: []string{"curl"}},
-		{name: "multiple with blank lines", raw: "curl\n\nopenssl\nlibc6\n", want: []string{"curl", "openssl", "libc6"}},
-		{name: "extra fields ignored", raw: "curl/jammy-security 7.81.0 amd64 [upgradable from: 7.80.0]\n", want: []string{"curl/jammy-security"}},
+		{
+			name: "listing header ignored",
+			raw:  "Listing...\ncurl/jammy-security 7.81.0-1ubuntu1.16 amd64 [upgradable from: 7.81.0-1ubuntu1.15]\n",
+			want: []checker.PackageUpgrade{
+				{Name: "curl", CurrentVersion: "7.81.0-1ubuntu1.15", CandidateVersion: "7.81.0-1ubuntu1.16"},
+			},
+		},
+		{
+			name: "multiple pockets in archive field",
+			raw:  "libruby3.2/noble-updates,noble-security 3.2.3-1ubuntu0.24.04.8 amd64 [upgradable from: 3.2.3-1ubuntu0.24.04.7]\n",
+			want: []checker.PackageUpgrade{
+				{Name: "libruby3.2", CurrentVersion: "3.2.3-1ubuntu0.24.04.7", CandidateVersion: "3.2.3-1ubuntu0.24.04.8"},
+			},
+		},
+		{
+			name: "multiple packages with blank lines",
+			raw:  "Listing...\ncurl/jammy 7.81.0 amd64 [upgradable from: 7.80.0]\n\nopenssl/jammy 3.0.2 amd64 [upgradable from: 3.0.1]\n",
+			want: []checker.PackageUpgrade{
+				{Name: "curl", CurrentVersion: "7.80.0", CandidateVersion: "7.81.0"},
+				{Name: "openssl", CurrentVersion: "3.0.1", CandidateVersion: "3.0.2"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parsePackageNames(tt.raw)
+			got := parseUpgradableList(tt.raw)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("got %#v, want %#v", got, tt.want)
 			}

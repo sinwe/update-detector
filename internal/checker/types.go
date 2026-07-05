@@ -38,9 +38,15 @@ type OSInfo struct {
 }
 
 type PackageInfo struct {
-	UpgradableTotal    int      `json:"upgradable_total"`
-	UpgradableSecurity int      `json:"upgradable_security"`
-	Names              []string `json:"names,omitempty"`
+	UpgradableTotal    int              `json:"upgradable_total"`
+	UpgradableSecurity int              `json:"upgradable_security"`
+	Upgrades           []PackageUpgrade `json:"upgrades,omitempty"`
+}
+
+type PackageUpgrade struct {
+	Name             string `json:"name"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	CandidateVersion string `json:"candidate_version"`
 }
 
 // ComputeOK derives the OK convenience field from the rest of the Status.
