@@ -21,7 +21,7 @@ RUN apt-get update && \
 
 RUN useradd --system --uid 10001 --shell /usr/sbin/nologin update-detector \
     && mkdir -p /var/lib/update-detector \
-    && chown -R update-detector:update-detector /var/lib/update-detector
+    && chown -R update-detector:update-detector /var/lib/update-detector /var/cache/apt/archives
 
 COPY --from=builder /out/update-detector /usr/local/bin/update-detector
 

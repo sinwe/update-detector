@@ -32,6 +32,22 @@ services:
       # this line if the path doesn't exist on your host — the agent
       # defaults to LTS-only upgrade checking when it's missing.
       - /etc/update-manager:/host/etc/update-manager:ro
+      # Optional: third-party repos (Docker, Tailscale, VS Code, etc.) sign
+      # with a key referenced by an absolute "signed-by=" path baked into
+      # sources.list.d, so — unlike the mounts above — these must land at
+      # the *same* absolute path in the container, not under /host. Without
+      # them, apt-get update fails signature verification for any repo
+      # using signed-by=/etc/apt/keyrings/... or /usr/share/keyrings/...;
+      # official Ubuntu repos are unaffected either way.
+      - /etc/apt/keyrings:/etc/apt/keyrings:ro
+      - /usr/share/keyrings:/usr/share/keyrings:ro
+      # Optional: same reasoning for repos using the older trusted.gpg.d
+      # mechanism instead of signed-by= (e.g. some Microsoft repos). This
+      # replaces rather than merges with the image's own trusted.gpg.d —
+      # safe as long as ubuntu-keyring is present on the host (default on
+      # any stock Ubuntu install), since that's what verifies the official
+      # Ubuntu repos themselves.
+      - /etc/apt/trusted.gpg.d:/etc/apt/trusted.gpg.d:ro
       # Container-owned state: last-known status (for diffing across
       # restarts) and the agent's own apt package-list cache.
       - update-detector-state:/var/lib/update-detector

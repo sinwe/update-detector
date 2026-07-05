@@ -57,11 +57,15 @@ the failure is listed under `errors` in the response.
 
 ### Platform limitations
 
-Third-party repos that use `signed-by` keyrings living only on the host
-(custom PPAs, vendor repos) will fail just for those repos unless you also
-mount their keyring path (e.g. `/etc/apt/keyrings`, `/etc/apt/trusted.gpg.d`)
-read-only into the container. Official Ubuntu repos work out of the box
-since `ubuntu-keyring` ships in the base image.
+Third-party repos (Docker, Tailscale, VS Code, etc.) sign with a key
+referenced by an **absolute path** baked into `sources.list.d` (either a
+`signed-by=/etc/apt/keyrings/...` / `/usr/share/keyrings/...` entry, or the
+older `/etc/apt/trusted.gpg.d` mechanism) — apt resolves that path literally,
+so it has to exist at the *same* absolute path inside the container, not
+under the `/host` prefix used for the other mounts. `docker-compose.yml`
+mounts all three read-only by default to cover this; official Ubuntu repos
+work regardless since `ubuntu-keyring` ships in the base image. If a repo's
+key lives somewhere else entirely, mount that specific path too.
 
 Docker Desktop on macOS/Windows runs containers inside a hidden Linux VM, so
 this container has no visibility into the real macOS/Windows host — only
