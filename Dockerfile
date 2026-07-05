@@ -9,7 +9,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/update-detector ./cmd/update-detec
 
 # Ubuntu (not distroless/alpine) on purpose: we need apt, dpkg, and Ubuntu's
 # own update-notifier tooling (apt-check) to detect updates faithfully.
-FROM ubuntu:22.04
+#
+# Pin to the newest LTS, not the oldest host release you expect to support:
+# apt-check's security-pocket classification is version-sensitive, and newer
+# apt/python-apt reliably reads older releases' package metadata, but the
+# reverse isn't guaranteed. Confirmed empirically — apt-check from a 22.04
+# image misclassified noble-security packages as regular updates on a 24.04
+# host; identical apt-check from a 24.04 image classified them correctly
+# against the exact same host state.
+FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
