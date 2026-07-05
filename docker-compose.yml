@@ -17,7 +17,9 @@ services:
       # keep working even if the aggregator is unreachable.
       # - AGGREGATOR_URL=http://aggregator-host:9090
     ports:
-      - "8080:8080"
+      # Override with AGENT_PORT=<port> if 8080 is already taken on this
+      # host (e.g. AGENT_PORT=8081 docker compose up -d).
+      - "${AGENT_PORT:-8080}:8080"
     volumes:
       # Host apt/dpkg state, read-only. update-detector never writes to any
       # of these; its own writable apt cache lives in the named volume below.
