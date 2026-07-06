@@ -1,15 +1,6 @@
 package ubuntu
 
 import "testing"
-
-func TestParseOSRelease(t *testing.T) {
-	raw := "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nVERSION_CODENAME=jammy\n# comment\n\nID=ubuntu\n"
-	got := parseOSRelease(raw)
-	if got["NAME"] != "Ubuntu" || got["VERSION_ID"] != "22.04" || got["VERSION_CODENAME"] != "jammy" || got["ID"] != "ubuntu" {
-		t.Fatalf("unexpected parse result: %#v", got)
-	}
-}
-
 func TestParsePrompt(t *testing.T) {
 	tests := []struct {
 		name string

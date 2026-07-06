@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 
+	"update-detector/internal/aptutil"
 	"update-detector/internal/checker"
 )
 
@@ -24,17 +24,6 @@ type packageResult struct {
 	Total    int
 	Security int
 	Upgrades []checker.PackageUpgrade
-}
-
-func runAptUpdate(ctx context.Context, aptConfigPath string) error {
-	cmd := exec.CommandContext(ctx, "apt-get", "update", "-q", "-o", "Acquire::Retries=2")
-	cmd.Env = aptEnv(aptConfigPath)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("apt-get update: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
 }
 
 // checkUpgradable gets counts from apt-check (python-apt's own
@@ -57,7 +46,7 @@ func checkUpgradable(ctx context.Context, aptConfigPath string) (packageResult, 
 func aptCheckCounts(ctx context.Context, aptConfigPath string) (total int, security int, err error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, aptCheckPath)
-	cmd.Env = aptEnv(aptConfigPath)
+	cmd.Env = aptutil.Env(aptConfigPath)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return 0, 0, fmt.Errorf("apt-check: %w: %s", err, strings.TrimSpace(stderr.String()))
@@ -68,7 +57,7 @@ func aptCheckCounts(ctx context.Context, aptConfigPath string) (total int, secur
 func aptListUpgradable(ctx context.Context, aptConfigPath string) ([]checker.PackageUpgrade, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "apt", "list", "--upgradable")
-	cmd.Env = aptEnv(aptConfigPath)
+	cmd.Env = aptutil.Env(aptConfigPath)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -136,12 +125,4 @@ func parseUpgradableList(raw string) []checker.PackageUpgrade {
 		upgrades = append(upgrades, u)
 	}
 	return upgrades
-}
-
-func aptEnv(aptConfigPath string) []string {
-	env := append(os.Environ(),
-		"APT_CONFIG="+aptConfigPath,
-		"DEBIAN_FRONTEND=noninteractive",
-	)
-	return env
 }

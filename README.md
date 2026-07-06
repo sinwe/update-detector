@@ -10,8 +10,9 @@ changes. Ships as a single Docker image, one container per host.
 
 | Platform | Status |
 |---|---|
-| Ubuntu / Debian-based Linux (bare metal or VM) | ✅ supported now |
-| Raspberry Pi 4B (Raspberry Pi OS / Ubuntu Server, arm64) | ✅ supported now — see [Multi-arch builds](#multi-arch-builds) |
+| Ubuntu (bare metal or VM) | ✅ supported now |
+| Plain Debian / Raspberry Pi OS (bare metal or VM) | ✅ supported now — see [OS flavors](#os-flavors) |
+| Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now, for the WSL2 environment itself |
 | Actual Windows OS (Windows Update, winget) | 🚧 planned — needs a native (non-container) agent, see [Limitations](#platform-limitations) |
 | Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
@@ -54,6 +55,31 @@ Each detection cycle (default every 6h, `CHECK_INTERVAL`):
 If any individual check fails (e.g. a transient network blip), that field
 keeps its last known value instead of resetting to a false "all clear", and
 the failure is listed under `errors` in the response.
+
+### OS flavors
+
+The agent runs inside an Ubuntu-based container regardless of which host
+it's deployed on, so at startup it reads the *host's* (host-mounted)
+`/etc/os-release` `ID` field to decide which checker implementation to run
+— logged as `detected host OS flavor: <ubuntu|debian>`. This matters because
+`apt-check` (used above) is Ubuntu-only tooling; it doesn't exist on plain
+Debian or Raspberry Pi OS.
+
+On a Debian-flavored host (`ID=debian` or `ID=raspbian`), detection instead:
+1. Runs `apt-get -s dist-upgrade` (a simulation, changes nothing) and parses
+   its `Inst` lines for packages already installed that have a newer
+   candidate version. Security updates are identified by `-security`
+   appearing in the origin (e.g. Debian's `trixie-security` pocket — the
+   same naming convention Ubuntu uses).
+2. Checks for `/var/run/reboot-required` same as Ubuntu, but **best-effort
+   only** — Debian/Raspberry Pi OS have no update-notifier-equivalent that
+   reliably populates it, so `false` here doesn't guarantee no reboot is
+   actually needed.
+3. Does **not** check for an OS release upgrade — Debian has no
+   machine-readable "is there a newer release" feed equivalent to
+   `changelogs.ubuntu.com/meta-release`. `os.update_available` always stays
+   `false` on this flavor; `os.current_version`/`current_codename` are still
+   populated.
 
 ### Platform limitations
 

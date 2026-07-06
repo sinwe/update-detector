@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/osrelease"
 )
 
 // These mirror the files do-release-upgrade itself reads to decide which
@@ -34,7 +35,7 @@ func checkOSRelease(ctx context.Context, client *http.Client, osReleaseFile, rel
 	if err != nil {
 		return checker.OSInfo{}, fmt.Errorf("os-release: reading %s: %w", osReleaseFile, err)
 	}
-	osRelease := parseOSRelease(string(osReleaseRaw))
+	osRelease := osrelease.Parse(string(osReleaseRaw))
 	versionID := osRelease["VERSION_ID"]
 
 	info := checker.OSInfo{
@@ -119,26 +120,6 @@ func cutPrefixFold(s, prefix string) (string, bool) {
 		return "", false
 	}
 	return s[len(prefix):], true
-}
-
-// parseOSRelease parses the simple KEY=VALUE (optionally quoted) format used
-// by /etc/os-release.
-func parseOSRelease(raw string) map[string]string {
-	out := map[string]string{}
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		idx := strings.Index(line, "=")
-		if idx < 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:idx])
-		val := strings.Trim(strings.TrimSpace(line[idx+1:]), `"'`)
-		out[key] = val
-	}
-	return out
 }
 
 // parseMetaRelease parses the RFC822-style, blank-line-separated paragraphs

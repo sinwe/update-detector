@@ -1,4 +1,4 @@
-package ubuntu
+package reboot
 
 import (
 	"os"
@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-func TestCheckRebootRequired(t *testing.T) {
+func TestCheck(t *testing.T) {
 	t.Run("file absent", func(t *testing.T) {
-		required, pkgs, err := checkRebootRequired(filepath.Join(t.TempDir(), "reboot-required"))
+		required, pkgs, err := Check(filepath.Join(t.TempDir(), "reboot-required"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -24,7 +24,7 @@ func TestCheckRebootRequired(t *testing.T) {
 		if err := os.WriteFile(marker, []byte(""), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		required, pkgs, err := checkRebootRequired(marker)
+		required, pkgs, err := Check(marker)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -42,7 +42,7 @@ func TestCheckRebootRequired(t *testing.T) {
 		if err := os.WriteFile(marker+".pkgs", []byte("linux-image-generic\n\nlibc6\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		required, pkgs, err := checkRebootRequired(marker)
+		required, pkgs, err := Check(marker)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

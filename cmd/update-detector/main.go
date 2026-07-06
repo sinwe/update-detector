@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"update-detector/internal/aggregatorclient"
+	"update-detector/internal/checker"
+	"update-detector/internal/checker/debian"
 	"update-detector/internal/checker/ubuntu"
 	"update-detector/internal/config"
+	"update-detector/internal/hostflavor"
 	"update-detector/internal/httpserver"
 	"update-detector/internal/notifier"
 	"update-detector/internal/state"
@@ -33,16 +36,38 @@ func run() error {
 		return err
 	}
 
-	chk, err := ubuntu.New(ubuntu.Config{
-		Hostname:            cfg.Hostname,
-		AptSourcesList:      cfg.AptSourcesList,
-		AptSourcesListD:     cfg.AptSourcesListD,
-		DpkgStatusFile:      cfg.DpkgStatusFile,
-		AptListsCacheDir:    cfg.AptListsCacheDir,
-		OSReleaseFile:       cfg.OSReleaseFile,
-		ReleaseUpgradesFile: cfg.ReleaseUpgradesFile,
-		RebootRequiredFile:  cfg.RebootRequiredFile,
-	})
+	// The agent runs inside an Ubuntu-based container regardless of the
+	// host it's deployed on, so detection must be driven by the *host's*
+	// os-release (host-mounted), not the container's own. This is how a
+	// Raspberry Pi OS / plain Debian host gets its own checker, rather than
+	// Ubuntu-only tooling (apt-check) that doesn't exist there.
+	flavor := hostflavor.Detect(cfg.OSReleaseFile)
+	log.Printf("detected host OS flavor: %s", flavor)
+
+	var chk checker.Checker
+	switch flavor {
+	case "debian":
+		chk, err = debian.New(debian.Config{
+			Hostname:           cfg.Hostname,
+			AptSourcesList:     cfg.AptSourcesList,
+			AptSourcesListD:    cfg.AptSourcesListD,
+			DpkgStatusFile:     cfg.DpkgStatusFile,
+			AptListsCacheDir:   cfg.AptListsCacheDir,
+			OSReleaseFile:      cfg.OSReleaseFile,
+			RebootRequiredFile: cfg.RebootRequiredFile,
+		})
+	default:
+		chk, err = ubuntu.New(ubuntu.Config{
+			Hostname:            cfg.Hostname,
+			AptSourcesList:      cfg.AptSourcesList,
+			AptSourcesListD:     cfg.AptSourcesListD,
+			DpkgStatusFile:      cfg.DpkgStatusFile,
+			AptListsCacheDir:    cfg.AptListsCacheDir,
+			OSReleaseFile:       cfg.OSReleaseFile,
+			ReleaseUpgradesFile: cfg.ReleaseUpgradesFile,
+			RebootRequiredFile:  cfg.RebootRequiredFile,
+		})
+	}
 	if err != nil {
 		return err
 	}
