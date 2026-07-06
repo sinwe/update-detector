@@ -18,8 +18,10 @@ services:
       # Optional: point at a central update-aggregator (see
       # docker-compose.aggregator.yml) to show this host on a Homepage
       # dashboard. Purely additive — local /status, Gatus, and Telegram
-      # keep working even if the aggregator is unreachable.
-      # - AGGREGATOR_URL=http://aggregator-host:9090
+      # keep working even if the aggregator is unreachable. Set via
+      # AGGREGATOR_URL=http://aggregator-host:9090 in .env or the shell —
+      # empty/unset means push mode stays off.
+      - AGGREGATOR_URL=${AGGREGATOR_URL:-}
     ports:
       # Override with AGENT_PORT=<port> if 8080 is already taken on this
       # host (e.g. AGENT_PORT=8081 docker compose up -d).
