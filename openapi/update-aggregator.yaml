@@ -1,0 +1,264 @@
+openapi: 3.0.3
+info:
+  title: update-aggregator API
+  description: >
+    Central service update-detector agents push their status to. New agents
+    are held as pending until approved via /admin; approved agents' data
+    powers the /widgets/* endpoints for a Homepage dashboard.
+    Also served live at GET /openapi.yaml on the running aggregator.
+  version: "1.0"
+
+security: []
+
+servers:
+  - url: http://{host}:{port}
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "8080"
+
+paths:
+  /enroll:
+    post:
+      summary: Agent self-registration (trust-on-first-contact)
+      description: >
+        Unauthenticated — an agent has nothing to prove on its very first
+        contact. Creates a pending record for an unknown agent_id; for a
+        known agent_id, confirms the token matches (idempotent re-announce)
+        or reports a conflict if it doesn't.
+      operationId: enroll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollRequest"
+      responses:
+        "200":
+          description: Current approval status for this agent_id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [pending, approved, rejected]
+        "400":
+          description: Missing agent_id, hostname, or token
+        "409":
+          description: agent_id already registered with a different token
+
+  /report:
+    post:
+      summary: Push a detection result
+      description: >
+        Accepted only for an approved agent presenting its correct token.
+        Called after every local check cycle; failures should be logged by
+        the agent, not treated as fatal — local detection/Gatus/Telegram
+        must keep working regardless of the aggregator's reachability.
+      operationId: report
+      security:
+        - agentToken: []
+      parameters:
+        - name: X-Agent-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        description: >
+          Same Status shape update-detector serves at its own GET /status
+          (see update-detector.yaml, Status schema, in this same directory).
+        content:
+          application/json:
+            schema:
+              $ref: "update-detector.yaml#/components/schemas/Status"
+      responses:
+        "200":
+          description: Report accepted
+        "401":
+          description: Unknown agent or invalid token
+        "403":
+          description: Agent known but not (yet) approved
+
+  /admin:
+    get:
+      summary: Approval dashboard (HTML)
+      description: >
+        Lists agents by Pending/Approved/Rejected with Approve/Reject/Revoke
+        form actions. No authentication of its own — keep on a private
+        network or behind your own reverse-proxy auth.
+      operationId: getAdminPage
+      responses:
+        "200":
+          description: HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /admin/agents/{id}/approve:
+    post:
+      summary: Approve a pending or rejected agent
+      operationId: approveAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Redirect back to /admin
+        "404":
+          description: Unknown agent id
+
+  /admin/agents/{id}/reject:
+    post:
+      summary: Reject a pending agent, or revoke an approved one
+      operationId: rejectAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Redirect back to /admin
+        "404":
+          description: Unknown agent id
+
+  /widgets/summary:
+    get:
+      summary: Fleet-wide totals for a Homepage "Custom API" widget
+      description: Computed across approved agents only.
+      operationId: getWidgetSummary
+      responses:
+        "200":
+          description: Fleet summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummaryResponse"
+
+  /widgets/hosts:
+    get:
+      summary: Per-host summaries for approved agents
+      operationId: getWidgetHosts
+      responses:
+        "200":
+          description: List of approved hosts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HostSummary"
+
+  /widgets/hosts/{hostname}:
+    get:
+      summary: One host's latest full report
+      description: >
+        Same JSON shape as an agent's own GET /status, so a Homepage widget
+        config is identical whether it targets the aggregator or the agent
+        directly. Looks up the most-recently-seen approved agent claiming
+        this hostname.
+      operationId: getWidgetHost
+      parameters:
+        - name: hostname
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The host's latest reported Status
+          content:
+            application/json:
+              schema:
+                $ref: "update-detector.yaml#/components/schemas/Status"
+        "404":
+          description: No approved agent with a report for this hostname yet
+
+  /openapi.yaml:
+    get:
+      summary: This OpenAPI spec
+      operationId: getOpenAPISpec
+      responses:
+        "200":
+          description: OpenAPI 3.0 spec for this service
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    agentToken:
+      type: http
+      scheme: bearer
+      description: The agent's self-generated token, paired with its X-Agent-ID header.
+
+  schemas:
+    EnrollRequest:
+      type: object
+      required: [agent_id, hostname, token]
+      properties:
+        agent_id:
+          type: string
+          description: Self-generated by the agent on first run (crypto/rand), persisted locally.
+        hostname:
+          type: string
+          example: web01
+        token:
+          type: string
+          description: Self-generated by the agent alongside agent_id. Stored server-side only as a sha256 hash.
+
+    SummaryResponse:
+      type: object
+      properties:
+        hosts_total:
+          type: integer
+        hosts_reporting:
+          type: integer
+          description: Approved hosts that have sent at least one report.
+        hosts_ok:
+          type: integer
+        hosts_reboot_required:
+          type: integer
+        hosts_os_upgrade_available:
+          type: integer
+        packages_upgradable_total:
+          type: integer
+        packages_upgradable_security:
+          type: integer
+        generated_at:
+          type: string
+          format: date-time
+
+    HostSummary:
+      type: object
+      properties:
+        hostname:
+          type: string
+        agent_id:
+          type: string
+        has_report:
+          type: boolean
+        ok:
+          type: boolean
+        last_seen:
+          type: string
+          format: date-time
+        upgradable_total:
+          type: integer
+        upgradable_security:
+          type: integer
+        reboot_required:
+          type: boolean
+        os_update_available:
+          type: boolean

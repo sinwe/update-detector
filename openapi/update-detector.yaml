@@ -1,0 +1,160 @@
+openapi: 3.0.3
+info:
+  title: update-detector agent API
+  description: >
+    Per-host agent that detects (never applies) available OS updates:
+    package/security updates, pending-reboot state, and OS release upgrades.
+    Also served live at GET /openapi.yaml on the running agent.
+  version: "1.0"
+
+security: []
+
+servers:
+  - url: http://{host}:{port}
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "8080"
+
+paths:
+  /status:
+    get:
+      summary: Latest detection result
+      description: >
+        The endpoint to point Gatus (or anything else) at. Returns the most
+        recent check's result; 503 if the agent hasn't completed its first
+        check yet.
+      operationId: getStatus
+      responses:
+        "200":
+          description: Most recent detection result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "503":
+          description: No check has completed yet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "no check has completed yet"
+
+  /healthz:
+    get:
+      summary: Process liveness
+      description: >
+        Reports that the process is up, independent of whether a detection
+        cycle has succeeded — doesn't confuse "container is running" with
+        "host is fully patched".
+      operationId: getHealthz
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /openapi.yaml:
+    get:
+      summary: This OpenAPI spec
+      operationId: getOpenAPISpec
+      responses:
+        "200":
+          description: OpenAPI 3.0 spec for this service
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+components:
+  schemas:
+    Status:
+      type: object
+      required: [hostname, platform, checked_at, reboot_required, os, packages, ok]
+      properties:
+        hostname:
+          type: string
+          example: web01
+        platform:
+          type: string
+          example: ubuntu
+        checked_at:
+          type: string
+          format: date-time
+        reboot_required:
+          type: boolean
+        reboot_required_packages:
+          type: array
+          items:
+            type: string
+          description: Packages that necessitated the pending reboot, if known.
+        os:
+          $ref: "#/components/schemas/OSInfo"
+        packages:
+          $ref: "#/components/schemas/PackageInfo"
+        errors:
+          type: array
+          items:
+            type: string
+          description: >
+            Subsystems that failed to report this cycle. Their fields above
+            retain the last successfully observed value rather than
+            resetting to a false "all clear".
+        ok:
+          type: boolean
+          description: >
+            Convenience boolean: no reboot pending, no security updates, no
+            OS upgrade available. Simple Gatus condition target.
+
+    OSInfo:
+      type: object
+      required: [current_version, update_available]
+      properties:
+        current_version:
+          type: string
+          example: "22.04"
+        current_codename:
+          type: string
+          example: jammy
+        update_available:
+          type: boolean
+        latest_version:
+          type: string
+          example: "24.04 LTS"
+
+    PackageInfo:
+      type: object
+      required: [upgradable_total, upgradable_security]
+      properties:
+        upgradable_total:
+          type: integer
+        upgradable_security:
+          type: integer
+        upgrades:
+          type: array
+          items:
+            $ref: "#/components/schemas/PackageUpgrade"
+
+    PackageUpgrade:
+      type: object
+      required: [name, candidate_version]
+      properties:
+        name:
+          type: string
+          example: curl
+        current_version:
+          type: string
+          example: 7.81.0-1ubuntu1.15
+        candidate_version:
+          type: string
+          example: 7.81.0-1ubuntu1.16

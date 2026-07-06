@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"update-detector/internal/checker"
+	"update-detector/openapi"
 )
 
 type Server struct {
@@ -24,6 +25,7 @@ func NewServer(registry *Registry) *Server {
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
 	s.mux.HandleFunc("/widgets/hosts", s.handleWidgetHosts)
 	s.mux.HandleFunc("/widgets/hosts/", s.handleWidgetHost)
+	s.mux.HandleFunc("/openapi.yaml", s.handleOpenAPISpec)
 	return s
 }
 
@@ -264,6 +266,12 @@ func (s *Server) handleWidgetHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rec.LastReport)
+}
+
+// handleOpenAPISpec serves the OpenAPI 3.0 spec for this API (openapi/update-aggregator.yaml).
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml")
+	_, _ = w.Write(openapi.UpdateAggregatorSpec)
 }
 
 func bearerToken(r *http.Request) string {

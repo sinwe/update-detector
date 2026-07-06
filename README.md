@@ -221,6 +221,15 @@ put it behind your own reverse-proxy auth if it's reachable beyond that.
 two share a hostname — set a unique `HOSTNAME_OVERRIDE` per host to avoid
 that ambiguity.
 
+## API reference
+
+Both services have an OpenAPI 3.0 spec — committed at `openapi/update-detector.yaml`
+and `openapi/update-aggregator.yaml`, and also served live at `GET /openapi.yaml`
+on the running service. Paste either into
+[editor.swagger.io](https://editor.swagger.io) (or point Redoc/any OpenAPI
+viewer at the running endpoint) for interactive docs; there's no bundled
+Swagger UI in the binaries themselves to keep them dependency-free.
+
 ## Configuration
 
 All configuration is via environment variables; defaults match the mounts
@@ -279,6 +288,7 @@ directly (they also keep `build: .` for local dev — see
 go test ./...                                          # unit tests (pure parsing/diff/registry logic; no docker/apt needed)
 docker build -t update-detector .                        # agent image build
 docker build -f Dockerfile.aggregator -t update-aggregator .   # aggregator image build
+npx @redocly/cli lint openapi/update-detector.yaml openapi/update-aggregator.yaml   # lint the OpenAPI specs
 ```
 
 End-to-end verification (host mounts need real apt/dpkg state, so this needs

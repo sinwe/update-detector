@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"update-detector/internal/checker"
+	"update-detector/openapi"
 )
 
 type Server struct {
@@ -21,6 +22,7 @@ func New() *Server {
 	s := &Server{mux: http.NewServeMux()}
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
+	s.mux.HandleFunc("/openapi.yaml", s.handleOpenAPISpec)
 	return s
 }
 
@@ -61,4 +63,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleOpenAPISpec serves the OpenAPI 3.0 spec for this API (openapi/update-detector.yaml).
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml")
+	_, _ = w.Write(openapi.UpdateDetectorSpec)
 }

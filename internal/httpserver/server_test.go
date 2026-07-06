@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"update-detector/internal/checker"
@@ -43,5 +44,22 @@ func TestHandleHealthz(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHandleOpenAPISpec(t *testing.T) {
+	s := New()
+	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/yaml" {
+		t.Fatalf("got Content-Type %q, want application/yaml", got)
+	}
+	if !strings.Contains(rec.Body.String(), "openapi: 3.0.3") {
+		t.Fatalf("body doesn't look like an OpenAPI spec: %s", rec.Body.String())
 	}
 }

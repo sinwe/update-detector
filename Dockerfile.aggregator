@@ -5,6 +5,7 @@ WORKDIR /src
 COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
+COPY openapi ./openapi
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/update-aggregator ./cmd/update-aggregator
 
 # update-aggregator is a pure Go HTTP service with no OS-specific tooling

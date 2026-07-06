@@ -166,3 +166,18 @@ func TestHandleWidgetSummaryAndHost(t *testing.T) {
 		t.Fatalf("got status %d, want 404 for unknown host", rec.Code)
 	}
 }
+
+func TestHandleOpenAPISpec(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodGet, "/openapi.yaml", nil, nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/yaml" {
+		t.Fatalf("got Content-Type %q, want application/yaml", got)
+	}
+	if !strings.Contains(rec.Body.String(), "openapi: 3.0.3") {
+		t.Fatalf("body doesn't look like an OpenAPI spec: %s", rec.Body.String())
+	}
+}
