@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-push:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      # Our only runner is amd64-only (nuc); QEMU lets it cross-build arm64
+      # (Raspberry Pi 4B) via emulation. Slower than native, but keeps both
+      # images published on every release without needing an arm64 runner.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: forgejo.winar.to
+          username: winarto
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Build and push update-detector
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            forgejo.winar.to/winarto/update-detector:${{ github.ref_name }}
+            forgejo.winar.to/winarto/update-detector:latest
+
+      - name: Build and push update-aggregator
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.aggregator
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            forgejo.winar.to/winarto/update-aggregator:${{ github.ref_name }}
+            forgejo.winar.to/winarto/update-aggregator:latest

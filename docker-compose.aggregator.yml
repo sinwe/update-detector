@@ -3,7 +3,11 @@
 # docker-compose.yml. Agents connect out to it via AGGREGATOR_URL.
 services:
   update-aggregator:
-    image: update-aggregator:latest
+    # For real deploys: `docker compose pull && docker compose up -d` uses
+    # this published image (built by .forgejo/workflows/release.yml on
+    # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d
+    # --build` still builds from source and ignores the registry entirely.
+    image: forgejo.winar.to/winarto/update-aggregator:latest
     build:
       context: .
       dockerfile: Dockerfile.aggregator

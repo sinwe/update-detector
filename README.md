@@ -251,14 +251,27 @@ in `docker-compose.yml`.
 | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
 
-## Multi-arch builds
+## Releases
 
-Both images run on Ubuntu servers (`amd64`) and Raspberry Pi 4B (`arm64`):
+Pushing a tag matching `v*` (e.g. `v0.1.0`) triggers
+`.forgejo/workflows/release.yml`, which builds both images for
+`linux/amd64` and `linux/arm64` (covers Ubuntu servers and Raspberry Pi 4B
+from the same tag, via QEMU emulation since the runner itself is amd64-only)
+and pushes them to Forgejo's container registry:
 
-```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t update-detector:latest --push .
-docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.aggregator -t update-aggregator:latest --push .
 ```
+forgejo.winar.to/winarto/update-detector:<tag>    and  :latest
+forgejo.winar.to/winarto/update-aggregator:<tag>  and  :latest
+```
+
+Requires a repo secret `REGISTRY_TOKEN` (a Forgejo access token with
+`write:package`/`read:package` scope).
+
+Deploying a release is then just `docker compose pull && docker compose up
+-d` on each host — no `--build` needed, since `docker-compose.yml` /
+`docker-compose.aggregator.yml` both reference the published `image:`
+directly (they also keep `build: .` for local dev — see
+[Development](#development)).
 
 ## Development
 
