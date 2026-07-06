@@ -36,6 +36,11 @@ jobs:
           username: winarto
           password: ${{ secrets.REGISTRY_TOKEN }}
 
+      # provenance: false -- buildx's default provenance attestation feature
+      # pushes extra OCI referrer blobs that Forgejo's container registry
+      # rejects with 403 on the existence-check HEAD request. Confirmed by
+      # testing: build succeeds, push fails only once attestation manifests
+      # are involved.
       - name: Build and push update-detector
         uses: docker/build-push-action@v6
         with:
@@ -43,6 +48,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: |
             forgejo.winar.to/winarto/update-detector:${{ github.ref_name }}
             forgejo.winar.to/winarto/update-detector:latest
@@ -54,6 +60,7 @@ jobs:
           file: ./Dockerfile.aggregator
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: |
             forgejo.winar.to/winarto/update-aggregator:${{ github.ref_name }}
             forgejo.winar.to/winarto/update-aggregator:latest
