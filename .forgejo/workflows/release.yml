@@ -11,6 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The job container (node:20-bookworm, our runner's default image) has
+      # no docker CLI at all -- the runner mounts the host's docker.sock in
+      # (container.docker_host: automount) but that only gives access to a
+      # daemon, not the client binary. docker/setup-qemu-action and friends
+      # all assume `docker` is already on PATH, so install it explicitly.
+      - name: Install Docker CLI
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq docker.io
+
       # Our only runner is amd64-only (nuc); QEMU lets it cross-build arm64
       # (Raspberry Pi 4B) via emulation. Slower than native, but keeps both
       # images published on every release without needing an arm64 runner.
