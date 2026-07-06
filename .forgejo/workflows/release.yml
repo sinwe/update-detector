@@ -22,13 +22,23 @@ jobs:
           apt-get install -y -qq docker.io
 
       # Our only runner is amd64-only (nuc); QEMU lets it cross-build arm64
-      # (Raspberry Pi 4B) via emulation. Slower than native, but keeps both
-      # images published on every release without needing an arm64 runner.
+      # (Raspberry Pi 4B) via emulation.
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
+      # driver: docker (not the default docker-container) -- confirmed by
+      # direct testing that Forgejo's container registry rejects the
+      # docker-container driver's push with 403 Forbidden on the blob
+      # existence-check (HEAD) request, regardless of attestation/provenance
+      # settings. The classic docker driver's push doesn't hit this bug, but
+      # it can't produce a multi-platform manifest list in one command, so
+      # each platform is built+pushed separately below and combined via
+      # `docker manifest create/push` instead of buildx's own multi-platform
+      # push.
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - uses: docker/login-action@v3
         with:
@@ -36,31 +46,29 @@ jobs:
           username: winarto
           password: ${{ secrets.REGISTRY_TOKEN }}
 
-      # provenance: false -- buildx's default provenance attestation feature
-      # pushes extra OCI referrer blobs that Forgejo's container registry
-      # rejects with 403 on the existence-check HEAD request. Confirmed by
-      # testing: build succeeds, push fails only once attestation manifests
-      # are involved.
-      - name: Build and push update-detector
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          tags: |
-            forgejo.winar.to/winarto/update-detector:${{ github.ref_name }}
-            forgejo.winar.to/winarto/update-detector:latest
+      - name: Build, push, and combine multi-arch images
+        env:
+          DOCKER_CLI_EXPERIMENTAL: enabled
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
 
-      - name: Build and push update-aggregator
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.aggregator
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          tags: |
-            forgejo.winar.to/winarto/update-aggregator:${{ github.ref_name }}
-            forgejo.winar.to/winarto/update-aggregator:latest
+          build_and_push() {
+            local image="$1" dockerfile="$2"
+            for arch in amd64 arm64; do
+              docker buildx build \
+                --platform "linux/$arch" \
+                --file "$dockerfile" \
+                --tag "forgejo.winar.to/winarto/$image:$TAG-$arch" \
+                --push .
+            done
+            for tag in "$TAG" latest; do
+              docker manifest create "forgejo.winar.to/winarto/$image:$tag" \
+                "forgejo.winar.to/winarto/$image:$TAG-amd64" \
+                "forgejo.winar.to/winarto/$image:$TAG-arm64"
+              docker manifest push "forgejo.winar.to/winarto/$image:$tag"
+            done
+          }
+
+          build_and_push update-detector ./Dockerfile
+          build_and_push update-aggregator ./Dockerfile.aggregator
