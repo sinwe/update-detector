@@ -25,6 +25,7 @@ func NewServer(registry *Registry) *Server {
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
 	s.mux.HandleFunc("/widgets/hosts", s.handleWidgetHosts)
 	s.mux.HandleFunc("/widgets/hosts/", s.handleWidgetHost)
+	s.mux.HandleFunc("/widgets/packages", s.handleWidgetPackages)
 	s.mux.HandleFunc("/openapi.yaml", s.handleOpenAPISpec)
 	return s
 }
@@ -266,6 +267,47 @@ func (s *Server) handleWidgetHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rec.LastReport)
+}
+
+type pendingPackage struct {
+	Hostname         string `json:"hostname"`
+	Name             string `json:"name"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	CandidateVersion string `json:"candidate_version"`
+	Security         bool   `json:"security,omitempty"`
+}
+
+// handleWidgetPackages flattens every approved, reporting agent's pending
+// package upgrades into one fleet-wide list, so a single Homepage widget
+// (or any other consumer) can show "what needs updating" across every host
+// without querying each one individually. ?security=true filters to only
+// packages flagged as security updates.
+func (s *Server) handleWidgetPackages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	securityOnly := r.URL.Query().Get("security") == "true"
+
+	out := []pendingPackage{}
+	for _, rec := range s.registry.List() {
+		if rec.Status != StatusApproved || rec.LastReport == nil {
+			continue
+		}
+		for _, u := range rec.LastReport.Packages.Upgrades {
+			if securityOnly && !u.Security {
+				continue
+			}
+			out = append(out, pendingPackage{
+				Hostname:         rec.Hostname,
+				Name:             u.Name,
+				CurrentVersion:   u.CurrentVersion,
+				CandidateVersion: u.CandidateVersion,
+				Security:         u.Security,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleOpenAPISpec serves the OpenAPI 3.0 spec for this API (openapi/update-aggregator.yaml).

@@ -239,6 +239,14 @@ The per-host widget URL (`/widgets/hosts/{hostname}`) returns the exact same
 JSON shape as an agent's own `/status`, so the mapping is identical whether
 Homepage points at the aggregator or straight at an agent.
 
+For "what actually needs updating" across the whole fleet in one call, use
+`GET /widgets/packages` — flattens every approved host's pending package
+upgrades into one list (`[{hostname, name, current_version,
+candidate_version, security}, ...]`); add `?security=true` to only list
+security updates. `security` is best-effort per-package (derived from
+`-security` appearing in the package's origin/pocket) — the authoritative
+count per host is still `packages.upgradable_security`.
+
 **Known limitations:** the `/admin` page and `/widgets/*` endpoints have no
 authentication of their own — same trust model as the rest of this project
 (agent `/status`, Gatus polling): keep the aggregator on a private network or

@@ -112,12 +112,17 @@ func parseUpgradableList(raw string) []checker.PackageUpgrade {
 			continue
 		}
 
-		name := fields[0]
-		if idx := strings.Index(name, "/"); idx >= 0 {
-			name = name[:idx]
+		nameField := fields[0]
+		name, archive := nameField, ""
+		if idx := strings.Index(nameField, "/"); idx >= 0 {
+			name, archive = nameField[:idx], nameField[idx+1:]
 		}
 
-		u := checker.PackageUpgrade{Name: name, CandidateVersion: fields[1]}
+		u := checker.PackageUpgrade{
+			Name:             name,
+			CandidateVersion: fields[1],
+			Security:         strings.Contains(strings.ToLower(archive), "-security"),
+		}
 		const marker = "[upgradable from: "
 		if idx := strings.Index(line, marker); idx >= 0 {
 			u.CurrentVersion = strings.TrimSuffix(line[idx+len(marker):], "]")

@@ -184,6 +184,33 @@ paths:
         "404":
           description: No approved agent with a report for this hostname yet
 
+  /widgets/packages:
+    get:
+      summary: Fleet-wide list of pending package upgrades
+      description: >
+        Flattens every approved, reporting agent's pending package upgrades
+        into one list, so a single Homepage widget (or any other consumer)
+        can show "what needs updating" across the whole fleet without
+        querying each host individually.
+      operationId: getWidgetPackages
+      parameters:
+        - name: security
+          in: query
+          required: false
+          description: If "true", only include packages flagged as security updates.
+          schema:
+            type: string
+            enum: ["true"]
+      responses:
+        "200":
+          description: Pending packages across every approved host
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PendingPackage"
+
   /openapi.yaml:
     get:
       summary: This OpenAPI spec
@@ -261,4 +288,23 @@ components:
         reboot_required:
           type: boolean
         os_update_available:
+          type: boolean
+
+    PendingPackage:
+      type: object
+      required: [hostname, name, candidate_version]
+      properties:
+        hostname:
+          type: string
+          example: web01
+        name:
+          type: string
+          example: curl
+        current_version:
+          type: string
+          example: 7.81.0-1ubuntu1.15
+        candidate_version:
+          type: string
+          example: 7.81.0-1ubuntu1.16
+        security:
           type: boolean

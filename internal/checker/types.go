@@ -47,6 +47,12 @@ type PackageUpgrade struct {
 	Name             string `json:"name"`
 	CurrentVersion   string `json:"current_version,omitempty"`
 	CandidateVersion string `json:"candidate_version"`
+	// Security is best-effort, derived from "-security" appearing in the
+	// package's origin/pocket (e.g. Ubuntu's "jammy-security", Debian's
+	// "trixie-security"). PackageInfo.UpgradableSecurity is the
+	// authoritative count on Ubuntu (from apt-check); this per-package flag
+	// is for display/filtering, not the source of truth for that count.
+	Security bool `json:"security,omitempty"`
 }
 
 // ComputeOK derives the OK convenience field from the rest of the Status.

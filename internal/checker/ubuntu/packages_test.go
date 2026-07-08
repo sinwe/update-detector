@@ -62,14 +62,14 @@ func TestParseUpgradableList(t *testing.T) {
 			name: "listing header ignored",
 			raw:  "Listing...\ncurl/jammy-security 7.81.0-1ubuntu1.16 amd64 [upgradable from: 7.81.0-1ubuntu1.15]\n",
 			want: []checker.PackageUpgrade{
-				{Name: "curl", CurrentVersion: "7.81.0-1ubuntu1.15", CandidateVersion: "7.81.0-1ubuntu1.16"},
+				{Name: "curl", CurrentVersion: "7.81.0-1ubuntu1.15", CandidateVersion: "7.81.0-1ubuntu1.16", Security: true},
 			},
 		},
 		{
 			name: "multiple pockets in archive field",
 			raw:  "libruby3.2/noble-updates,noble-security 3.2.3-1ubuntu0.24.04.8 amd64 [upgradable from: 3.2.3-1ubuntu0.24.04.7]\n",
 			want: []checker.PackageUpgrade{
-				{Name: "libruby3.2", CurrentVersion: "3.2.3-1ubuntu0.24.04.7", CandidateVersion: "3.2.3-1ubuntu0.24.04.8"},
+				{Name: "libruby3.2", CurrentVersion: "3.2.3-1ubuntu0.24.04.7", CandidateVersion: "3.2.3-1ubuntu0.24.04.8", Security: true},
 			},
 		},
 		{

@@ -58,15 +58,17 @@ func parseDistUpgrade(raw string) packageResult {
 			continue
 		}
 		name, current, candidate, origin := m[1], m[2], m[3], m[4]
+		isSecurity := strings.Contains(strings.ToLower(origin), "-security")
 
 		result.Total++
-		if strings.Contains(strings.ToLower(origin), "-security") {
+		if isSecurity {
 			result.Security++
 		}
 		result.Upgrades = append(result.Upgrades, checker.PackageUpgrade{
 			Name:             name,
 			CurrentVersion:   current,
 			CandidateVersion: candidate,
+			Security:         isSecurity,
 		})
 	}
 	return result

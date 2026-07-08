@@ -40,7 +40,7 @@ func TestParseDistUpgrade(t *testing.T) {
 		{Name: "libdtovl0", CurrentVersion: "20260601-1", CandidateVersion: "20260626-1"},
 		{Name: "libpisp1", CurrentVersion: "1.5.0-1", CandidateVersion: "1.6.0-1"},
 		{Name: "raspinfo", CurrentVersion: "20260601-1", CandidateVersion: "20260626-1"},
-		{Name: "curl", CurrentVersion: "7.88.0-1", CandidateVersion: "7.88.1-1"},
+		{Name: "curl", CurrentVersion: "7.88.0-1", CandidateVersion: "7.88.1-1", Security: true},
 	}
 	if !reflect.DeepEqual(got.Upgrades, want) {
 		t.Fatalf("got %#v, want %#v", got.Upgrades, want)

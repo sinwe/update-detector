@@ -167,6 +167,47 @@ func TestHandleWidgetSummaryAndHost(t *testing.T) {
 	}
 }
 
+func TestHandleWidgetPackages(t *testing.T) {
+	s, reg := newTestServer(t)
+	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)
+	if err := reg.SetStatus("a1", StatusApproved); err != nil {
+		t.Fatal(err)
+	}
+	doJSON(t, s, http.MethodPost, "/report", checker.Status{
+		Hostname: "web01",
+		Packages: checker.PackageInfo{
+			UpgradableTotal:    2,
+			UpgradableSecurity: 1,
+			Upgrades: []checker.PackageUpgrade{
+				{Name: "curl", CandidateVersion: "7.81.0-1ubuntu1.16", Security: true},
+				{Name: "vim", CandidateVersion: "2:9.0.0-1"},
+			},
+		},
+	}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+
+	rec := doJSON(t, s, http.MethodGet, "/widgets/packages", nil, nil)
+	var pkgs []pendingPackage
+	if err := json.Unmarshal(rec.Body.Bytes(), &pkgs); err != nil {
+		t.Fatal(err)
+	}
+	if len(pkgs) != 2 {
+		t.Fatalf("got %d packages, want 2: %#v", len(pkgs), pkgs)
+	}
+	for _, p := range pkgs {
+		if p.Hostname != "web01" {
+			t.Fatalf("expected hostname web01 on every entry, got %#v", p)
+		}
+	}
+
+	rec = doJSON(t, s, http.MethodGet, "/widgets/packages?security=true", nil, nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &pkgs); err != nil {
+		t.Fatal(err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Name != "curl" {
+		t.Fatalf("expected only curl with security=true filter, got %#v", pkgs)
+	}
+}
+
 func TestHandleOpenAPISpec(t *testing.T) {
 	s, _ := newTestServer(t)
 	rec := doJSON(t, s, http.MethodGet, "/openapi.yaml", nil, nil)

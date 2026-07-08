@@ -158,3 +158,10 @@ components:
         candidate_version:
           type: string
           example: 7.81.0-1ubuntu1.16
+        security:
+          type: boolean
+          description: >
+            Best-effort, derived from "-security" appearing in the
+            package's origin/pocket. PackageInfo.upgradable_security is the
+            authoritative count on Ubuntu (from apt-check); this flag is
+            for display/filtering, not the source of truth for that count.
