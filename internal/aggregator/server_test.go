@@ -124,6 +124,39 @@ func TestHandleAdminApproveRejectFlow(t *testing.T) {
 	}
 }
 
+func TestHandleAdminPageShowsPackages(t *testing.T) {
+	s, reg := newTestServer(t)
+	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)
+	if err := reg.SetStatus("a1", StatusApproved); err != nil {
+		t.Fatal(err)
+	}
+	doJSON(t, s, http.MethodPost, "/report", checker.Status{
+		Hostname: "web01",
+		Packages: checker.PackageInfo{
+			UpgradableTotal:    1,
+			UpgradableSecurity: 1,
+			Upgrades: []checker.PackageUpgrade{
+				{Name: "curl", CurrentVersion: "7.81.0-1", CandidateVersion: "7.81.0-2", Security: true},
+			},
+		},
+	}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "curl") {
+		t.Fatalf("expected package name in admin page, got: %s", body)
+	}
+	if !strings.Contains(body, "/widgets/hosts/web01") {
+		t.Fatalf("expected a link to the host's raw JSON, got: %s", body)
+	}
+	if !strings.Contains(body, "/widgets/packages") {
+		t.Fatalf("expected a fleet-wide packages link, got: %s", body)
+	}
+}
+
 func TestHandleWidgetSummaryAndHost(t *testing.T) {
 	s, reg := newTestServer(t)
 	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)

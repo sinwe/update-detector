@@ -4,6 +4,8 @@ import (
 	"html/template"
 	"io"
 	"time"
+
+	"update-detector/internal/checker"
 )
 
 var adminTemplate = template.Must(template.New("admin").Parse(adminTemplateSrc))
@@ -22,6 +24,7 @@ type agentView struct {
 	Errors             []string
 	UpgradableTotal    int
 	UpgradableSecurity int
+	Upgrades           []checker.PackageUpgrade
 	RebootRequired     bool
 	OSUpdateAvailable  bool
 }
@@ -50,6 +53,7 @@ func toAgentView(rec AgentRecord) agentView {
 		v.Errors = rec.LastReport.Errors
 		v.UpgradableTotal = rec.LastReport.Packages.UpgradableTotal
 		v.UpgradableSecurity = rec.LastReport.Packages.UpgradableSecurity
+		v.Upgrades = rec.LastReport.Packages.Upgrades
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 	}
@@ -85,6 +89,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
 </head>
 <body>
   <h1>update-detector aggregator</h1>
+  <p><a href="/widgets/packages">all pending packages (fleet-wide)</a> &middot; <a href="/widgets/packages?security=true">security only</a> &middot; <a href="/widgets/summary">summary</a></p>
 
   <h2>Pending ({{len .Pending}})</h2>
   <table>
@@ -116,6 +121,17 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{if .HasReport}}
           {{if .OK}}<span class="ok">OK</span>{{else}}<span class="bad">needs attention</span>{{end}}
           &mdash; {{.UpgradableTotal}} upgradable ({{.UpgradableSecurity}} security){{if .RebootRequired}}, reboot required{{end}}{{if .OSUpdateAvailable}}, OS upgrade available{{end}}
+          {{if .Upgrades}}
+          <details>
+            <summary>show packages</summary>
+            <ul>
+              {{range .Upgrades}}
+              <li>{{if .Security}}<strong class="bad">{{.Name}}</strong>{{else}}{{.Name}}{{end}}{{if .CurrentVersion}} {{.CurrentVersion}} &rarr;{{end}} {{.CandidateVersion}}</li>
+              {{end}}
+            </ul>
+          </details>
+          {{end}}
+          <br><a href="/widgets/hosts/{{.Hostname}}">raw JSON</a>
           {{if .Errors}}<br><span class="muted">errors: {{range .Errors}}{{.}}; {{end}}</span>{{end}}
         {{else}}
           <span class="muted">no report yet</span>
