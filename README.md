@@ -321,6 +321,69 @@ compromised proxy or network path alone still isn't enough on its own.
 **Reboots are never automatic**, even if an upgrade sets
 `reboot_required` — that stays a manual, human decision.
 
+### Upgrading an existing deployment
+
+If you already had `update-detector`/`update-aggregator` running before this
+feature existed, do this once, in order — aggregator first, then each agent
+host, one at a time.
+
+**1. Aggregator** — wherever `docker-compose.aggregator.yml` actually runs.
+Add the new env var to a `.env` file in the same directory as that compose
+file (not `export` in your shell — that only lasts for the current session,
+and won't be there the next time something runs `docker compose up`):
+
+```sh
+cd /path/to/docker-compose.aggregator.yml
+echo "ADMIN_APPLY_SHARED_SECRET=$(openssl rand -hex 32)" >> .env
+cat .env   # save this value somewhere too — you'll need it for the curl above
+docker compose -f docker-compose.aggregator.yml pull
+docker compose -f docker-compose.aggregator.yml up -d --force-recreate
+docker compose -f docker-compose.aggregator.yml logs --tail 5
+```
+
+Confirm the log says `apply endpoint enabled` (not `disabled ... not set`).
+
+**2. Each agent host** — migrate `update-detector-state` (the old named
+volume) to the new bind mount, then pull the new image:
+
+```sh
+cd /path/to/docker-compose.yml
+sudo mkdir -p /var/lib/update-detector
+docker run --rm \
+  -v update-detector_update-detector-state:/from \
+  -v /var/lib/update-detector:/to \
+  alpine cp -a /from/. /to/
+# (check the exact volume name first with `docker volume ls` if unsure —
+# it's prefixed with your compose project name, not always "update-detector")
+
+docker compose pull
+docker compose up -d
+docker compose logs --tail 20
+```
+
+If you'd rather skip the volume copy, that's fine too — the agent just
+re-enrolls as a "new" agent and starts state/history fresh (approve it again
+on `/admin`); nothing critical is lost either way.
+
+**3. Install the companion on that same host:**
+
+```sh
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+systemctl status update-detector-companion --no-pager
+journalctl -u update-detector-companion -n 20 --no-pager
+```
+
+Look for `companion: connected to aggregator stream`.
+
+**4. Verify on `/admin`** — that host should now show **connected** under
+"Companion," with package checkboxes and the Upgrade-all/Full-upgrade-all
+buttons. Try a real apply on one low-risk package before trusting it for
+anything bigger, and check the negative case too (request a package that
+*isn't* pending — the companion should reject it without running `apt-get`
+at all).
+
+Repeat steps 2–4 for the next agent host.
+
 ## API reference
 
 Both services have an OpenAPI 3.0 spec — committed at `openapi/update-detector.yaml`
