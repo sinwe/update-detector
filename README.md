@@ -393,10 +393,14 @@ natively) and attaches both as plain binary assets on that tag's Forgejo
 release, for `install.sh` to fetch (see
 [Triggering updates](#triggering-updates-companion)).
 
-Requires a repo secret `REGISTRY_TOKEN` — a Forgejo access token with
-`write:package`/`read:package` scope for the image pushes, **and**
-read/write repository scope for creating the release and uploading those
-binary assets.
+Requires two repo secrets, scoped separately on purpose (least-privilege —
+a leaked/misused token from one step can't touch what the other covers):
+
+- `REGISTRY_TOKEN` — a Forgejo access token with `write:package`/`read:package`
+  scope, used for the image pushes.
+- `RELEASE_TOKEN` — a Forgejo access token with read/write repository scope,
+  used only for creating the release and uploading the companion binaries
+  as assets.
 
 Deploying a release is then just `docker compose pull && docker compose up
 -d` on each host — no `--build` needed, since `docker-compose.yml` /

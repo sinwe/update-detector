@@ -107,9 +107,14 @@ jobs:
             docker rm "$cid" >/dev/null
           done
 
+      # A separate secret from REGISTRY_TOKEN on purpose: REGISTRY_TOKEN only
+      # needs write:package/read:package for the image pushes above, while
+      # creating a release and uploading assets needs repository read/write
+      # instead -- least-privilege, and one token's scope can't leak into
+      # the other's blast radius.
       - name: Publish companion binaries as release assets
         env:
-          FORGEJO_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          FORGEJO_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
