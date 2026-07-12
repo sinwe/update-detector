@@ -475,6 +475,19 @@ Deploying a release is then just `docker compose pull && docker compose up
 directly (they also keep `build: .` for local dev — see
 [Development](#development)).
 
+That also means a deploy host doesn't need this repo cloned at all — just
+fetch the one compose file it actually needs with `curl` or `wget`:
+
+```sh
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.yml -o docker-compose.yml
+# or: wget https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.yml
+
+docker compose pull
+docker compose up -d
+```
+
+(swap in `docker-compose.aggregator.yml` for the aggregator host).
+
 ## Development
 
 ```sh
