@@ -33,10 +33,23 @@ curl http://localhost:8080/status | jq
 
 ## How it works
 
-The container never writes to the host. It bind-mounts the host's apt
-sources, dpkg status, `/etc/os-release`, and `/var/run` **read-only**, and
-keeps its own apt package-list cache in a container-owned named volume
-(`update-detector-state`, see `docker-compose.yml`).
+The container never writes to the host's own files. It bind-mounts the
+host's apt sources, dpkg status, `/etc/os-release`, and `/var/run`
+**read-only**, and keeps its own apt package-list cache and state under a
+container-owned directory bind-mounted at a fixed host path (default
+`/var/lib/update-detector`, override with `STATE_DIR`; see
+`docker-compose.yml`) rather than a Docker-managed named volume, so a
+host-native companion process (planned) can share that same directory.
+
+> **Migrating from an older deployment?** Versions before the
+> `STATE_DIR` bind mount stored this state in a named volume called
+> `update-detector-state`. To migrate without losing history: stop the
+> container, then copy the volume's contents to the new path, e.g.
+> `docker run --rm -v update-detector-state:/from -v /var/lib/update-detector:/to alpine cp -a /from/. /to/`,
+> then `docker compose up -d` and `docker volume rm update-detector-state`.
+> Skipping this is also fine — the agent just re-enrolls with the
+> aggregator (if configured) and starts state/history fresh, which is a
+> low-cost reset, not data loss of anything critical.
 
 Each detection cycle (default every 6h, `CHECK_INTERVAL`):
 1. Runs `apt-get update` against the host's sources, writing indexes only to
@@ -255,6 +268,59 @@ put it behind your own reverse-proxy auth if it's reachable beyond that.
 two share a hostname — set a unique `HOSTNAME_OVERRIDE` per host to avoid
 that ambiguity.
 
+## Triggering updates (companion)
+
+By design, the agent itself only ever detects updates — it never writes to
+the host, so it can't apply anything even if you wanted it to. Actually
+*applying* pending upgrades is a separate, opt-in capability: a small
+host-native process called the **companion**, installed alongside the
+agent's container (not inside it, since it needs real root to run
+`apt-get`).
+
+**Why a separate process, not SSH/Ansible into the fleet:** every
+centralized-credential design (a service holding SSH keys or sudo access to
+every host) means compromising that one service gives an attacker root
+everywhere. The companion inverts this: it connects *out* to the aggregator
+(no inbound port, no stored credentials on the aggregator side), and before
+running anything, it independently re-checks the requested package(s)
+against its own host's last-known pending upgrades (`GET /status`) —
+rejecting anything not already, genuinely pending. So even a fully
+compromised aggregator can at most force early application of upgrades a
+host already considers legitimate, never arbitrary command execution.
+
+**Install** (on a host already running the agent's container with
+`AGGREGATOR_URL` set):
+
+```sh
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+```
+
+This auto-discovers everything it needs from the running container: its
+bind-mounted state dir (for a one-time, in-memory-only token handoff over a
+Unix socket — see [How it works](#how-it-works)), its `AGGREGATOR_URL`, and
+its published port. It installs `update-detector-companion` as a systemd
+service and starts it.
+
+**Triggering an action** is `POST /admin/agents/{id}/apply` on the
+aggregator, gated by a shared secret (`ADMIN_APPLY_SHARED_SECRET` —
+disabled/`501` entirely until set):
+
+```sh
+curl -X POST http://aggregator-host:9090/admin/agents/<id>/apply \
+  -H "X-Admin-Apply-Secret: $ADMIN_APPLY_SHARED_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"type": "packages", "packages": ["curl"]}'
+# type is one of: packages (requires "packages"), upgrade, full-upgrade
+```
+
+Recommended: put the aggregator behind your own passkey-capable
+reverse-proxy auth (e.g. Authentik) and have it inject that header after
+successful login — the aggregator checks the header itself regardless, so a
+compromised proxy or network path alone still isn't enough on its own.
+
+**Reboots are never automatic**, even if an upgrade sets
+`reboot_required` — that stays a manual, human decision.
+
 ## API reference
 
 Both services have an OpenAPI 3.0 spec — committed at `openapi/update-detector.yaml`
@@ -286,6 +352,7 @@ in `docker-compose.yml`.
 | `NOTIFY_ON_STARTUP` | `false` | Also send a notification on the very first check after startup |
 | `AGGREGATOR_URL` | unset | Enables pushing to a central `update-aggregator` when set (e.g. `http://aggregator-host:9090`) |
 | `AGENT_IDENTITY_FILE` | `/var/lib/update-detector/agent-identity.json` | Container-owned, writable — this agent's self-generated ID + token |
+| `COMPANION_SOCKET_PATH` | `/var/lib/update-detector/companion.sock` | Unix socket serving this agent's identity to a host-native companion, see [Triggering updates](#triggering-updates-companion) |
 
 `update-aggregator` has its own, much smaller set of env vars:
 
@@ -293,6 +360,19 @@ in `docker-compose.yml`.
 |---|---|---|
 | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
+| `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
+
+`update-detector-companion` (host-native, not a container) reads:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COMPANION_SOCKET_PATH` | `/var/lib/update-detector/companion.sock` | Must match the agent's own setting above |
+| `AGGREGATOR_URL` | none — required | Same aggregator the agent's container reports to |
+| `AGENT_STATUS_URL` | `http://localhost:8080/status` | Used to validate a requested action's packages are actually pending before running anything |
+
+`install.sh` sets all three for you from the running container's own config —
+see [Triggering updates](#triggering-updates-companion).
 
 ## Releases
 
@@ -307,8 +387,16 @@ forgejo.winar.to/winarto/update-detector:<tag>    and  :latest
 forgejo.winar.to/winarto/update-aggregator:<tag>  and  :latest
 ```
 
-Requires a repo secret `REGISTRY_TOKEN` (a Forgejo access token with
-`write:package`/`read:package` scope).
+The same tag also cross-compiles `update-detector-companion` for
+`linux/amd64` and `linux/arm64` (no QEMU needed — Go cross-compiles
+natively) and attaches both as plain binary assets on that tag's Forgejo
+release, for `install.sh` to fetch (see
+[Triggering updates](#triggering-updates-companion)).
+
+Requires a repo secret `REGISTRY_TOKEN` — a Forgejo access token with
+`write:package`/`read:package` scope for the image pushes, **and**
+read/write repository scope for creating the release and uploading those
+binary assets.
 
 Deploying a release is then just `docker compose pull && docker compose up
 -d` on each host — no `--build` needed, since `docker-compose.yml` /

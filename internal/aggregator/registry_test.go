@@ -155,6 +155,31 @@ func TestFindApprovedByHostnamePicksMostRecentlySeen(t *testing.T) {
 	}
 }
 
+func TestAuthenticate(t *testing.T) {
+	r := newTestRegistry(t)
+	if _, _, err := r.Enroll("agent-1", "web01", "secret-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, outcome := r.Authenticate("does-not-exist", "secret-token"); outcome != AuthUnknownAgent {
+		t.Fatalf("got %v, want AuthUnknownAgent", outcome)
+	}
+	if _, outcome := r.Authenticate("agent-1", "wrong-token"); outcome != AuthUnauthorized {
+		t.Fatalf("got %v, want AuthUnauthorized", outcome)
+	}
+	if _, outcome := r.Authenticate("agent-1", "secret-token"); outcome != AuthNotApproved {
+		t.Fatalf("got %v, want AuthNotApproved before approval", outcome)
+	}
+
+	if err := r.SetStatus("agent-1", StatusApproved); err != nil {
+		t.Fatal(err)
+	}
+	rec, outcome := r.Authenticate("agent-1", "secret-token")
+	if outcome != AuthOK || rec.ID != "agent-1" {
+		t.Fatalf("got rec=%#v outcome=%v, want AuthOK for agent-1", rec, outcome)
+	}
+}
+
 func TestRegistryPersistsAcrossLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	r1 := NewRegistry(path)

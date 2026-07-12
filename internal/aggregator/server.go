@@ -1,25 +1,43 @@
 package aggregator
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/notifier"
 	"update-detector/openapi"
 )
 
 type Server struct {
-	registry *Registry
-	mux      *http.ServeMux
+	registry  *Registry
+	hub       *CompanionHub
+	notifyMgr *notifier.Manager
+	// adminApplySecret gates POST /admin/agents/{id}/apply. Empty means the
+	// endpoint is disabled (501) -- this higher-stakes capability is
+	// opt-in, unlike the rest of /admin which trusts the network path.
+	adminApplySecret string
+	mux              *http.ServeMux
 }
 
-func NewServer(registry *Registry) *Server {
-	s := &Server{registry: registry, mux: http.NewServeMux()}
+func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string) *Server {
+	s := &Server{
+		registry:         registry,
+		hub:              hub,
+		notifyMgr:        notifyMgr,
+		adminApplySecret: adminApplySecret,
+		mux:              http.NewServeMux(),
+	}
 	s.mux.HandleFunc("/", s.handleRoot)
 	s.mux.HandleFunc("/enroll", s.handleEnroll)
 	s.mux.HandleFunc("/report", s.handleReport)
+	s.mux.HandleFunc("/companion/stream", s.handleCompanionStream)
+	s.mux.HandleFunc("/companion/result", s.handleCompanionResult)
 	s.mux.HandleFunc("/admin", s.handleAdmin)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
@@ -109,6 +127,142 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// authenticateCompanion applies the same X-Agent-ID/Bearer-token trust
+// check /report uses to a companion transport endpoint (stream or result),
+// writing an appropriate error response and returning ok=false if it
+// fails.
+func (s *Server) authenticateCompanion(w http.ResponseWriter, r *http.Request) (AgentRecord, bool) {
+	agentID := r.Header.Get("X-Agent-ID")
+	token := bearerToken(r)
+	if agentID == "" || token == "" {
+		http.Error(w, "missing X-Agent-ID or Authorization: Bearer token", http.StatusUnauthorized)
+		return AgentRecord{}, false
+	}
+	rec, outcome := s.registry.Authenticate(agentID, token)
+	switch outcome {
+	case AuthUnknownAgent, AuthUnauthorized:
+		http.Error(w, "invalid agent_id or token", http.StatusUnauthorized)
+		return AgentRecord{}, false
+	case AuthNotApproved:
+		http.Error(w, "agent not approved", http.StatusForbidden)
+		return AgentRecord{}, false
+	}
+	return rec, true
+}
+
+// handleCompanionStream is the SSE endpoint a host-native companion holds
+// open long-term: one Action at a time, pushed down whenever an admin
+// triggers an apply for this agent. Plain HTTP/1.1, not HTTP/2, to avoid
+// TLS/ALPN complexity for what's meant to run over a private network.
+func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rec, ok := s.authenticateCompanion(w, r)
+	if !ok {
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch := s.hub.Connect(rec.ID)
+	defer s.hub.Disconnect(rec.ID, ch)
+
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case action := <-ch:
+			payload, err := json.Marshal(action)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+type companionResultRequest struct {
+	ActionID string `json:"action_id"`
+	Success  bool   `json:"success"`
+	Message  string `json:"message,omitempty"`
+}
+
+// handleCompanionResult records the outcome of a previously pushed Action
+// and, if a notifier is configured, alerts on it (e.g. "update applied on
+// web01").
+func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rec, ok := s.authenticateCompanion(w, r)
+	if !ok {
+		return
+	}
+
+	var req companionResultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.ActionID == "" {
+		http.Error(w, "action_id is required", http.StatusBadRequest)
+		return
+	}
+
+	s.hub.RecordResult(rec.ID, ActionResult{
+		ActionID:    req.ActionID,
+		Success:     req.Success,
+		Message:     req.Message,
+		CompletedAt: time.Now(),
+	})
+
+	if s.notifyMgr != nil {
+		outcome := "failed"
+		if req.Success {
+			outcome = "applied"
+		}
+		msg := fmt.Sprintf("update %s on %s", outcome, rec.Hostname)
+		if req.Message != "" {
+			msg += ": " + req.Message
+		}
+		status := checker.Status{Hostname: rec.Hostname}
+		if rec.LastReport != nil {
+			status = *rec.LastReport
+		}
+		s.notifyMgr.Send(r.Context(), notifier.Event{
+			Hostname: rec.Hostname,
+			Status:   status,
+			Changes:  []string{msg},
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -116,7 +270,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	data := adminPageData{}
 	for _, rec := range s.registry.List() {
-		v := toAgentView(rec)
+		v := toAgentView(rec, s.hub)
 		switch rec.Status {
 		case StatusPending:
 			data.Pending = append(data.Pending, v)
@@ -147,6 +301,11 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 	}
 	id, action := parts[0], parts[1]
 
+	if action == "apply" {
+		s.handleAdminApply(w, r, id)
+		return
+	}
+
 	var status Status
 	switch action {
 	case "approve":
@@ -168,6 +327,63 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+type applyRequest struct {
+	Type     ActionType `json:"type"`
+	Packages []string   `json:"packages,omitempty"`
+}
+
+// handleAdminApply is the human-triggered counterpart to the companion's
+// SSE stream: it pushes an upgrade Action down to a connected companion.
+// Fails closed (501) until ADMIN_APPLY_SHARED_SECRET is configured, so this
+// higher-stakes capability is opt-in rather than on by default. The shared
+// secret is checked here independently of whatever reverse-proxy auth (e.g.
+// Authentik) fronts this endpoint in production -- a compromised proxy or
+// network path alone must not be enough to trigger an apply.
+func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id string) {
+	if s.adminApplySecret == "" {
+		http.Error(w, "apply is disabled: ADMIN_APPLY_SHARED_SECRET is not configured", http.StatusNotImplemented)
+		return
+	}
+	presented := r.Header.Get("X-Admin-Apply-Secret")
+	if presented == "" || subtle.ConstantTimeCompare([]byte(presented), []byte(s.adminApplySecret)) != 1 {
+		http.Error(w, "invalid or missing X-Admin-Apply-Secret", http.StatusForbidden)
+		return
+	}
+
+	rec, ok := s.registry.Get(id)
+	if !ok || rec.Status != StatusApproved {
+		http.Error(w, "agent not found or not approved", http.StatusNotFound)
+		return
+	}
+
+	var req applyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !req.Type.valid() {
+		http.Error(w, "type must be one of: packages, upgrade, full-upgrade", http.StatusBadRequest)
+		return
+	}
+	if req.Type == ActionPackages && len(req.Packages) == 0 {
+		http.Error(w, "packages must be non-empty for type=packages", http.StatusBadRequest)
+		return
+	}
+
+	action := Action{
+		ID:        newActionID(),
+		Type:      req.Type,
+		Packages:  req.Packages,
+		CreatedAt: time.Now(),
+	}
+	if err := s.hub.Push(id, action); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }
 
 type summaryResponse struct {

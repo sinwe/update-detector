@@ -84,6 +84,68 @@ paths:
         "403":
           description: Agent known but not (yet) approved
 
+  /companion/stream:
+    get:
+      summary: SSE stream of apply Actions for a host-native companion
+      description: >
+        Long-lived Server-Sent-Events response (plain HTTP/1.1, one Action
+        at a time, plus periodic ": heartbeat" comments). A companion
+        process holds this connection open and reconnects with backoff if
+        it drops; being connected here is what makes POST
+        /admin/agents/{id}/apply succeed for that agent instead of 409ing.
+      operationId: companionStream
+      security:
+        - agentToken: []
+      parameters:
+        - name: X-Agent-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: text/event-stream of Action payloads
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/Action"
+        "401":
+          description: Unknown agent or invalid token
+        "403":
+          description: Agent known but not (yet) approved
+
+  /companion/result:
+    post:
+      summary: Report the outcome of a previously pushed Action
+      description: >
+        Recorded in a small in-memory per-agent action log (not persisted)
+        and, if a notifier is configured, raises an alert (e.g. "update
+        applied on web01").
+      operationId: companionResult
+      security:
+        - agentToken: []
+      parameters:
+        - name: X-Agent-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionResult"
+      responses:
+        "200":
+          description: Result recorded
+        "400":
+          description: Missing action_id
+        "401":
+          description: Unknown agent or invalid token
+        "403":
+          description: Agent known but not (yet) approved
+
   /admin:
     get:
       summary: Approval dashboard (HTML)
@@ -131,6 +193,54 @@ paths:
           description: Redirect back to /admin
         "404":
           description: Unknown agent id
+
+  /admin/agents/{id}/apply:
+    post:
+      summary: Trigger a package upgrade on one agent's host
+      description: >
+        Human-triggered, and gated by a shared secret (ADMIN_APPLY_SHARED_SECRET)
+        checked independently of whatever reverse-proxy auth fronts this
+        endpoint -- disabled entirely (501) until that secret is configured.
+        Requires a companion currently connected via GET /companion/stream
+        for this agent, and the companion independently re-validates any
+        named packages against its own host's last-known pending upgrades
+        before acting -- this endpoint alone does not grant arbitrary
+        command execution even if the aggregator itself were compromised.
+      operationId: applyAgentAction
+      security:
+        - adminApplySecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyRequest"
+      responses:
+        "202":
+          description: Action accepted and pushed to the connected companion
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action_id:
+                    type: string
+        "400":
+          description: Invalid type, or packages missing for type=packages
+        "403":
+          description: Missing or invalid X-Admin-Apply-Secret
+        "404":
+          description: Unknown agent id, or agent not approved
+        "409":
+          description: No companion currently connected for this agent
+        "501":
+          description: Apply is disabled (ADMIN_APPLY_SHARED_SECRET not configured)
 
   /widgets/summary:
     get:
@@ -229,8 +339,56 @@ components:
       type: http
       scheme: bearer
       description: The agent's self-generated token, paired with its X-Agent-ID header.
+    adminApplySecret:
+      type: apiKey
+      in: header
+      name: X-Admin-Apply-Secret
+      description: >
+        Shared secret configured via ADMIN_APPLY_SHARED_SECRET. Intended to
+        be injected by a reverse-proxy (e.g. Authentik) after successful
+        human auth; the aggregator checks it independently either way.
 
   schemas:
+    Action:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [packages, upgrade, full-upgrade]
+        packages:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ActionResult:
+      type: object
+      required: [action_id]
+      properties:
+        action_id:
+          type: string
+        success:
+          type: boolean
+        message:
+          type: string
+
+    ApplyRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [packages, upgrade, full-upgrade]
+        packages:
+          type: array
+          items:
+            type: string
+          description: Required (and non-empty) when type=packages; ignored otherwise.
+
     EnrollRequest:
       type: object
       required: [agent_id, hostname, token]

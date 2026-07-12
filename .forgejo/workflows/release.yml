@@ -19,7 +19,7 @@ jobs:
       - name: Install Docker CLI
         run: |
           apt-get update -qq
-          apt-get install -y -qq docker.io
+          apt-get install -y -qq docker.io jq
 
       # Our only runner is amd64-only (nuc); QEMU lets it cross-build arm64
       # (Raspberry Pi 4B) via emulation.
@@ -72,3 +72,44 @@ jobs:
 
           build_and_push update-detector ./Dockerfile
           build_and_push update-aggregator ./Dockerfile.aggregator
+
+      # update-detector-companion is host-native, never containerized (it
+      # needs real root to run apt-get) -- so unlike the two images above,
+      # it's distributed as a plain binary release asset for install.sh to
+      # fetch. Go cross-compiles trivially without QEMU.
+      - name: Build companion binaries
+        run: |
+          set -eu
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            docker run --rm \
+              -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH="$arch" \
+              -v "$PWD":/src -w /src \
+              golang:1.22-alpine \
+              go build -o "dist/update-detector-companion-linux-$arch" ./cmd/update-detector-companion
+          done
+
+      - name: Publish companion binaries as release assets
+        env:
+          FORGEJO_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          API="https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+
+          release_id=$(curl -fsS -H "Authorization: token $FORGEJO_TOKEN" \
+            "$API/releases/tags/$TAG" | jq -r '.id // empty')
+
+          if [ -z "$release_id" ]; then
+            release_id=$(curl -fsS -X POST -H "Authorization: token $FORGEJO_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" \
+              "$API/releases" | jq -r '.id')
+          fi
+
+          for arch in amd64 arm64; do
+            file="dist/update-detector-companion-linux-$arch"
+            curl -fsS -X POST -H "Authorization: token $FORGEJO_TOKEN" \
+              -F "attachment=@$file" \
+              "$API/releases/$release_id/assets?name=update-detector-companion-linux-$arch"
+          done

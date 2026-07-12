@@ -1,0 +1,138 @@
+package companion
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"time"
+
+	"update-detector/internal/aggregator"
+	"update-detector/internal/checker"
+)
+
+const outputTruncateLimit = 4000
+
+// Apply independently re-validates action against agentStatusURL's current
+// pending upgrades before running anything. This local check -- not the
+// SSE connection's direction -- is the real safety property: even a fully
+// compromised aggregator can at most force early application of upgrades
+// this host already, independently, considers pending, never arbitrary
+// command execution. Never reboots, even if the upgrade sets
+// reboot_required.
+func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action) aggregator.ActionResult {
+	status, err := fetchLocalStatus(ctx, agentStatusURL)
+	if err != nil {
+		return aggregator.ActionResult{
+			ActionID:    action.ID,
+			Message:     fmt.Sprintf("could not verify local status: %v", err),
+			CompletedAt: time.Now(),
+		}
+	}
+
+	if action.Type == aggregator.ActionPackages {
+		if missing := missingFromPending(action.Packages, status); len(missing) > 0 {
+			return aggregator.ActionResult{
+				ActionID:    action.ID,
+				Message:     fmt.Sprintf("rejected: %v not currently pending on this host", missing),
+				CompletedAt: time.Now(),
+			}
+		}
+	}
+
+	var cmd *exec.Cmd
+	switch action.Type {
+	case aggregator.ActionPackages:
+		args := append([]string{"install", "-y", "--only-upgrade"}, action.Packages...)
+		cmd = aptCommand(ctx, args...)
+	case aggregator.ActionUpgrade:
+		cmd = aptCommand(ctx, "upgrade", "-y")
+	case aggregator.ActionFullUpgrade:
+		cmd = aptCommand(ctx, "dist-upgrade", "-y")
+	default:
+		return aggregator.ActionResult{
+			ActionID:    action.ID,
+			Message:     fmt.Sprintf("unknown action type %q", action.Type),
+			CompletedAt: time.Now(),
+		}
+	}
+
+	output, err := runCapped(cmd)
+	if err != nil {
+		return aggregator.ActionResult{
+			ActionID:    action.ID,
+			Message:     fmt.Sprintf("%s failed: %v\n%s", action.Type, err, output),
+			CompletedAt: time.Now(),
+		}
+	}
+
+	// Best-effort cleanup that never gates the primary result -- an
+	// upgrade/dist-upgrade can leave packages autoremove would clear.
+	msg := fmt.Sprintf("%s succeeded\n%s", action.Type, output)
+	if autoOut, autoErr := runCapped(aptCommand(ctx, "autoremove", "-y")); autoErr != nil {
+		msg += fmt.Sprintf("\napt-get autoremove failed: %v\n%s", autoErr, autoOut)
+	}
+
+	return aggregator.ActionResult{
+		ActionID:    action.ID,
+		Success:     true,
+		Message:     msg,
+		CompletedAt: time.Now(),
+	}
+}
+
+func aptCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "apt-get", args...)
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	return cmd
+}
+
+func runCapped(cmd *exec.Cmd) (string, error) {
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
+	out := buf.String()
+	if len(out) > outputTruncateLimit {
+		out = "...(truncated)...\n" + out[len(out)-outputTruncateLimit:]
+	}
+	return out, err
+}
+
+func missingFromPending(requested []string, status checker.Status) []string {
+	pending := map[string]bool{}
+	for _, u := range status.Packages.Upgrades {
+		pending[u.Name] = true
+	}
+	var missing []string
+	for _, name := range requested {
+		if !pending[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+func fetchLocalStatus(ctx context.Context, agentStatusURL string) (checker.Status, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, agentStatusURL, nil)
+	if err != nil {
+		return checker.Status{}, err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return checker.Status{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return checker.Status{}, fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	var status checker.Status
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return checker.Status{}, err
+	}
+	return status, nil
+}

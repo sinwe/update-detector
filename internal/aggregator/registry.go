@@ -173,6 +173,39 @@ func (r *Registry) Report(id, token string, status checker.Status) (ReportOutcom
 	return ReportAccepted, nil
 }
 
+// AuthOutcome mirrors ReportOutcome for endpoints that need the same
+// agent_id+token trust check /report uses, but don't mutate the registry
+// (the companion stream and result endpoints).
+type AuthOutcome int
+
+const (
+	AuthUnknownAgent AuthOutcome = iota
+	AuthUnauthorized
+	AuthNotApproved
+	AuthOK
+)
+
+// Authenticate checks id+token against the registry without mutating
+// anything.
+func (r *Registry) Authenticate(id, token string) (AgentRecord, AuthOutcome) {
+	hash := hashToken(token)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rec, ok := r.agents[id]
+	if !ok {
+		return AgentRecord{}, AuthUnknownAgent
+	}
+	if !tokensMatch(hash, rec.TokenHash) {
+		return AgentRecord{}, AuthUnauthorized
+	}
+	if rec.Status != StatusApproved {
+		return *rec, AuthNotApproved
+	}
+	return *rec, AuthOK
+}
+
 // SetStatus transitions an existing agent's approval status (approve,
 // reject, or revoke-by-rejecting an already-approved agent).
 func (r *Registry) SetStatus(id string, status Status) error {

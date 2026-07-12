@@ -14,6 +14,7 @@ import (
 
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorconfig"
+	"update-detector/internal/notifier"
 )
 
 func main() {
@@ -33,7 +34,23 @@ func run() error {
 		return err
 	}
 
-	srv := aggregator.NewServer(registry)
+	var notifiers []notifier.Notifier
+	if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
+		notifiers = append(notifiers, notifier.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID))
+		log.Println("telegram notifications enabled")
+	} else {
+		log.Println("telegram notifications disabled (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set)")
+	}
+	notifyMgr := notifier.NewManager(notifiers...)
+
+	if cfg.AdminApplySharedSecret == "" {
+		log.Println("apply endpoint disabled (ADMIN_APPLY_SHARED_SECRET not set)")
+	} else {
+		log.Println("apply endpoint enabled")
+	}
+
+	hub := aggregator.NewCompanionHub()
+	srv := aggregator.NewServer(registry, hub, notifyMgr, cfg.AdminApplySharedSecret)
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: srv.Handler(),

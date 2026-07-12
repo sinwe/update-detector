@@ -39,6 +39,12 @@ type Config struct {
 	// locally and notifying Telegram directly.
 	AggregatorURL     string
 	AgentIdentityFile string
+
+	// CompanionSocketPath is where GET /companion/token is served -- a Unix
+	// socket rather than the TCP mux, so a host-native companion process can
+	// fetch this agent's identity without it ever touching the network or a
+	// second on-disk copy. See internal/companiontoken.
+	CompanionSocketPath string
 }
 
 func Load() (Config, error) {
@@ -81,6 +87,8 @@ func Load() (Config, error) {
 
 		AggregatorURL:     strings.TrimSuffix(os.Getenv("AGGREGATOR_URL"), "/"),
 		AgentIdentityFile: getEnv("AGENT_IDENTITY_FILE", "/var/lib/update-detector/agent-identity.json"),
+
+		CompanionSocketPath: getEnv("COMPANION_SOCKET_PATH", "/var/lib/update-detector/companion.sock"),
 	}
 
 	return cfg, nil

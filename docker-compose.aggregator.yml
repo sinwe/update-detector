@@ -12,6 +12,16 @@ services:
       context: .
       dockerfile: Dockerfile.aggregator
     restart: unless-stopped
+    environment:
+      # Optional: alerts on companion apply results (e.g. "update applied
+      # on web01"). Independent of each agent's own Telegram config.
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # Gates POST /admin/agents/{id}/apply -- unset (the default) disables
+      # that endpoint entirely (501). Put the aggregator behind your own
+      # auth (e.g. Authentik) and have it inject this header; the
+      # aggregator checks it independently either way. See README.
+      - ADMIN_APPLY_SHARED_SECRET=${ADMIN_APPLY_SHARED_SECRET:-}
     ports:
       - "9090:8080"
     volumes:

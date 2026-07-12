@@ -27,6 +27,18 @@ type agentView struct {
 	Upgrades           []checker.PackageUpgrade
 	RebootRequired     bool
 	OSUpdateAvailable  bool
+
+	// CompanionConnected and RecentResults are only meaningful once
+	// Approved -- a companion has nothing to connect to, or report on,
+	// before that.
+	CompanionConnected bool
+	RecentResults      []resultView
+}
+
+type resultView struct {
+	Success     bool
+	Message     string
+	CompletedAt string
 }
 
 type adminPageData struct {
@@ -35,11 +47,12 @@ type adminPageData struct {
 	Rejected []agentView
 }
 
-func toAgentView(rec AgentRecord) agentView {
+func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
 	v := agentView{
-		ID:       rec.ID,
-		ShortID:  shortID(rec.ID),
-		Hostname: rec.Hostname,
+		ID:                 rec.ID,
+		ShortID:            shortID(rec.ID),
+		Hostname:           rec.Hostname,
+		CompanionConnected: hub.Connected(rec.ID),
 	}
 	if !rec.FirstSeen.IsZero() {
 		v.FirstSeen = rec.FirstSeen.Format(time.RFC3339)
@@ -56,6 +69,16 @@ func toAgentView(rec AgentRecord) agentView {
 		v.Upgrades = rec.LastReport.Packages.Upgrades
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
+	}
+	// Results() is oldest-first; show most recent first.
+	results := hub.Results(rec.ID)
+	for i := len(results) - 1; i >= 0; i-- {
+		r := results[i]
+		v.RecentResults = append(v.RecentResults, resultView{
+			Success:     r.Success,
+			Message:     r.Message,
+			CompletedAt: r.CompletedAt.Format(time.RFC3339),
+		})
 	}
 	return v
 }
@@ -85,6 +108,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
     .ok { color: #1a7f37; }
     .bad { color: #b91c1c; }
     .muted { color: #666; }
+    .apply-section { margin-top: 0.5rem; }
+    .apply-section button { margin-right: 0.3rem; margin-top: 0.3rem; }
   </style>
 </head>
 <body>
@@ -111,7 +136,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
 
   <h2>Approved ({{len .Approved}})</h2>
   <table>
-    <tr><th>Hostname</th><th>Agent ID</th><th>Last seen</th><th>Last report</th><th>Actions</th></tr>
+    <tr><th>Hostname</th><th>Agent ID</th><th>Last seen</th><th>Last report</th><th>Companion</th><th>Actions</th></tr>
     {{range .Approved}}
     <tr>
       <td>{{.Hostname}}</td>
@@ -137,12 +162,42 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <span class="muted">no report yet</span>
         {{end}}
       </td>
+      <td class="apply-section">
+        {{if .CompanionConnected}}
+          <span class="ok">connected</span><br>
+          {{if .Upgrades}}
+          <details>
+            <summary>apply packages</summary>
+            <form onsubmit="return applyPackages(event, '{{.ID}}')">
+              {{range .Upgrades}}
+              <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{.Name}}</label><br>
+              {{end}}
+              <button type="submit">Apply selected</button>
+            </form>
+          </details>
+          {{end}}
+          <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
+          <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
+        {{else}}
+          <span class="muted">not connected</span>
+        {{end}}
+        {{if .RecentResults}}
+        <details>
+          <summary>recent actions ({{len .RecentResults}})</summary>
+          <ul>
+            {{range .RecentResults}}
+            <li>{{.CompletedAt}} &mdash; {{if .Success}}<span class="ok">success</span>{{else}}<span class="bad">failed</span>{{end}}: {{.Message}}</li>
+            {{end}}
+          </ul>
+        </details>
+        {{end}}
+      </td>
       <td>
         <form method="post" action="/admin/agents/{{.ID}}/reject"><button>Revoke</button></form>
       </td>
     </tr>
     {{else}}
-    <tr><td colspan="5" class="muted">none</td></tr>
+    <tr><td colspan="6" class="muted">none</td></tr>
     {{end}}
   </table>
 
@@ -161,6 +216,43 @@ const adminTemplateSrc = `<!DOCTYPE html>
     <tr><td colspan="3" class="muted">none</td></tr>
     {{end}}
   </table>
+
+  <script>
+    // Sends X-Admin-Apply-Secret's actual value nowhere from here: this is
+    // meant to run behind a reverse-proxy (e.g. Authentik) that injects
+    // that header itself once you're authenticated at the proxy. Calling
+    // this page directly against the aggregator with nothing in front of
+    // it will 501/403, by design -- see README "Triggering updates".
+    async function postApply(id, body) {
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/apply', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+          alert('apply failed (' + resp.status + '): ' + await resp.text());
+          return;
+        }
+        alert('action accepted -- reload this page in a bit to see the result');
+      } catch (e) {
+        alert('apply failed: ' + e);
+      }
+    }
+    function applyAction(id, type) {
+      postApply(id, {type: type});
+    }
+    function applyPackages(event, id) {
+      event.preventDefault();
+      const packages = Array.from(event.target.querySelectorAll('input[name=pkg]:checked')).map(i => i.value);
+      if (packages.length === 0) {
+        alert('select at least one package');
+        return false;
+      }
+      postApply(id, {type: 'packages', packages: packages});
+      return false;
+    }
+  </script>
 </body>
 </html>
 `

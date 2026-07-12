@@ -17,6 +17,7 @@ import (
 	"update-detector/internal/checker"
 	"update-detector/internal/checker/debian"
 	"update-detector/internal/checker/ubuntu"
+	"update-detector/internal/companiontoken"
 	"update-detector/internal/config"
 	"update-detector/internal/hostflavor"
 	"update-detector/internal/httpserver"
@@ -82,6 +83,7 @@ func run() error {
 	notifyMgr := notifier.NewManager(notifiers...)
 
 	var aggClient *aggregatorclient.Client
+	var companionSrv *companiontoken.Server
 	if cfg.AggregatorURL != "" {
 		identity, err := aggregatorclient.LoadOrCreateIdentity(cfg.AgentIdentityFile)
 		if err != nil {
@@ -89,6 +91,19 @@ func run() error {
 		}
 		aggClient = aggregatorclient.New(cfg.AggregatorURL, identity)
 		log.Printf("aggregator push enabled (%s), agent id %s", cfg.AggregatorURL, identity.AgentID)
+
+		// Only worth serving once there's an aggregator/identity for a
+		// companion to actually use.
+		companionSrv, err = companiontoken.Listen(cfg.CompanionSocketPath, identity)
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := companionSrv.Serve(); err != nil && err != http.ErrServerClosed {
+				log.Printf("companion token socket: %v", err)
+			}
+		}()
+		log.Printf("companion token socket listening on %s", cfg.CompanionSocketPath)
 	} else {
 		log.Println("aggregator push disabled (AGGREGATOR_URL not set)")
 	}
@@ -182,6 +197,9 @@ func run() error {
 		select {
 		case <-ctx.Done():
 			log.Println("shutting down")
+			if companionSrv != nil {
+				_ = companionSrv.Close()
+			}
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			return httpSrv.Shutdown(shutdownCtx)

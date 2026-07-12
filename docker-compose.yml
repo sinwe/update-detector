@@ -55,8 +55,12 @@ services:
       # Ubuntu repos themselves.
       - /etc/apt/trusted.gpg.d:/etc/apt/trusted.gpg.d:ro
       # Container-owned state: last-known status (for diffing across
-      # restarts) and the agent's own apt package-list cache.
-      - update-detector-state:/var/lib/update-detector
-
-volumes:
-  update-detector-state:
+      # restarts), the agent's own apt package-list cache, and the Unix
+      # socket a host-native companion (see companion/) uses to fetch this
+      # agent's identity without it ever touching the network. A bind mount
+      # at a fixed, predictable path -- not a named volume -- specifically
+      # so a companion running natively on this same host can reach the
+      # same directory. Override with STATE_DIR=<path> if you need a
+      # different location (matching COMPANION_SOCKET_PATH/STATE_FILE on
+      # the agent side, and install.sh's discovery, if you do).
+      - ${STATE_DIR:-/var/lib/update-detector}:/var/lib/update-detector
