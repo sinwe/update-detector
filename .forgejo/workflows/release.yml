@@ -76,17 +76,35 @@ jobs:
       # update-detector-companion is host-native, never containerized (it
       # needs real root to run apt-get) -- so unlike the two images above,
       # it's distributed as a plain binary release asset for install.sh to
-      # fetch. Go cross-compiles trivially without QEMU.
+      # fetch. Go cross-compiles trivially without QEMU -- no --platform
+      # needed, GOARCH alone controls the output binary's architecture.
+      #
+      # Deliberately not `docker run -v "$PWD":/src` -- this runner's job
+      # container talks to the *host's* Docker daemon (docker.sock mounted
+      # in), so a bind mount is resolved against the host's filesystem, not
+      # this container's. The job container's $PWD doesn't exist at that
+      # same path on the host, so the mount silently ends up empty
+      # ("go.mod not found"). `docker cp` goes over the Docker API instead
+      # of a bind mount, so it's unaffected by that path mismatch.
       - name: Build companion binaries
         run: |
           set -eu
           mkdir -p dist
           for arch in amd64 arm64; do
-            docker run --rm \
+            cid=$(docker create \
               -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH="$arch" \
-              -v "$PWD":/src -w /src \
               golang:1.22-alpine \
-              go build -o "dist/update-detector-companion-linux-$arch" ./cmd/update-detector-companion
+              sh -c "mkdir -p /out && cd /src && go build -o /out/update-detector-companion ./cmd/update-detector-companion")
+            # A single whole-directory copy, not one docker cp per
+            # subpath -- docker cp only auto-creates missing destination
+            # directories for a directory-to-nonexistent-dest copy, not for
+            # a file landing under several nonexistent parent directories
+            # (confirmed by testing: the per-path form fails with
+            # "Could not find the file /src in container").
+            docker cp . "$cid:/src"
+            docker start -a "$cid"
+            docker cp "$cid:/out/update-detector-companion" "dist/update-detector-companion-linux-$arch"
+            docker rm "$cid" >/dev/null
           done
 
       - name: Publish companion binaries as release assets
