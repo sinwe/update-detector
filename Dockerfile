@@ -33,7 +33,12 @@ RUN useradd --system --uid 10001 --shell /usr/sbin/nologin update-detector \
     && chown -R update-detector:update-detector /var/lib/update-detector /var/cache/apt/archives
 
 COPY --from=builder /out/update-detector /usr/local/bin/update-detector
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-USER update-detector
+# Starts as root (needed to chown a bind-mounted state dir -- see
+# docker-entrypoint.sh) and drops to the unprivileged update-detector user
+# before exec'ing the actual binary, which is what actually runs for the
+# life of the container.
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/update-detector"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

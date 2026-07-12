@@ -124,7 +124,15 @@ host's apt sources, dpkg status, `/etc/os-release`, and `/var/run`
 container-owned directory bind-mounted at a fixed host path (default
 `/var/lib/update-detector`, override with `STATE_DIR`; see
 `docker-compose.yml`) rather than a Docker-managed named volume, so a
-host-native companion process (planned) can share that same directory.
+host-native companion process can share that same directory.
+
+Unlike a named volume, Docker never auto-chowns a bind-mounted host
+directory to match the image, so a freshly created `STATE_DIR` (including
+one `docker compose` auto-creates because it didn't exist yet) starts out
+owned by `root`. The container's entrypoint (`docker-entrypoint.sh`) fixes
+this itself on every startup — `chown`s `STATE_DIR` to its own non-root
+user before dropping privilege and exec'ing the actual binary — so this is
+never something you need to do by hand.
 
 > **Migrating from an older deployment?** Versions before the
 > `STATE_DIR` bind mount stored this state in a named volume called
