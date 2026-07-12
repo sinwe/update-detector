@@ -17,19 +17,104 @@ changes. Ships as a single Docker image, one container per host.
 | Actual Windows OS (Windows Update, winget) | 🚧 planned — needs a native (non-container) agent, see [Limitations](#platform-limitations) |
 | Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
 
-## Quick start
+## Installation
+
+Follow these in order. Step 1 is required; everything after it is optional
+— skip anything you don't need. Every command below is meant to be copied
+and run exactly as shown; nothing here assumes you've read any other
+section first.
+
+**Prerequisite, on every machine you'll use below:** Docker with the Compose
+plugin installed (`docker compose version` should print something, not
+"command not found"). That's the only thing you need — no Go toolchain, no
+cloning this repo.
+
+### Step 1 — Deploy the agent (required, do this on every host you want detection on)
 
 ```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t update-detector:latest --load .
-# or just: docker build -t update-detector:latest .
+mkdir -p ~/update-detector && cd ~/update-detector
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.yml -o docker-compose.yml
+```
 
-export TELEGRAM_BOT_TOKEN=...
-export TELEGRAM_CHAT_ID=...
+Set the hostname this instance reports as (so multiple hosts don't look
+identical), and Telegram credentials if you want alerts — skip either
+`export` line if you don't have/want that:
+
+```sh
 export HOSTNAME_OVERRIDE=$(hostname)
-docker compose up -d
+export TELEGRAM_BOT_TOKEN=your-bot-token-from-BotFather
+export TELEGRAM_CHAT_ID=your-chat-id
+```
 
+Start it:
+
+```sh
+docker compose up -d
+```
+
+Verify it's actually working:
+
+```sh
 curl http://localhost:8080/status | jq
 ```
+
+You should see JSON like `{"hostname": "...", "packages": {...}, "ok": true, ...}`.
+If you get `curl: (7) Failed to connect`, run `docker compose logs` and check
+for errors — the most common cause is port 8080 already being used by
+something else, fixed by `AGENT_PORT=8081 docker compose up -d` instead.
+
+**That's a complete, working install.** Everything below adds optional
+capabilities on top of it.
+
+### Step 2 — Fleet dashboard across multiple hosts (optional)
+
+Skip this entirely if you only have one host, or don't want a combined
+view. Do this on one separate machine (not one of your agent hosts) — it
+only needs to run once for your whole fleet:
+
+```sh
+mkdir -p ~/update-aggregator && cd ~/update-aggregator
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
+docker compose -f docker-compose.aggregator.yml up -d
+```
+
+Verify: `curl http://localhost:9090/admin` should return an HTML page (or
+open it in a browser).
+
+Then, back on **each agent host** from Step 1, point it at the aggregator
+and restart it:
+
+```sh
+cd ~/update-detector
+export AGGREGATOR_URL=http://<aggregator-host-ip-or-name>:9090
+docker compose up -d
+```
+
+Open `http://<aggregator-host>:9090/admin` in a browser — you'll see the
+new agent listed under "Pending." Click **Approve**. It'll start reporting
+within one `CHECK_INTERVAL` (6h by default; restart the agent's container
+if you don't want to wait that long for the first report to show up).
+
+Details on setting up Homepage widgets from this: [Fleet dashboard](#fleet-dashboard-homepage-via-update-aggregator).
+
+### Step 3 — Push-button updates (optional, requires Step 2)
+
+Lets you actually trigger package installs from the admin page instead of
+just seeing what's pending. Full walkthrough, including the security model
+and why it's safe to expose: [Triggering updates](#triggering-updates-companion).
+
+### Step 4 — Gatus / notifications (optional)
+
+- [Gatus integration](#gatus-integration) — poll `/status` for uptime-style monitoring.
+- [Notifications](#notifications) — you already set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`
+  in Step 1 if you want these; there's nothing extra to install.
+
+---
+
+The rest of this README covers each piece above in more depth, plus every
+configuration option. If you just want to build from source instead of
+using the published image (e.g. to test a change), see
+[Development](#development).
 
 ## How it works
 
