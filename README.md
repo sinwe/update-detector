@@ -321,11 +321,13 @@ compromised proxy or network path alone still isn't enough on its own.
 **Reboots are never automatic**, even if an upgrade sets
 `reboot_required` — that stays a manual, human decision.
 
-### Upgrading an existing deployment
+### Setting up the companion (new installs and upgrades)
 
-If you already had `update-detector`/`update-aggregator` running before this
-feature existed, do this once, in order — aggregator first, then each agent
-host, one at a time.
+Same steps whether this is a brand-new install or an existing deployment
+you're adding this feature to — only step 2's volume migration is
+upgrade-specific (skip it on a new install; `docker-compose.yml` already
+defaults to the bind mount from day one). Do this once, in order —
+aggregator first, then each agent host, one at a time.
 
 **1. Aggregator** — wherever `docker-compose.aggregator.yml` actually runs.
 Add the new env var to a `.env` file in the same directory as that compose
@@ -343,8 +345,10 @@ docker compose -f docker-compose.aggregator.yml logs --tail 5
 
 Confirm the log says `apply endpoint enabled` (not `disabled ... not set`).
 
-**2. Each agent host** — migrate `update-detector-state` (the old named
-volume) to the new bind mount, then pull the new image:
+**2. Each agent host** — new install: skip straight to the `docker compose
+pull && up -d` at the bottom of this block, nothing to migrate. Existing
+deployment: migrate `update-detector-state` (the old named volume) to the
+new bind mount first, then pull the new image:
 
 ```sh
 cd /path/to/docker-compose.yml
