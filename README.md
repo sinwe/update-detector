@@ -147,7 +147,7 @@ new agent listed under "Pending." Click **Approve**. It'll start reporting
 within one `CHECK_INTERVAL` (6h by default; restart the agent's container
 if you don't want to wait that long for the first report to show up).
 
-Details on setting up Homepage widgets from this: [Fleet dashboard](#fleet-dashboard-homepage-via-update-aggregator).
+Details on setting up Homepage widgets from this: [docs/integrations/homepage.md](docs/integrations/homepage.md).
 
 ### Step 3 — Push-button updates (optional, requires Step 2)
 
@@ -157,9 +157,9 @@ and why it's safe to expose: [Triggering updates](#triggering-updates-companion)
 
 ### Step 4 — Gatus / notifications (optional)
 
-- [Gatus integration](#gatus-integration) — poll `/status` for uptime-style monitoring.
-- [Notifications](#notifications) — you already set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`
-  in Step 1 if you want these; there's nothing extra to install.
+- [docs/integrations/gatus.md](docs/integrations/gatus.md) — poll `/status` for uptime-style monitoring.
+- [docs/integrations/telegram.md](docs/integrations/telegram.md) — you already set
+  `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` in Step 1 if you want these; there's nothing extra to install.
 
 ---
 
@@ -257,40 +257,6 @@ into a WSL2 Ubuntu/Debian distro, if that's what you're running it in.
 Monitoring the actual Windows or macOS OS needs a native, non-container
 agent (planned) — the checker is designed as an interface so that's a new
 implementation, not a rewrite.
-
-## Gatus integration
-
-See [docs/integrations/gatus.md](docs/integrations/gatus.md) — example Gatus
-config, the `ok` convenience boolean vs. finer-grained conditions on
-individual fields, a sample `/status` response, and `/healthz`.
-
-## Notifications
-
-See [docs/integrations/telegram.md](docs/integrations/telegram.md) —
-bot setup, when a notification actually fires, and the aggregator's
-separate Telegram config for apply-result alerts.
-
-### Adding a new notifier
-
-Implement the `Notifier` interface in `internal/notifier/notifier.go`:
-
-```go
-type Notifier interface {
-    Name() string
-    Send(ctx context.Context, ev Event) error
-}
-```
-
-Then register an instance in `cmd/update-detector/main.go` next to the
-existing Telegram wiring, gated by whatever config it needs. Nothing else
-changes — the scheduler, HTTP server, and state diffing are all
-notifier-agnostic.
-
-## Fleet dashboard (Homepage) via update-aggregator
-
-See [docs/integrations/homepage.md](docs/integrations/homepage.md) —
-enrollment/approval flow, Homepage "Custom API" widget config, the
-fleet-wide pending-packages endpoint, and known limitations.
 
 ## Triggering updates (companion)
 
@@ -566,6 +532,24 @@ curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/dock
 docker compose -f docker-compose.aggregator.yml pull
 docker compose -f docker-compose.aggregator.yml up -d
 ```
+
+## Extending
+
+### Adding a new notifier
+
+Implement the `Notifier` interface in `internal/notifier/notifier.go`:
+
+```go
+type Notifier interface {
+    Name() string
+    Send(ctx context.Context, ev Event) error
+}
+```
+
+Then register an instance in `cmd/update-detector/main.go` next to the
+existing Telegram wiring, gated by whatever config it needs. Nothing else
+changes — the scheduler, HTTP server, and state diffing are all
+notifier-agnostic.
 
 ## Development
 
