@@ -38,17 +38,34 @@ curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/dock
 
 Set the hostname this instance reports as (so multiple hosts don't look
 identical), and Telegram credentials if you want alerts — skip either
-`export` line if you don't have/want that:
+`TELEGRAM_*` line if you don't have/want that. Put these in a `.env` file
+right next to `docker-compose.yml`, not `export` in your shell:
 
 ```sh
-export HOSTNAME_OVERRIDE=$(hostname)
-export TELEGRAM_BOT_TOKEN=your-bot-token-from-BotFather
-export TELEGRAM_CHAT_ID=your-chat-id
+echo "HOSTNAME_OVERRIDE=$(hostname)" >> .env
+echo "TELEGRAM_BOT_TOKEN=your-bot-token-from-BotFather" >> .env
+echo "TELEGRAM_CHAT_ID=your-chat-id" >> .env
 ```
 
-Start it:
+> **Why `.env`, not `export`?** `docker compose` automatically reads a
+> `.env` file in the same directory as `docker-compose.yml` and uses it to
+> fill in every `${VAR}` in that file — that's the *only* mechanism this
+> project relies on, so it's what every command below uses too. `export`
+> only lasts for your current terminal session; the moment you open a new
+> shell (or this runs unattended, e.g. after a reboot), an `export`-only
+> value is gone and everything silently falls back to defaults. `.env` is
+> a plain text file, persists on disk, and needs no explaining to
+> "future you." (If a variable happens to be set *both* ways, the shell's
+> `export` wins over `.env` — one more reason to just pick `.env` and not
+> mix the two.)
+
+Pull the image and start it — always `pull` before `up -d`, even on a
+host that's run this before: `up -d` alone reuses whatever image is
+already cached locally and won't notice a newer one exists, silently
+running stale code:
 
 ```sh
+docker compose pull
 docker compose up -d
 ```
 
@@ -75,6 +92,7 @@ only needs to run once for your whole fleet:
 ```sh
 mkdir -p ~/update-aggregator && cd ~/update-aggregator
 curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
+docker compose -f docker-compose.aggregator.yml pull
 docker compose -f docker-compose.aggregator.yml up -d
 ```
 
@@ -82,11 +100,12 @@ Verify: `curl http://localhost:9090/admin` should return an HTML page (or
 open it in a browser).
 
 Then, back on **each agent host** from Step 1, point it at the aggregator
-and restart it:
+(in `.env`, same as Step 1) and restart it:
 
 ```sh
 cd ~/update-detector
-export AGGREGATOR_URL=http://<aggregator-host-ip-or-name>:9090
+echo "AGGREGATOR_URL=http://<aggregator-host-ip-or-name>:9090" >> .env
+docker compose pull
 docker compose up -d
 ```
 
