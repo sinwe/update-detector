@@ -25,6 +25,19 @@ const outputTruncateLimit = 4000
 // command execution. Never reboots, even if the upgrade sets
 // reboot_required.
 func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action) aggregator.ActionResult {
+	// Recheck never touches apt-get or the pending-packages list at all --
+	// it just asks the agent to refresh itself sooner, so it skips
+	// straight to that rather than going through local validation.
+	if action.Type == aggregator.ActionRecheck {
+		triggerRecheck(ctx, agentStatusURL)
+		return aggregator.ActionResult{
+			ActionID:    action.ID,
+			Success:     true,
+			Message:     "recheck triggered",
+			CompletedAt: time.Now(),
+		}
+	}
+
 	status, err := fetchLocalStatus(ctx, agentStatusURL)
 	if err != nil {
 		return aggregator.ActionResult{

@@ -305,6 +305,10 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminApply(w, r, id)
 		return
 	}
+	if action == "recheck" {
+		s.handleAdminRecheck(w, r, id)
+		return
+	}
 
 	var status Status
 	switch action {
@@ -366,7 +370,12 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if !req.Type.valid() {
+	// Deliberately not req.Type.valid() -- that also accepts ActionRecheck,
+	// which has its own no-secret-required endpoint (handleAdminRecheck)
+	// specifically so it doesn't need to go through this secret-gated one.
+	switch req.Type {
+	case ActionPackages, ActionUpgrade, ActionFullUpgrade:
+	default:
 		http.Error(w, "type must be one of: packages, upgrade, full-upgrade", http.StatusBadRequest)
 		return
 	}
@@ -381,6 +390,29 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 		Packages:  req.Packages,
 		CreatedAt: time.Now(),
 	}
+	if err := s.hub.Push(id, action); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+}
+
+// handleAdminRecheck pushes a recheck Action to a connected companion, so
+// the agent runs an out-of-band detection cycle instead of waiting for the
+// next CHECK_INTERVAL -- e.g. after the admin page's data still looks
+// stale a while after a manual apply. Unlike handleAdminApply, this needs
+// no shared secret: it can't change anything on the host, only make it
+// report what's already true sooner, so it gets the same trust model as
+// the rest of /admin (approve/reject/view).
+func (s *Server) handleAdminRecheck(w http.ResponseWriter, _ *http.Request, id string) {
+	rec, ok := s.registry.Get(id)
+	if !ok || rec.Status != StatusApproved {
+		http.Error(w, "agent not found or not approved", http.StatusNotFound)
+		return
+	}
+
+	action := Action{ID: newActionID(), Type: ActionRecheck, CreatedAt: time.Now()}
 	if err := s.hub.Push(id, action); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

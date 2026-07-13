@@ -161,6 +161,21 @@ func TestApplyFailureStillTriggersRecheck(t *testing.T) {
 	}
 }
 
+func TestApplyRecheckSkipsAptAndTriggersRecheck(t *testing.T) {
+	// Deliberately no writeFakeAptGet -- if this incorrectly fell through
+	// to running apt-get, it would fail (no such binary on PATH) and
+	// result.Success would be false, catching the bug implicitly.
+	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
+
+	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionRecheck})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if !recheckCalled.Load() {
+		t.Fatal("expected POST /recheck to have been called")
+	}
+}
+
 func TestApplyRejectionDoesNotTriggerRecheck(t *testing.T) {
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{
 		Packages: checker.PackageInfo{Upgrades: []checker.PackageUpgrade{{Name: "vim"}}},

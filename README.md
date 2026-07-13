@@ -378,6 +378,12 @@ triggers an out-of-band recheck on the agent (`POST /recheck`), so
 right away instead of showing an already-applied package as still pending
 for up to a full `CHECK_INTERVAL`.
 
+**A "Force recheck" button** is also on the admin page for each connected
+host — needs no secret (it can't change anything on the host, only make
+it report sooner), so use it any time the numbers look stale and you
+don't want to wait for the next `CHECK_INTERVAL`, without needing to
+apply a package first just to trigger a refresh.
+
 ### Setting up the companion (new installs and upgrades)
 
 Same steps whether this is a brand-new install or an existing deployment

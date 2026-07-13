@@ -178,6 +178,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           {{end}}
           <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
           <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
+          <button onclick="forceRecheck('{{.ID}}')" title="Re-scan this host now instead of waiting for the next CHECK_INTERVAL">Force recheck</button>
         {{else}}
           <span class="muted">not connected</span>
         {{end}}
@@ -270,6 +271,20 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
       postApply(id, {type: 'packages', packages: packages});
       return false;
+    }
+    // No secret needed here, unlike postApply -- recheck can't change
+    // anything on the host, only make it report sooner.
+    async function forceRecheck(id) {
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/recheck', {method: 'POST'});
+        if (!resp.ok) {
+          alert('recheck failed (' + resp.status + '): ' + await resp.text());
+          return;
+        }
+        alert('recheck triggered -- reload this page in a bit to see updated data');
+      } catch (e) {
+        alert('recheck failed: ' + e);
+      }
     }
   </script>
 </body>

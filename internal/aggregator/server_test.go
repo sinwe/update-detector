@@ -436,6 +436,14 @@ func TestHandleAdminApplyValidatesRequest(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got status %d, want 404 for unknown agent", rec.Code)
 	}
+
+	// recheck has its own no-secret endpoint specifically so it doesn't
+	// need to go through this one -- /apply must not accept it as a
+	// backdoor around that.
+	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionRecheck}, headers)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for type=recheck via /apply", rec.Code)
+	}
 }
 
 func TestHandleAdminApplyRequiresConnectedCompanion(t *testing.T) {
@@ -471,6 +479,47 @@ func TestHandleAdminApplyPushesToConnectedCompanion(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected an action to be pushed to the connected channel")
+	}
+}
+
+func TestHandleAdminRecheckNeedsNoSecret(t *testing.T) {
+	// No secret configured at all, unlike apply -- recheck must still work.
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	ch := s.hub.Connect("a1")
+	defer s.hub.Disconnect("a1", ch)
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/recheck", nil, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case action := <-ch:
+		if action.Type != ActionRecheck {
+			t.Fatalf("got action type %q, want recheck", action.Type)
+		}
+	default:
+		t.Fatal("expected a recheck action to be pushed to the connected channel")
+	}
+}
+
+func TestHandleAdminRecheckRequiresConnectedCompanion(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/recheck", nil, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want 409 with no companion connected", rec.Code)
+	}
+}
+
+func TestHandleAdminRecheckUnknownAgent(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/unknown/recheck", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 for unknown agent", rec.Code)
 	}
 }
 

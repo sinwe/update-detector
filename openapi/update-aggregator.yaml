@@ -242,6 +242,38 @@ paths:
         "501":
           description: Apply is disabled (ADMIN_APPLY_SHARED_SECRET not configured)
 
+  /admin/agents/{id}/recheck:
+    post:
+      summary: Trigger an out-of-band detection cycle on one agent's host
+      description: >
+        Relayed through the connected companion the same way apply is,
+        since the aggregator never reaches into an agent's network
+        directly. Needs no shared secret, unlike apply -- it can't change
+        anything on the host, only make it report what's already true
+        sooner instead of waiting for the next CHECK_INTERVAL. Same trust
+        model as the rest of /admin (approve/reject/view).
+      operationId: recheckAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Recheck action accepted and pushed to the connected companion
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action_id:
+                    type: string
+        "404":
+          description: Unknown agent id, or agent not approved
+        "409":
+          description: No companion currently connected for this agent, or this agent already has an unresolved action in flight
+
   /widgets/summary:
     get:
       summary: Fleet-wide totals for a Homepage "Custom API" widget
@@ -356,7 +388,7 @@ components:
           type: string
         type:
           type: string
-          enum: [packages, upgrade, full-upgrade]
+          enum: [packages, upgrade, full-upgrade, recheck]
         packages:
           type: array
           items:

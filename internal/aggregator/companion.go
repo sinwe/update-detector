@@ -15,11 +15,16 @@ const (
 	ActionPackages    ActionType = "packages"
 	ActionUpgrade     ActionType = "upgrade"
 	ActionFullUpgrade ActionType = "full-upgrade"
+	// ActionRecheck asks the companion to trigger the local agent's
+	// out-of-band POST /recheck instead of running apt-get -- doesn't
+	// change anything on the host, so unlike the other three it needs no
+	// shared secret (see handleAdminRecheck).
+	ActionRecheck ActionType = "recheck"
 )
 
 func (t ActionType) valid() bool {
 	switch t {
-	case ActionPackages, ActionUpgrade, ActionFullUpgrade:
+	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck:
 		return true
 	default:
 		return false

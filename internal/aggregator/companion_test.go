@@ -115,7 +115,7 @@ func TestCompanionHubResultsCapped(t *testing.T) {
 }
 
 func TestActionTypeValid(t *testing.T) {
-	valid := []ActionType{ActionPackages, ActionUpgrade, ActionFullUpgrade}
+	valid := []ActionType{ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck}
 	for _, v := range valid {
 		if !v.valid() {
 			t.Fatalf("expected %q to be valid", v)
