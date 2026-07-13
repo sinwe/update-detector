@@ -57,6 +57,23 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		}
 	}
 
+	// The companion runs directly against the host's own apt state, which
+	// is separate from the containerized agent's own package-list cache
+	// (see README "How it works" -- the agent never writes to the host, so
+	// it maintains its own cache instead). Without refreshing the host's
+	// lists here first, apt-get can see an older candidate than what the
+	// agent detected and silently no-op ("already the newest version")
+	// even though a real upgrade is pending -- confirmed live: base-files
+	// showed 13.8+deb13u5 -> 13.8+deb13u6 pending, but the host's stale
+	// apt cache still thought 13.8+deb13u5 was current.
+	if updateOut, updateErr := runCapped(aptCommand(ctx, "update")); updateErr != nil {
+		return aggregator.ActionResult{
+			ActionID:    action.ID,
+			Message:     fmt.Sprintf("apt-get update failed: %v\n%s", updateErr, updateOut),
+			CompletedAt: time.Now(),
+		}
+	}
+
 	var cmd *exec.Cmd
 	switch action.Type {
 	case aggregator.ActionPackages:

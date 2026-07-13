@@ -365,6 +365,15 @@ requirement.
 **Reboots are never automatic**, even if an upgrade sets
 `reboot_required` — that stays a manual, human decision.
 
+**The companion always runs `apt-get update` on the host first**, right
+before the real install/upgrade/dist-upgrade command. It has to: the
+companion acts directly on the host's own apt state, which is separate
+from the containerized agent's own package-list cache (see
+[How it works](#how-it-works)). Without this, the host's cache can be
+stale relative to what the agent detected, and apt-get would silently
+no-op ("already the newest version") on a package the admin page still
+shows as pending — confirmed live, not just theoretical.
+
 **Only one action at a time per host** — `apply` returns `409` if that
 agent already has an unresolved action in flight, rather than queuing up
 repeat/overlapping requests. A companion that disconnects mid-action

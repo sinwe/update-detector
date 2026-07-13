@@ -123,7 +123,9 @@ func TestApplyUpgradeDoesNotRequirePendingList(t *testing.T) {
 }
 
 func TestApplyReportsAptGetFailure(t *testing.T) {
-	writeFakeAptGet(t, `echo "boom" >&2; exit 1`)
+	// "update" must succeed so this actually exercises the real upgrade
+	// command failing, not the pre-flight refresh.
+	writeFakeAptGet(t, `if [ "$1" = "update" ]; then exit 0; fi; echo "boom" >&2; exit 1`)
 	srv := statusServer(t, checker.Status{})
 
 	result := Apply(context.Background(), srv.URL, aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
@@ -132,6 +134,33 @@ func TestApplyReportsAptGetFailure(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "boom") {
 		t.Fatalf("expected apt-get stderr in message, got: %s", result.Message)
+	}
+}
+
+func TestApplyFailsWhenAptGetUpdateFails(t *testing.T) {
+	callLog := filepath.Join(t.TempDir(), "calls.log")
+	writeFakeAptGet(t, fmt.Sprintf(`
+if [ "$1" = "update" ]; then
+  echo "network unreachable" >&2
+  exit 1
+fi
+echo "$@" >> %q
+exit 0
+`, callLog))
+	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
+
+	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	if result.Success {
+		t.Fatal("expected failure when apt-get update fails")
+	}
+	if !strings.Contains(result.Message, "network unreachable") {
+		t.Fatalf("expected apt-get update's stderr in message, got: %s", result.Message)
+	}
+	if _, err := os.ReadFile(callLog); err == nil {
+		t.Fatal("expected the real upgrade command to never run after apt-get update failed")
+	}
+	if recheckCalled.Load() {
+		t.Fatal("expected no recheck when apt-get update failed -- nothing on the host changed")
 	}
 }
 
@@ -149,7 +178,11 @@ func TestApplySuccessTriggersRecheck(t *testing.T) {
 }
 
 func TestApplyFailureStillTriggersRecheck(t *testing.T) {
-	writeFakeAptGet(t, `echo boom >&2; exit 1`)
+	// "update" must succeed so this exercises the real upgrade command
+	// failing (which can partially apply before erroring, hence still
+	// worth rechecking), not the pre-flight refresh failing (which
+	// shouldn't trigger a recheck -- nothing on the host changed).
+	writeFakeAptGet(t, `if [ "$1" = "update" ]; then exit 0; fi; echo boom >&2; exit 1`)
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
 
 	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
