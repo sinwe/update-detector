@@ -87,7 +87,9 @@ capabilities on top of it.
 
 Skip this entirely if you only have one host, or don't want a combined
 view. Do this on one separate machine (not one of your agent hosts) — it
-only needs to run once for your whole fleet:
+only needs to run once for your whole fleet. **Use a separate directory
+from the agent's `docker-compose.yml`** (even if it's the same machine,
+e.g. testing both roles on one box) — see the warning below for why:
 
 ```sh
 mkdir -p ~/update-aggregator && cd ~/update-aggregator
@@ -98,6 +100,17 @@ docker compose -f docker-compose.aggregator.yml up -d
 
 Verify: `curl http://localhost:9090/admin` should return an HTML page (or
 open it in a browser).
+
+> **If you do put both compose files in one directory anyway:** plain
+> `docker compose pull`/`up -d` with no `-f` always targets
+> `docker-compose.yml` only — it will silently never start or update the
+> aggregator, even though the file's sitting right there. Always say
+> `-f docker-compose.aggregator.yml` explicitly for every aggregator
+> command. You'll also see a `Found orphan containers` warning whenever
+> you run one file without the other, since they share a project name by
+> directory default — that's expected and harmless, but **never add
+> `--remove-orphans`** to "fix" it here, since that flag will delete
+> whichever of the two services you *didn't* just target.
 
 Then, back on **each agent host** from Step 1, point it at the aggregator
 (in `.env`, same as Step 1) and restart it:
