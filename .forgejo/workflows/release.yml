@@ -74,11 +74,14 @@ jobs:
           build_and_push update-detector ./Dockerfile
           build_and_push update-aggregator ./Dockerfile.aggregator
 
-      # update-detector-companion is host-native, never containerized (it
-      # needs real root to run apt-get) -- so unlike the two images above,
-      # it's distributed as a plain binary release asset for install.sh to
-      # fetch. Go cross-compiles trivially without QEMU -- no --platform
-      # needed, GOARCH alone controls the output binary's architecture.
+      # All three binaries are also published as plain standalone release
+      # assets, not just the two Docker images above -- update-detector and
+      # update-aggregator so install.sh can offer a native (no Docker)
+      # install on WSL2, and update-detector-companion since it's
+      # host-native and never containerized at all (it needs real root to
+      # run apt-get). Go cross-compiles trivially without QEMU -- no
+      # --platform needed, GOARCH alone controls the output binary's
+      # architecture.
       #
       # Deliberately not `docker run -v "$PWD":/src` -- this runner's job
       # container talks to the *host's* Docker daemon (docker.sock mounted
@@ -87,7 +90,7 @@ jobs:
       # same path on the host, so the mount silently ends up empty
       # ("go.mod not found"). `docker cp` goes over the Docker API instead
       # of a bind mount, so it's unaffected by that path mismatch.
-      - name: Build companion binaries
+      - name: Build native binaries
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
@@ -96,7 +99,10 @@ jobs:
             cid=$(docker create \
               -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH="$arch" \
               golang:1.22-alpine \
-              sh -c "mkdir -p /out && cd /src && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-detector-companion ./cmd/update-detector-companion")
+              sh -c "mkdir -p /out && cd /src \
+                && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-detector ./cmd/update-detector \
+                && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-aggregator ./cmd/update-aggregator \
+                && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-detector-companion ./cmd/update-detector-companion")
             # A single whole-directory copy, not one docker cp per
             # subpath -- docker cp only auto-creates missing destination
             # directories for a directory-to-nonexistent-dest copy, not for
@@ -105,6 +111,8 @@ jobs:
             # "Could not find the file /src in container").
             docker cp . "$cid:/src"
             docker start -a "$cid"
+            docker cp "$cid:/out/update-detector" "dist/update-detector-linux-$arch"
+            docker cp "$cid:/out/update-aggregator" "dist/update-aggregator-linux-$arch"
             docker cp "$cid:/out/update-detector-companion" "dist/update-detector-companion-linux-$arch"
             docker rm "$cid" >/dev/null
           done
@@ -114,7 +122,7 @@ jobs:
       # creating a release and uploading assets needs repository read/write
       # instead -- least-privilege, and one token's scope can't leak into
       # the other's blast radius.
-      - name: Publish companion binaries as release assets
+      - name: Publish native binaries as release assets
         env:
           FORGEJO_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
@@ -152,15 +160,17 @@ jobs:
             exit 1
           fi
 
-          for arch in amd64 arm64; do
-            file="dist/update-detector-companion-linux-$arch"
-            http_status=$(curl -sS -o /tmp/asset.json -w "%{http_code}" -X POST \
-              -H "Authorization: token $FORGEJO_TOKEN" \
-              -F "attachment=@$file" \
-              "$API/releases/$release_id/assets?name=update-detector-companion-linux-$arch")
-            if [ "$http_status" != "201" ]; then
-              echo "failed to upload asset for $arch (http $http_status):" >&2
-              cat /tmp/asset.json >&2
-              exit 1
-            fi
+          for name in update-detector update-aggregator update-detector-companion; do
+            for arch in amd64 arm64; do
+              file="dist/$name-linux-$arch"
+              http_status=$(curl -sS -o /tmp/asset.json -w "%{http_code}" -X POST \
+                -H "Authorization: token $FORGEJO_TOKEN" \
+                -F "attachment=@$file" \
+                "$API/releases/$release_id/assets?name=$name-linux-$arch")
+              if [ "$http_status" != "201" ]; then
+                echo "failed to upload asset for $name/$arch (http $http_status):" >&2
+                cat /tmp/asset.json >&2
+                exit 1
+              fi
+            done
           done

@@ -13,7 +13,7 @@ changes. Ships as a single Docker image, one container per host.
 | Ubuntu (bare metal or VM) | ✅ supported now |
 | Plain Debian / Raspberry Pi OS (bare metal or VM) | ✅ supported now — see [OS flavors](#os-flavors) |
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](#releases) |
-| WSL2 Ubuntu/Debian distro on Windows | ✅ supported now, for the WSL2 environment itself |
+| WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
 | Actual Windows OS (Windows Update, winget) | 🚧 planned — needs a native (non-container) agent, see [Limitations](#platform-limitations) |
 | Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
 
@@ -28,6 +28,13 @@ section first.
 plugin installed (`docker compose version` should print something, not
 "command not found"). That's the only thing you need — no Go toolchain, no
 cloning this repo.
+
+> **On WSL2:** skip straight to `install.sh` in
+> [Triggering updates](#triggering-updates-companion) instead of Step 1
+> below — it detects WSL2 automatically and offers an interactive,
+> native (no Docker) install of the agent, the aggregator, the companion,
+> or all three, in one run. See [WSL2](docs/wsl2.md) for why WSL2 gets
+> different treatment here.
 
 ### Step 1 — Deploy the agent (required, do this on every host you want detection on)
 
@@ -258,6 +265,11 @@ Monitoring the actual Windows or macOS OS needs a native, non-container
 agent (planned) — the checker is designed as an interface so that's a new
 implementation, not a rewrite.
 
+On WSL2 specifically, `docker` being on `PATH` doesn't necessarily mean
+there's a real engine running inside the distro at all — see
+[WSL2](docs/wsl2.md) for why, and for `install.sh`'s native (no-Docker)
+install path that avoids the problem entirely.
+
 ## Triggering updates (companion)
 
 By design, the agent itself only ever detects updates — it never writes to
@@ -284,6 +296,9 @@ host already considers legitimate, never arbitrary command execution.
 ```sh
 curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
 ```
+
+(On WSL2, this same script detects that and offers a different, native
+install instead — see [WSL2](docs/wsl2.md).)
 
 This auto-discovers everything it needs from the running container: its
 bind-mounted state dir (for a one-time, in-memory-only token handoff over a
@@ -489,11 +504,13 @@ forgejo.winar.to/winarto/update-detector:<tag>    and  :latest
 forgejo.winar.to/winarto/update-aggregator:<tag>  and  :latest
 ```
 
-The same tag also cross-compiles `update-detector-companion` for
-`linux/amd64` and `linux/arm64` (no QEMU needed — Go cross-compiles
-natively) and attaches both as plain binary assets on that tag's Forgejo
-release, for `install.sh` to fetch (see
-[Triggering updates](#triggering-updates-companion)).
+The same tag also cross-compiles all three binaries — `update-detector`,
+`update-aggregator`, and `update-detector-companion` — for `linux/amd64`
+and `linux/arm64` (no QEMU needed — Go cross-compiles natively) and
+attaches all six as plain binary assets on that tag's Forgejo release.
+`install.sh` fetches whichever it needs: just the companion on a
+Docker-based host (see [Triggering updates](#triggering-updates-companion)),
+or any/all three for a native WSL2 install (see [WSL2](docs/wsl2.md)).
 
 Requires two repo secrets, scoped separately on purpose (least-privilege —
 a leaked/misused token from one step can't touch what the other covers):
@@ -501,8 +518,7 @@ a leaked/misused token from one step can't touch what the other covers):
 - `REGISTRY_TOKEN` — a Forgejo access token with `write:package`/`read:package`
   scope, used for the image pushes.
 - `RELEASE_TOKEN` — a Forgejo access token with read/write repository scope,
-  used only for creating the release and uploading the companion binaries
-  as assets.
+  used only for creating the release and uploading the binary assets.
 
 Deploying a release is then just `docker compose pull && docker compose up
 -d` on each host — no `--build` needed, since `docker-compose.yml` /
