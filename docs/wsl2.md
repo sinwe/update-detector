@@ -79,17 +79,47 @@ systemctl status update-detector
 journalctl -u update-detector -f
 ```
 
-Configuration is the same env vars documented in the main
-[Configuration](../README.md#configuration) table, set via
-`/etc/default/update-detector` / `/etc/default/update-aggregator` (edit
-directly, then `systemctl restart <service>` to apply — same idempotent
-`restart`, not `enable --now`, that install.sh itself uses, so a config
-edit always actually takes effect). Common ones to set before installing,
-via env vars in your shell: `AGGREGATOR_URL`, `TELEGRAM_BOT_TOKEN`/`_CHAT_ID`
-(agent), `AGGREGATOR_TELEGRAM_BOT_TOKEN`/`_CHAT_ID` and
-`ADMIN_APPLY_SHARED_SECRET` (aggregator — deliberately separate names from
-the agent's own Telegram vars, so installing both in one run can't
-accidentally share one secret meant for only one of them).
+## Configuration — there's no `.env` here
+
+The `.env` file the main [Configuration](../README.md#configuration)
+instructions mention is a **`docker compose`-specific mechanism** — it
+doesn't exist for the native install at all. Don't create one next to
+`install.sh` expecting it to be picked up; it won't be. Native config
+works two ways instead, both using the same variable names as the
+Configuration table:
+
+**Set before installing** — export in the shell that runs `install.sh`
+itself, so its own values get baked into the systemd env file below.
+Note the `sudo -E`, not plain `sudo` — without `-E`, `sudo` resets the
+environment and your exported vars never reach the script at all,
+silently falling back to defaults:
+
+```sh
+export AGGREGATOR_URL=http://localhost:9090
+export TELEGRAM_BOT_TOKEN=your-bot-token-from-BotFather
+export TELEGRAM_CHAT_ID=your-chat-id
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo -E sh
+```
+
+**Change config after installing (or at any time)** — edit the systemd
+`EnvironmentFile` directly, then restart the unit to apply it:
+
+```sh
+$EDITOR /etc/default/update-detector      # or /etc/default/update-aggregator
+systemctl restart update-detector          # match the unit to the file you edited
+```
+
+This is the native equivalent of editing `.env` and re-running
+`docker compose up -d` — a plain `systemctl restart` always re-reads the
+file (unlike `enable --now`, whose implicit `start` is a no-op if the
+service is already running, silently keeping the old values). Aggregator
+vars use a separate `AGGREGATOR_`-prefixed set of names at install time
+(`AGGREGATOR_TELEGRAM_BOT_TOKEN`/`_CHAT_ID`, `ADMIN_APPLY_SHARED_SECRET`)
+specifically so installing both the agent and the aggregator in one run
+can't accidentally point one component's secret at the other's file —
+but `/etc/default/update-aggregator` itself gets the real, unprefixed
+name (`TELEGRAM_BOT_TOKEN`, etc.), matching what `update-aggregator`'s own
+code actually reads.
 
 ## Companion discovery, either way
 
