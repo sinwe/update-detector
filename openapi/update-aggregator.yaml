@@ -102,6 +102,12 @@ paths:
           required: true
           schema:
             type: string
+        - name: X-Companion-Version
+          in: header
+          required: false
+          description: The companion's own build version, shown on the admin page. Older companions that predate this simply omit it.
+          schema:
+            type: string
       responses:
         "200":
           description: text/event-stream of Action payloads

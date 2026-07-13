@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/version"
 	"update-detector/openapi"
 )
 
@@ -75,7 +76,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 // shouldn't confuse "container is up" with "host is fully patched".
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.Version})
 }
 
 // handleRecheck queues an out-of-band detection cycle and returns

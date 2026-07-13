@@ -15,6 +15,7 @@ import (
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorconfig"
 	"update-detector/internal/notifier"
+	"update-detector/internal/version"
 )
 
 func main() {
@@ -24,6 +25,8 @@ func main() {
 }
 
 func run() error {
+	log.Printf("update-aggregator %s", version.Version)
+
 	cfg, err := aggregatorconfig.Load()
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorclient"
+	"update-detector/internal/version"
 )
 
 const maxStreamBackoff = 60 * time.Second
@@ -54,6 +55,7 @@ func streamOnce(ctx context.Context, aggregatorURL string, identity aggregatorcl
 	}
 	req.Header.Set("X-Agent-ID", identity.AgentID)
 	req.Header.Set("Authorization", "Bearer "+identity.Token)
+	req.Header.Set("X-Companion-Version", version.Version)
 
 	// Deliberately no client Timeout: this response is a long-lived SSE
 	// stream by design. ctx governs cancellation instead.

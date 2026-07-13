@@ -384,6 +384,13 @@ it report sooner), so use it any time the numbers look stale and you
 don't want to wait for the next `CHECK_INTERVAL`, without needing to
 apply a package first just to trigger a refresh.
 
+**Every version is visible on the admin page** — the aggregator's own
+build version is in the page header; each approved host shows its
+agent's version under "Last report" and its companion's version next to
+"connected," so a fleet with mismatched versions (e.g. some hosts not yet
+redeployed after a release) is obvious at a glance rather than needing to
+SSH into each host to check.
+
 ### Setting up the companion (new installs and upgrades)
 
 Same steps whether this is a brand-new install or an existing deployment

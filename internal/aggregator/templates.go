@@ -27,11 +27,13 @@ type agentView struct {
 	Upgrades           []checker.PackageUpgrade
 	RebootRequired     bool
 	OSUpdateAvailable  bool
+	AgentVersion       string
 
-	// CompanionConnected and RecentResults are only meaningful once
-	// Approved -- a companion has nothing to connect to, or report on,
-	// before that.
+	// CompanionConnected, CompanionVersion, and RecentResults are only
+	// meaningful once Approved -- a companion has nothing to connect to,
+	// or report on, before that.
 	CompanionConnected bool
+	CompanionVersion   string
 	RecentResults      []resultView
 }
 
@@ -42,9 +44,10 @@ type resultView struct {
 }
 
 type adminPageData struct {
-	Pending  []agentView
-	Approved []agentView
-	Rejected []agentView
+	AggregatorVersion string
+	Pending           []agentView
+	Approved          []agentView
+	Rejected          []agentView
 }
 
 func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
@@ -53,6 +56,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
 		ShortID:            shortID(rec.ID),
 		Hostname:           rec.Hostname,
 		CompanionConnected: hub.Connected(rec.ID),
+		CompanionVersion:   hub.CompanionVersion(rec.ID),
 	}
 	if !rec.FirstSeen.IsZero() {
 		v.FirstSeen = rec.FirstSeen.Format(time.RFC3339)
@@ -69,6 +73,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
 		v.Upgrades = rec.LastReport.Packages.Upgrades
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
+		v.AgentVersion = rec.LastReport.AgentVersion
 	}
 	// Results() is oldest-first; show most recent first.
 	results := hub.Results(rec.ID)
@@ -113,7 +118,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <h1>update-detector aggregator</h1>
+  <h1>update-detector aggregator <small class="muted">{{.AggregatorVersion}}</small></h1>
   <p><a href="/widgets/packages">all pending packages (fleet-wide)</a> &middot; <a href="/widgets/packages?security=true">security only</a> &middot; <a href="/widgets/summary">summary</a></p>
 
   <h2>Pending ({{len .Pending}})</h2>
@@ -146,6 +151,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{if .HasReport}}
           {{if .OK}}<span class="ok">OK</span>{{else}}<span class="bad">needs attention</span>{{end}}
           &mdash; {{.UpgradableTotal}} upgradable ({{.UpgradableSecurity}} security){{if .RebootRequired}}, reboot required{{end}}{{if .OSUpdateAvailable}}, OS upgrade available{{end}}
+          {{if .AgentVersion}}<br><span class="muted">agent {{.AgentVersion}}</span>{{end}}
           {{if .Upgrades}}
           <details>
             <summary>show packages</summary>
@@ -164,7 +170,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </td>
       <td class="apply-section">
         {{if .CompanionConnected}}
-          <span class="ok">connected</span><br>
+          <span class="ok">connected</span>{{if .CompanionVersion}} <span class="muted">{{.CompanionVersion}}</span>{{end}}<br>
           {{if .Upgrades}}
           <details>
             <summary>apply packages</summary>

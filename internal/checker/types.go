@@ -12,6 +12,12 @@ type Status struct {
 	Platform  string    `json:"platform"`
 	CheckedAt time.Time `json:"checked_at"`
 
+	// AgentVersion is this agent binary's own build version (see
+	// internal/version) -- not to be confused with OSInfo, which is about
+	// the host's OS release. Set by cmd/update-detector, not by any
+	// checker implementation.
+	AgentVersion string `json:"agent_version,omitempty"`
+
 	RebootRequired         bool     `json:"reboot_required"`
 	RebootRequiredPackages []string `json:"reboot_required_packages,omitempty"`
 

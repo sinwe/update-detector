@@ -63,6 +63,9 @@ paths:
                   status:
                     type: string
                     example: ok
+                  version:
+                    type: string
+                    example: v0.7.0
 
   /recheck:
     post:
@@ -112,6 +115,10 @@ components:
         checked_at:
           type: string
           format: date-time
+        agent_version:
+          type: string
+          example: v0.7.0
+          description: This agent binary's own build version (internal/version), not the host's OS version.
         reboot_required:
           type: boolean
         reboot_required_packages:

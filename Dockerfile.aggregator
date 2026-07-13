@@ -6,7 +6,8 @@ COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY openapi ./openapi
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/update-aggregator ./cmd/update-aggregator
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X update-detector/internal/version.Version=${VERSION}" -o /out/update-aggregator ./cmd/update-aggregator
 
 # update-aggregator is a pure Go HTTP service with no OS-specific tooling
 # dependencies, so unlike the agent image it doesn't need an Ubuntu base.

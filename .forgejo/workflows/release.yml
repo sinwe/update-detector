@@ -59,6 +59,7 @@ jobs:
               docker buildx build \
                 --platform "linux/$arch" \
                 --file "$dockerfile" \
+                --build-arg "VERSION=$TAG" \
                 --tag "forgejo.winar.to/winarto/$image:$TAG-$arch" \
                 --push .
             done
@@ -89,12 +90,13 @@ jobs:
       - name: Build companion binaries
         run: |
           set -eu
+          TAG="${{ github.ref_name }}"
           mkdir -p dist
           for arch in amd64 arm64; do
             cid=$(docker create \
               -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH="$arch" \
               golang:1.22-alpine \
-              sh -c "mkdir -p /out && cd /src && go build -o /out/update-detector-companion ./cmd/update-detector-companion")
+              sh -c "mkdir -p /out && cd /src && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-detector-companion ./cmd/update-detector-companion")
             # A single whole-directory copy, not one docker cp per
             # subpath -- docker cp only auto-creates missing destination
             # directories for a directory-to-nonexistent-dest copy, not for

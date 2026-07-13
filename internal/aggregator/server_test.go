@@ -375,7 +375,7 @@ func TestHandleAdminPageShowsCompanionStatus(t *testing.T) {
 		t.Fatalf("expected no apply UI before a companion connects, got: %s", body)
 	}
 
-	ch := s.hub.Connect("a1")
+	ch := s.hub.Connect("a1", "v0.0.0-test")
 	defer s.hub.Disconnect("a1", ch)
 
 	body = adminBody()
@@ -462,7 +462,7 @@ func TestHandleAdminApplyPushesToConnectedCompanion(t *testing.T) {
 	s, reg := newTestServerWithSecret(t, "s3cret")
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
-	ch := s.hub.Connect("a1")
+	ch := s.hub.Connect("a1", "v0.0.0-test")
 	defer s.hub.Disconnect("a1", ch)
 
 	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{
@@ -487,7 +487,7 @@ func TestHandleAdminRecheckNeedsNoSecret(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
-	ch := s.hub.Connect("a1")
+	ch := s.hub.Connect("a1", "v0.0.0-test")
 	defer s.hub.Disconnect("a1", ch)
 
 	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/recheck", nil, nil)
@@ -527,7 +527,7 @@ func TestHandleAdminApplyRejectsWhenActionInFlight(t *testing.T) {
 	s, reg := newTestServerWithSecret(t, "s3cret")
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
-	ch := s.hub.Connect("a1")
+	ch := s.hub.Connect("a1", "v0.0.0-test")
 	defer s.hub.Disconnect("a1", ch)
 	headers := map[string]string{"X-Admin-Apply-Secret": "s3cret"}
 

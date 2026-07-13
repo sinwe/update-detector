@@ -23,6 +23,7 @@ import (
 	"update-detector/internal/httpserver"
 	"update-detector/internal/notifier"
 	"update-detector/internal/state"
+	"update-detector/internal/version"
 )
 
 func main() {
@@ -32,6 +33,8 @@ func main() {
 }
 
 func run() error {
+	log.Printf("update-detector %s", version.Version)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -157,6 +160,7 @@ func run() error {
 		if len(status.Errors) > 0 {
 			log.Printf("check completed with errors: %v", status.Errors)
 		}
+		status.AgentVersion = version.Version
 
 		changes := state.Diff(previous, status)
 		if len(changes) > 0 || (first && cfg.NotifyOnStartup) {

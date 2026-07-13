@@ -12,7 +12,7 @@ func TestCompanionHubConnectAndPush(t *testing.T) {
 		t.Fatal("expected a1 not connected before Connect")
 	}
 
-	ch := h.Connect("a1")
+	ch := h.Connect("a1", "")
 	if !h.Connected("a1") {
 		t.Fatal("expected a1 connected after Connect")
 	}
@@ -42,8 +42,8 @@ func TestCompanionHubPushWithoutConnection(t *testing.T) {
 func TestCompanionHubDisconnectGuardsAgainstStaleChannel(t *testing.T) {
 	h := NewCompanionHub()
 
-	first := h.Connect("a1")
-	second := h.Connect("a1") // simulates a reconnect superseding the first
+	first := h.Connect("a1", "")
+	second := h.Connect("a1", "") // simulates a reconnect superseding the first
 
 	// A stale Disconnect for the superseded first channel must not tear
 	// down the second, current one.
@@ -60,7 +60,7 @@ func TestCompanionHubDisconnectGuardsAgainstStaleChannel(t *testing.T) {
 
 func TestCompanionHubPushRejectsWhenActionInFlight(t *testing.T) {
 	h := NewCompanionHub()
-	h.Connect("a1")
+	h.Connect("a1", "")
 
 	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
 		t.Fatalf("first push failed: %v", err)
@@ -74,7 +74,7 @@ func TestCompanionHubPushRejectsWhenActionInFlight(t *testing.T) {
 
 func TestCompanionHubRecordResultClearsInFlight(t *testing.T) {
 	h := NewCompanionHub()
-	h.Connect("a1")
+	h.Connect("a1", "")
 
 	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
 		t.Fatalf("push failed: %v", err)
@@ -88,7 +88,7 @@ func TestCompanionHubRecordResultClearsInFlight(t *testing.T) {
 
 func TestCompanionHubDisconnectClearsInFlight(t *testing.T) {
 	h := NewCompanionHub()
-	ch := h.Connect("a1")
+	ch := h.Connect("a1", "")
 
 	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
 		t.Fatalf("push failed: %v", err)
@@ -97,9 +97,29 @@ func TestCompanionHubDisconnectClearsInFlight(t *testing.T) {
 
 	// Reconnecting and pushing again must not be blocked by an action that
 	// will now never resolve, since its companion disconnected.
-	h.Connect("a1")
+	h.Connect("a1", "")
 	if err := h.Push("a1", Action{ID: "act2", Type: ActionUpgrade}); err != nil {
 		t.Fatalf("expected push to succeed after reconnect, got: %v", err)
+	}
+}
+
+func TestCompanionHubTracksCompanionVersion(t *testing.T) {
+	h := NewCompanionHub()
+
+	if got := h.CompanionVersion("a1"); got != "" {
+		t.Fatalf("got version %q before any connection, want empty", got)
+	}
+
+	ch := h.Connect("a1", "v0.7.0")
+	if got := h.CompanionVersion("a1"); got != "v0.7.0" {
+		t.Fatalf("got version %q, want v0.7.0", got)
+	}
+
+	// Kept even after Disconnect, so the admin page can still show
+	// "last seen running vX.Y.Z".
+	h.Disconnect("a1", ch)
+	if got := h.CompanionVersion("a1"); got != "v0.7.0" {
+		t.Fatalf("got version %q after disconnect, want it retained as v0.7.0", got)
 	}
 }
 

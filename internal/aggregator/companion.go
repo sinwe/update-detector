@@ -64,30 +64,44 @@ var (
 // its "connected" state rebuilds itself, and losing the result log across
 // a restart is an acceptable trade-off for not needing a database.
 type CompanionHub struct {
-	mu      sync.Mutex
-	streams map[string]chan Action
-	pending map[string]string // agentID -> in-flight action ID
-	results map[string][]ActionResult
+	mu       sync.Mutex
+	streams  map[string]chan Action
+	versions map[string]string // agentID -> last-reported companion version
+	pending  map[string]string // agentID -> in-flight action ID
+	results  map[string][]ActionResult
 }
 
 func NewCompanionHub() *CompanionHub {
 	return &CompanionHub{
-		streams: map[string]chan Action{},
-		pending: map[string]string{},
-		results: map[string][]ActionResult{},
+		streams:  map[string]chan Action{},
+		versions: map[string]string{},
+		pending:  map[string]string{},
+		results:  map[string][]ActionResult{},
 	}
 }
 
 // Connect registers agentID as having a live companion stream, replacing
 // any previous one for the same agent (a reconnect supersedes its
-// predecessor). Callers must call Disconnect with the returned channel when
-// the stream ends.
-func (h *CompanionHub) Connect(agentID string) chan Action {
+// predecessor). companionVersion is whatever the companion sent (may be
+// empty for an older companion that predates version reporting) and is
+// kept even after Disconnect, so the admin page can still show "last seen
+// running vX.Y.Z" -- callers must call Disconnect with the returned
+// channel when the stream ends.
+func (h *CompanionHub) Connect(agentID, companionVersion string) chan Action {
 	ch := make(chan Action, 4)
 	h.mu.Lock()
 	h.streams[agentID] = ch
+	h.versions[agentID] = companionVersion
 	h.mu.Unlock()
 	return ch
+}
+
+// CompanionVersion returns the last-reported companion version for
+// agentID, or "" if none has ever connected.
+func (h *CompanionHub) CompanionVersion(agentID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.versions[agentID]
 }
 
 // Disconnect removes agentID's stream, but only if ch is still the current

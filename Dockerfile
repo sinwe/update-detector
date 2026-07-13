@@ -6,7 +6,8 @@ COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY openapi ./openapi
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/update-detector ./cmd/update-detector
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X update-detector/internal/version.Version=${VERSION}" -o /out/update-detector ./cmd/update-detector
 
 # Ubuntu (not distroless/alpine) on purpose: we need apt, dpkg, and Ubuntu's
 # own update-notifier tooling (apt-check) to detect updates faithfully.

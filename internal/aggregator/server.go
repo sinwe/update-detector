@@ -11,6 +11,7 @@ import (
 
 	"update-detector/internal/checker"
 	"update-detector/internal/notifier"
+	"update-detector/internal/version"
 	"update-detector/openapi"
 )
 
@@ -176,7 +177,7 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch := s.hub.Connect(rec.ID)
+	ch := s.hub.Connect(rec.ID, r.Header.Get("X-Companion-Version"))
 	defer s.hub.Disconnect(rec.ID, ch)
 
 	heartbeat := time.NewTicker(30 * time.Second)
@@ -268,7 +269,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	data := adminPageData{}
+	data := adminPageData{AggregatorVersion: version.Version}
 	for _, rec := range s.registry.List() {
 		v := toAgentView(rec, s.hub)
 		switch rec.Status {

@@ -21,6 +21,7 @@ import (
 	"update-detector/internal/aggregator"
 	"update-detector/internal/companion"
 	"update-detector/internal/companionconfig"
+	"update-detector/internal/version"
 )
 
 func main() {
@@ -30,6 +31,8 @@ func main() {
 }
 
 func run() error {
+	log.Printf("update-detector-companion %s", version.Version)
+
 	cfg := companionconfig.Load()
 	if cfg.AggregatorURL == "" {
 		return fmt.Errorf("AGGREGATOR_URL is required")
