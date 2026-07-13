@@ -84,6 +84,36 @@ if [ -z "$agg_url" ]; then
   exit 1
 fi
 
+# AGGREGATOR_URL is only guaranteed correct from *inside* the agent
+# container's own Docker network -- e.g. http://update-aggregator:8080,
+# a Compose service name + the aggregator's internal port, valid when both
+# services share a network. The companion runs natively on the bare host,
+# with no access to that network namespace or Docker's internal DNS, so
+# that address needs translating to something reachable from here. If the
+# hostname matches a container actually running on this host (by Compose
+# service name), rewrite it to that container's host-published port
+# instead; otherwise leave it alone -- it's presumably already a real,
+# externally-reachable address for a genuinely separate aggregator host.
+agg_hostport=${agg_url#*://}
+agg_hostport=${agg_hostport%%/*}
+agg_host=${agg_hostport%%:*}
+agg_port=${agg_hostport#*:}
+agg_container_id=$(docker ps --filter "label=com.docker.compose.service=$agg_host" --format '{{.ID}}' | head -1)
+if [ -n "$agg_container_id" ]; then
+  agg_host_port=$(docker inspect --format \
+    "{{with index .NetworkSettings.Ports \"$agg_port/tcp\"}}{{(index . 0).HostPort}}{{end}}" \
+    "$agg_container_id" 2>/dev/null || true)
+  if [ -n "$agg_host_port" ]; then
+    echo "install.sh: $agg_host is a local container published at localhost:$agg_host_port -- using that instead of the Docker-internal address"
+    agg_url="http://localhost:$agg_host_port"
+  else
+    # No published-port mapping found -- likely --network host, where the
+    # container's own port already *is* the host's port, unchanged.
+    echo "install.sh: $agg_host is a local container with no published-port mapping (likely --network host) -- using localhost:$agg_port"
+    agg_url="http://localhost:$agg_port"
+  fi
+fi
+
 # Empty for --network host containers (no published-port mapping to read),
 # which is exactly when localhost:8080 is already correct anyway.
 host_port=$(docker inspect --format \
@@ -92,6 +122,14 @@ host_port=$(docker inspect --format \
 agent_status_url="http://localhost:${host_port:-8080}/status"
 
 echo "install.sh: socket=$socket_path aggregator=$agg_url agent_status=$agent_status_url"
+
+# Best-effort only -- doesn't block install, since the aggregator being
+# briefly unreachable right now isn't fatal (the companion reconnects with
+# backoff on its own). Just a heads-up if something's still off despite
+# the rewrite above.
+if ! curl -fsS -o /dev/null --max-time 5 "$agg_url/openapi.yaml"; then
+  echo "install.sh: warning: $agg_url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $UNIT_PATH if the companion never connects" >&2
+fi
 
 cat > "$UNIT_PATH" <<EOF
 [Unit]
