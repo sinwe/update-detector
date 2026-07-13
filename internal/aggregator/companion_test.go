@@ -58,6 +58,51 @@ func TestCompanionHubDisconnectGuardsAgainstStaleChannel(t *testing.T) {
 	}
 }
 
+func TestCompanionHubPushRejectsWhenActionInFlight(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1")
+
+	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("first push failed: %v", err)
+	}
+
+	err := h.Push("a1", Action{ID: "act2", Type: ActionUpgrade})
+	if err != ErrActionInFlight {
+		t.Fatalf("got err %v, want ErrActionInFlight for a second push before the first resolves", err)
+	}
+}
+
+func TestCompanionHubRecordResultClearsInFlight(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1")
+
+	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	h.RecordResult("a1", ActionResult{ActionID: "act1", Success: true, CompletedAt: time.Now()})
+
+	if err := h.Push("a1", Action{ID: "act2", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("expected push to succeed once the in-flight action resolved, got: %v", err)
+	}
+}
+
+func TestCompanionHubDisconnectClearsInFlight(t *testing.T) {
+	h := NewCompanionHub()
+	ch := h.Connect("a1")
+
+	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	h.Disconnect("a1", ch)
+
+	// Reconnecting and pushing again must not be blocked by an action that
+	// will now never resolve, since its companion disconnected.
+	h.Connect("a1")
+	if err := h.Push("a1", Action{ID: "act2", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("expected push to succeed after reconnect, got: %v", err)
+	}
+}
+
 func TestCompanionHubResultsCapped(t *testing.T) {
 	h := NewCompanionHub()
 	for i := 0; i < actionLogLimit+5; i++ {

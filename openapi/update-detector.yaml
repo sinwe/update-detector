@@ -64,6 +64,27 @@ paths:
                     type: string
                     example: ok
 
+  /recheck:
+    post:
+      summary: Queue an out-of-band detection cycle
+      description: >
+        Returns immediately; the actual check (up to 5 minutes, per its own
+        internal timeout) runs asynchronously on the main loop, not on this
+        request. A request arriving while one's already queued coalesces
+        with it rather than blocking or being dropped. Used by the
+        host-native companion (see internal/companion) right after
+        successfully applying an update, so /status and the next report to
+        the aggregator reflect it immediately instead of showing an
+        already-applied package as still pending for up to a full
+        CHECK_INTERVAL. No authentication of its own -- same trust model as
+        the rest of this agent.
+      operationId: postRecheck
+      responses:
+        "202":
+          description: Recheck queued
+        "405":
+          description: Method not allowed (only POST)
+
   /openapi.yaml:
     get:
       summary: This OpenAPI spec

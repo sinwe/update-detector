@@ -47,6 +47,55 @@ func TestHandleHealthz(t *testing.T) {
 	}
 }
 
+func TestHandleRecheck(t *testing.T) {
+	s := New()
+	req := httptest.NewRequest(http.MethodPost, "/recheck", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, want %d", rec.Code, http.StatusAccepted)
+	}
+
+	select {
+	case <-s.Recheck():
+	default:
+		t.Fatal("expected a value on Recheck() after POST /recheck")
+	}
+}
+
+func TestHandleRecheckRejectsNonPost(t *testing.T) {
+	s := New()
+	req := httptest.NewRequest(http.MethodGet, "/recheck", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("got status %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandleRecheckCoalesces(t *testing.T) {
+	s := New()
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/recheck", nil)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d: got status %d, want %d", i, rec.Code, http.StatusAccepted)
+		}
+	}
+
+	// Three requests before anyone reads the channel coalesce into the one
+	// buffered slot, not three queued values.
+	<-s.Recheck()
+	select {
+	case <-s.Recheck():
+		t.Fatal("expected only one coalesced value on Recheck(), got a second")
+	default:
+	}
+}
+
 func TestHandleOpenAPISpec(t *testing.T) {
 	s := New()
 	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)

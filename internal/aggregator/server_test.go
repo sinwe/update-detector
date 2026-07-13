@@ -473,3 +473,32 @@ func TestHandleAdminApplyPushesToConnectedCompanion(t *testing.T) {
 		t.Fatal("expected an action to be pushed to the connected channel")
 	}
 }
+
+func TestHandleAdminApplyRejectsWhenActionInFlight(t *testing.T) {
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	ch := s.hub.Connect("a1")
+	defer s.hub.Disconnect("a1", ch)
+	headers := map[string]string{"X-Admin-Apply-Secret": "s3cret"}
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionUpgrade}, headers)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, body %s for the first apply", rec.Code, rec.Body.String())
+	}
+
+	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionUpgrade}, headers)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want 409 for a second apply before the first resolves", rec.Code)
+	}
+
+	// Draining the first action and reporting its result should unblock
+	// a subsequent apply.
+	action := <-ch
+	s.hub.RecordResult("a1", ActionResult{ActionID: action.ID, Success: true})
+
+	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionUpgrade}, headers)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, body %s for the third apply after the first resolved", rec.Code, rec.Body.String())
+	}
+}

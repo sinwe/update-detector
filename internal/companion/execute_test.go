@@ -10,11 +10,35 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"update-detector/internal/aggregator"
 	"update-detector/internal/checker"
 )
+
+// recheckTrackingServer serves the given status at any path except
+// /recheck, which it records having been hit and responds 202 to --
+// mirrors how the real agent's /status and /recheck are two routes on the
+// same server.
+func recheckTrackingServer(t *testing.T, status checker.Status) (srv *httptest.Server, recheckCalled *atomic.Bool) {
+	t.Helper()
+	recheckCalled = &atomic.Bool{}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/recheck" {
+			if r.Method != http.MethodPost {
+				t.Errorf("expected POST /recheck, got %s", r.Method)
+			}
+			recheckCalled.Store(true)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, recheckCalled
+}
 
 // writeFakeAptGet puts a fake "apt-get" script at the front of PATH for the
 // duration of the test, so Apply's exec.Command calls hit it instead of a
@@ -108,6 +132,48 @@ func TestApplyReportsAptGetFailure(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "boom") {
 		t.Fatalf("expected apt-get stderr in message, got: %s", result.Message)
+	}
+}
+
+func TestApplySuccessTriggersRecheck(t *testing.T) {
+	writeFakeAptGet(t, `exit 0`)
+	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
+
+	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if !recheckCalled.Load() {
+		t.Fatal("expected POST /recheck to have been called after a successful apply")
+	}
+}
+
+func TestApplyFailureStillTriggersRecheck(t *testing.T) {
+	writeFakeAptGet(t, `echo boom >&2; exit 1`)
+	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
+
+	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
+	if result.Success {
+		t.Fatal("expected failure")
+	}
+	if !recheckCalled.Load() {
+		t.Fatal("expected POST /recheck to have been called even after a failed apt-get -- it can partially apply before erroring")
+	}
+}
+
+func TestApplyRejectionDoesNotTriggerRecheck(t *testing.T) {
+	srv, recheckCalled := recheckTrackingServer(t, checker.Status{
+		Packages: checker.PackageInfo{Upgrades: []checker.PackageUpgrade{{Name: "vim"}}},
+	})
+
+	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{
+		ID: "act1", Type: aggregator.ActionPackages, Packages: []string{"curl"},
+	})
+	if result.Success {
+		t.Fatal("expected rejection")
+	}
+	if recheckCalled.Load() {
+		t.Fatal("expected no recheck for a rejected action -- nothing on the host changed")
 	}
 }
 

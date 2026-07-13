@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"update-detector/internal/aggregator"
@@ -62,6 +63,9 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 
 	output, err := runCapped(cmd)
 	if err != nil {
+		// Still worth rechecking even on failure -- apt-get can partially
+		// apply changes before hitting an error on a later package.
+		triggerRecheck(ctx, agentStatusURL)
 		return aggregator.ActionResult{
 			ActionID:    action.ID,
 			Message:     fmt.Sprintf("%s failed: %v\n%s", action.Type, err, output),
@@ -76,12 +80,36 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		msg += fmt.Sprintf("\napt-get autoremove failed: %v\n%s", autoErr, autoOut)
 	}
 
+	// Best-effort, non-fatal: makes the agent's own /status (and its next
+	// report to the aggregator) reflect this apply immediately, instead of
+	// showing the just-applied package as still pending for up to a full
+	// CHECK_INTERVAL.
+	triggerRecheck(ctx, agentStatusURL)
+
 	return aggregator.ActionResult{
 		ActionID:    action.ID,
 		Success:     true,
 		Message:     msg,
 		CompletedAt: time.Now(),
 	}
+}
+
+// triggerRecheck asks the local agent to run an out-of-band detection
+// cycle via POST .../recheck (derived from agentStatusURL, which points at
+// .../status). Best-effort -- errors are deliberately ignored, since the
+// agent will still re-check on its own regular schedule regardless.
+func triggerRecheck(ctx context.Context, agentStatusURL string) {
+	url := strings.TrimSuffix(agentStatusURL, "/status") + "/recheck"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 func aptCommand(ctx context.Context, args ...string) *exec.Cmd {

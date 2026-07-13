@@ -205,6 +205,10 @@ func run() error {
 			return httpSrv.Shutdown(shutdownCtx)
 		case <-ticker.C:
 			runCheck(false)
+		case <-srv.Recheck():
+			log.Println("out-of-band recheck requested")
+			runCheck(false)
+			ticker.Reset(cfg.CheckInterval)
 		}
 	}
 }

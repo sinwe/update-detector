@@ -238,7 +238,7 @@ paths:
         "404":
           description: Unknown agent id, or agent not approved
         "409":
-          description: No companion currently connected for this agent
+          description: No companion currently connected for this agent, or this agent already has an unresolved action in flight
         "501":
           description: Apply is disabled (ADMIN_APPLY_SHARED_SECRET not configured)
 

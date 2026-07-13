@@ -365,6 +365,19 @@ requirement.
 **Reboots are never automatic**, even if an upgrade sets
 `reboot_required` — that stays a manual, human decision.
 
+**Only one action at a time per host** — `apply` returns `409` if that
+agent already has an unresolved action in flight, rather than queuing up
+repeat/overlapping requests. A companion that disconnects mid-action
+clears its own in-flight marker on reconnect, so a crashed or restarted
+companion never permanently blocks future applies.
+
+**The dashboard updates itself after an apply** — a successful (or even a
+failed, since `apt-get` can partially apply before erroring) apply
+triggers an out-of-band recheck on the agent (`POST /recheck`), so
+`/status`, `/admin`, and the aggregator's next report reflect the change
+right away instead of showing an already-applied package as still pending
+for up to a full `CHECK_INTERVAL`.
+
 ### Setting up the companion (new installs and upgrades)
 
 Same steps whether this is a brand-new install or an existing deployment

@@ -47,23 +47,28 @@ type ActionResult struct {
 
 const actionLogLimit = 20
 
-var ErrCompanionNotConnected = errors.New("no companion connected for this agent")
+var (
+	ErrCompanionNotConnected = errors.New("no companion connected for this agent")
+	ErrActionInFlight        = errors.New("agent already has an action in flight")
+)
 
 // CompanionHub tracks which agents currently have a companion connected via
-// SSE, and a capped in-memory log of recent action results per agent.
-// Nothing here is persisted to disk (unlike Registry) -- a companion just
-// reconnects and its "connected" state rebuilds itself, and losing the
-// result log across a restart is an acceptable trade-off for not needing a
-// database.
+// SSE, which agent (if any) has an action currently in flight, and a capped
+// in-memory log of recent action results per agent. Nothing here is
+// persisted to disk (unlike Registry) -- a companion just reconnects and
+// its "connected" state rebuilds itself, and losing the result log across
+// a restart is an acceptable trade-off for not needing a database.
 type CompanionHub struct {
 	mu      sync.Mutex
 	streams map[string]chan Action
+	pending map[string]string // agentID -> in-flight action ID
 	results map[string][]ActionResult
 }
 
 func NewCompanionHub() *CompanionHub {
 	return &CompanionHub{
 		streams: map[string]chan Action{},
+		pending: map[string]string{},
 		results: map[string][]ActionResult{},
 	}
 }
@@ -82,12 +87,17 @@ func (h *CompanionHub) Connect(agentID string) chan Action {
 
 // Disconnect removes agentID's stream, but only if ch is still the current
 // one -- guards against a stale connection's teardown clobbering a newer
-// one that already reconnected in the meantime.
+// one that already reconnected in the meantime. Also clears any in-flight
+// marker for this agent: once disconnected, that companion isn't going to
+// report a result for it either way, and permanently blocking future
+// applies because of a run that will never resolve would be worse than
+// occasionally letting a stale in-flight action get superseded.
 func (h *CompanionHub) Disconnect(agentID string, ch chan Action) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if cur, ok := h.streams[agentID]; ok && cur == ch {
 		delete(h.streams, agentID)
+		delete(h.pending, agentID)
 	}
 }
 
@@ -99,26 +109,43 @@ func (h *CompanionHub) Connected(agentID string) bool {
 }
 
 // Push sends action down agentID's stream. Returns ErrCompanionNotConnected
-// if no companion is currently connected for that agent.
+// if no companion is currently connected for that agent, or
+// ErrActionInFlight if that agent already has an unresolved action --
+// actions are processed one at a time per agent anyway, so a second apply
+// before the first resolves would just queue up redundant work (and,
+// since apt-get itself is idempotent, mostly just duplicate "update
+// applied" notifications once it finally runs).
 func (h *CompanionHub) Push(agentID string, action Action) error {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	ch, ok := h.streams[agentID]
-	h.mu.Unlock()
 	if !ok {
 		return ErrCompanionNotConnected
 	}
+	if _, inFlight := h.pending[agentID]; inFlight {
+		return ErrActionInFlight
+	}
+
 	select {
 	case ch <- action:
+		h.pending[agentID] = action.ID
 		return nil
 	default:
 		return errors.New("companion stream busy, action dropped")
 	}
 }
 
-// RecordResult appends result to agentID's capped action log.
+// RecordResult appends result to agentID's capped action log, and clears
+// the in-flight marker Push set for this action -- but only if it's still
+// the current one, so a stale/duplicate result for an already-superseded
+// action can't clobber a newer in-flight marker.
 func (h *CompanionHub) RecordResult(agentID string, result ActionResult) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.pending[agentID] == result.ActionID {
+		delete(h.pending, agentID)
+	}
 	log := append(h.results[agentID], result)
 	if len(log) > actionLogLimit {
 		log = log[len(log)-actionLogLimit:]
