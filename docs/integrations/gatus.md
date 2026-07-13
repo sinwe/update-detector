@@ -46,4 +46,4 @@ Example `/status` response:
 so it won't get confused with "the host needs patching" — use it for
 Docker's own health checking if desired.
 
-Back to [README](../README.md).
+Back to [README](../../README.md).
