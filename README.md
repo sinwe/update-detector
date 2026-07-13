@@ -122,6 +122,18 @@ docker compose pull
 docker compose up -d
 ```
 
+> **Testing both roles on one machine, in one directory?** Since both
+> compose files then share a project name (and so the same default Docker
+> network), `<aggregator-host-ip-or-name>:9090` won't work here —
+> `localhost` inside a container means that container, not the host, and
+> `9090` is the *host*-published port, not the one the aggregator
+> listens on internally. Use the aggregator's Compose *service* name and
+> its internal port instead: `AGGREGATOR_URL=http://update-aggregator:8080`.
+> Confirmed working this way; `docker run --rm --network
+> <projectname>_default alpine wget -qO- http://update-aggregator:8080/openapi.yaml`
+> is a quick way to sanity-check reachability if enrollment still doesn't
+> show up on `/admin`.
+
 If the agent was already running, `up -d` here recreates the container to
 pick up the `.env` change on its own — no `--force-recreate` needed, and
 no separate "stop it first" step. Compose detects that the resolved
