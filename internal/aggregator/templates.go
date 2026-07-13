@@ -218,20 +218,39 @@ const adminTemplateSrc = `<!DOCTYPE html>
   </table>
 
   <script>
-    // Sends X-Admin-Apply-Secret's actual value nowhere from here: this is
-    // meant to run behind a reverse-proxy (e.g. Authentik) that injects
-    // that header itself once you're authenticated at the proxy. Calling
-    // this page directly against the aggregator with nothing in front of
-    // it will 501/403, by design -- see README "Triggering updates".
+    // No reverse-proxy needed to use this: the browser asks for
+    // ADMIN_APPLY_SHARED_SECRET once, remembers it in this browser's
+    // localStorage, and sends it as X-Admin-Apply-Secret on every apply
+    // call -- the exact same header the server already checks either way.
+    // If you *do* put the aggregator behind your own auth (e.g.
+    // Authentik) and have it inject this header itself instead, that
+    // works too and this prompt just never fires (the stored value is
+    // only used as a fallback when the header isn't already present).
+    function getAdminApplySecret() {
+      let secret = localStorage.getItem('adminApplySecret');
+      if (!secret) {
+        secret = prompt('Enter the aggregator\'s ADMIN_APPLY_SHARED_SECRET (see README):');
+        if (secret) localStorage.setItem('adminApplySecret', secret);
+      }
+      return secret;
+    }
+
     async function postApply(id, body) {
+      const secret = getAdminApplySecret();
+      if (!secret) return;
       try {
         const resp = await fetch('/admin/agents/' + id + '/apply', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: {'Content-Type': 'application/json', 'X-Admin-Apply-Secret': secret},
           body: JSON.stringify(body),
         });
         if (!resp.ok) {
-          alert('apply failed (' + resp.status + '): ' + await resp.text());
+          if (resp.status === 403) {
+            localStorage.removeItem('adminApplySecret');
+            alert('apply failed (403): wrong secret -- cleared it, try again with the correct value');
+          } else {
+            alert('apply failed (' + resp.status + '): ' + await resp.text());
+          }
           return;
         }
         alert('action accepted -- reload this page in a bit to see the result');

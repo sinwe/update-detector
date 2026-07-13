@@ -337,9 +337,12 @@ type applyRequest struct {
 // handleAdminApply is the human-triggered counterpart to the companion's
 // SSE stream: it pushes an upgrade Action down to a connected companion.
 // Fails closed (501) until ADMIN_APPLY_SHARED_SECRET is configured, so this
-// higher-stakes capability is opt-in rather than on by default. The shared
-// secret is checked here independently of whatever reverse-proxy auth (e.g.
-// Authentik) fronts this endpoint in production -- a compromised proxy or
+// higher-stakes capability is opt-in rather than on by default. Works with
+// no reverse-proxy setup at all by default -- the admin page's own JS
+// prompts for this secret once and remembers it client-side, sending it
+// as this same header. If a reverse proxy (e.g. Authentik) fronts this
+// endpoint instead and injects the header itself, that works too; either
+// way the secret is checked here independently, so a compromised proxy or
 // network path alone must not be enough to trigger an apply.
 func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id string) {
 	if s.adminApplySecret == "" {

@@ -337,7 +337,15 @@ service and starts it.
 
 **Triggering an action** is `POST /admin/agents/{id}/apply` on the
 aggregator, gated by a shared secret (`ADMIN_APPLY_SHARED_SECRET` —
-disabled/`501` entirely until set):
+disabled/`501` entirely until set). **No reverse proxy needed** — the
+admin page's Apply/Upgrade-all/Full-upgrade-all buttons will `prompt()`
+you for this secret the first time you use one, remember it in that
+browser's `localStorage`, and send it as `X-Admin-Apply-Secret` on every
+apply call from then on (a wrong value gets cleared automatically so you
+can retype it). That's the whole setup: set the env var, click a button,
+paste the secret once.
+
+You can also trigger it directly, e.g. for scripting:
 
 ```sh
 curl -X POST http://aggregator-host:9090/admin/agents/<id>/apply \
@@ -347,10 +355,12 @@ curl -X POST http://aggregator-host:9090/admin/agents/<id>/apply \
 # type is one of: packages (requires "packages"), upgrade, full-upgrade
 ```
 
-Recommended: put the aggregator behind your own passkey-capable
-reverse-proxy auth (e.g. Authentik) and have it inject that header after
-successful login — the aggregator checks the header itself regardless, so a
-compromised proxy or network path alone still isn't enough on its own.
+If you *do* already run a reverse-proxy auth setup (Authentik or
+similar), you can point it at the aggregator and have it inject this same
+header itself after login instead — the aggregator checks the header
+either way, so a compromised proxy or network path alone still isn't
+enough on its own to trigger an apply. This is purely optional, not a
+requirement.
 
 **Reboots are never automatic**, even if an upgrade sets
 `reboot_required` — that stays a manual, human decision.
