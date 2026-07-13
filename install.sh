@@ -151,7 +151,12 @@ User=root
 WantedBy=multi-user.target
 EOF
 
+# Not `enable --now` -- its implicit `start` is a no-op if the service is
+# already running (e.g. re-running this script to pick up a config fix),
+# silently leaving the old process running with its stale environment.
+# `restart` unconditionally stops-then-starts regardless of current state.
 systemctl daemon-reload
-systemctl enable --now update-detector-companion
+systemctl enable update-detector-companion
+systemctl restart update-detector-companion
 
 echo "install.sh: done. Check status with: systemctl status update-detector-companion"
