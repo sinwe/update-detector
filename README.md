@@ -109,6 +109,14 @@ docker compose pull
 docker compose up -d
 ```
 
+If the agent was already running, `up -d` here recreates the container to
+pick up the `.env` change on its own — no `--force-recreate` needed, and
+no separate "stop it first" step. Compose detects that the resolved
+config changed and recreates automatically (`docker compose ps` will show
+a just-now `Created` time if you want to confirm). If you ever *don't*
+see that happen for some reason, `docker compose up -d --force-recreate`
+guarantees it.
+
 Open `http://<aggregator-host>:9090/admin` in a browser — you'll see the
 new agent listed under "Pending." Click **Approve**. It'll start reporting
 within one `CHECK_INTERVAL` (6h by default; restart the agent's container
