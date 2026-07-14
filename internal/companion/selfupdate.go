@@ -224,7 +224,7 @@ func updateDockerCompose(ctx context.Context, containerID string) error {
 	if err != nil {
 		return err
 	}
-	workingDir, err := dockerInspectLabel(ctx, containerID, "com.docker.compose.working_dir")
+	workingDir, err := dockerInspectLabel(ctx, containerID, "com.docker.compose.project.working_dir")
 	if err != nil {
 		return err
 	}

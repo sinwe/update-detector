@@ -234,6 +234,15 @@ func TestSelfUpdateAgentDockerDetected(t *testing.T) {
 	// working_dir reports, and os/exec requires that to actually exist.
 	composeDir := t.TempDir()
 	callLog := filepath.Join(t.TempDir(), "docker-calls.log")
+	// Case patterns match the *exact* dotted label path Docker Compose
+	// actually sets (confirmed against a real container:
+	// com.docker.compose.project.config_files / .project.working_dir /
+	// .service) -- a loose "*working_dir*" substring match would also
+	// match the wrong "com.docker.compose.working_dir" (missing
+	// ".project."), which is exactly the real bug this test caught live
+	// against a real pi host: that wrong label name was queried, came
+	// back empty, and updateDockerCompose failed with "missing expected
+	// Docker Compose labels" despite the container having them all along.
 	writeFakeDocker(t, `
 case "$1" in
   ps)
@@ -241,9 +250,9 @@ case "$1" in
     ;;
   inspect)
     case "$3" in
-      *config_files*) echo "`+composeDir+`/docker-compose.yml" ;;
-      *working_dir*) echo "`+composeDir+`" ;;
-      *service*) echo "update-detector" ;;
+      *.project.config_files*) echo "`+composeDir+`/docker-compose.yml" ;;
+      *.project.working_dir*) echo "`+composeDir+`" ;;
+      *.service*) echo "update-detector" ;;
     esac
     ;;
   compose)
