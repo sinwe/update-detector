@@ -306,6 +306,26 @@ Unix socket — see [How it works](#how-it-works)), its `AGGREGATOR_URL`, and
 its published port. It installs `update-detector-companion` as a systemd
 service and starts it.
 
+**Uninstall** works the same way, for any native component this script
+installed — the companion here, or (on WSL2) the agent/aggregator from
+[WSL2](docs/wsl2.md):
+
+```sh
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh -s -- --uninstall
+```
+
+(the `-s --` matters — a bare `sh --uninstall` would treat that as a
+script *filename* instead of an argument, and just fail). It prompts for
+which to remove, detecting what's actually installed first; for
+scripted/non-interactive use, skip the prompt with `UNINSTALL_COMPONENTS`
+(comma-separated: `aggregator,agent,companion`, no special `sh`
+invocation needed for this one) the same way `INSTALL_COMPONENTS` works
+for installing. It fully tears down anything native (unit, binary, env
+file, state/data dir, dedicated system user) but only ever warns about a
+Docker-based agent/aggregator — this script never created that
+deployment, so it has no compose file path or volume names to safely act
+on; remove those yourself with `docker compose down`.
+
 **Triggering an action** is `POST /admin/agents/{id}/apply` on the
 aggregator, gated by a shared secret (`ADMIN_APPLY_SHARED_SECRET` —
 disabled/`501` entirely until set). **No reverse proxy needed** — the
