@@ -48,8 +48,44 @@ func run() error {
 	}
 	log.Printf("companion: fetched identity for agent %s", identity.AgentID)
 
+	report := func(result aggregator.ActionResult) {
+		// A fresh, short-lived context -- not the (possibly already
+		// canceled, if this action landed during shutdown) outer ctx --
+		// so the result still has a chance to be reported.
+		reportCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := companion.ReportResult(reportCtx, cfg.AggregatorURL, identity, result); err != nil {
+			log.Printf("companion: reporting result for %s: %v", result.ActionID, err)
+		}
+	}
+
 	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, func(action aggregator.Action) {
 		log.Printf("companion: received action %s (%s)", action.ID, action.Type)
+
+		// Updating the companion itself restarts this very process, via
+		// install.sh's own systemctl restart -- report *before* running
+		// it, since code after that restart call may never run at all.
+		//
+		// If Apply below returns having failed, that's only a *real*
+		// failure to correct the record with if ctx is still alive --
+		// once systemd's restart reaches this process (SIGTERM, via the
+		// same ctx everything here is built on), the in-flight
+		// install.sh child gets killed too, and Apply surfaces that as
+		// an ordinary-looking failure ("signal: terminated") even though
+		// the swap+restart it triggered actually succeeded. Confirmed
+		// live: without this check, that spurious failure overwrote the
+		// correct optimistic success report every time.
+		if action.Type == aggregator.ActionSelfUpdate && action.Component == "companion" {
+			report(aggregator.ActionResult{
+				ActionID: action.ID, Success: true,
+				Message: "update installing, restarting shortly", CompletedAt: time.Now(),
+			})
+			if result := companion.Apply(ctx, cfg.AgentStatusURL, action); !result.Success && ctx.Err() == nil {
+				log.Printf("companion: self-update of companion failed before restarting: %s", result.Message)
+				report(result)
+			}
+			return
+		}
 
 		result := companion.Apply(ctx, cfg.AgentStatusURL, action)
 		if result.Success {
@@ -57,15 +93,7 @@ func run() error {
 		} else {
 			log.Printf("companion: action %s failed: %s", action.ID, result.Message)
 		}
-
-		// A fresh, short-lived context -- not the (possibly already
-		// canceled, if this action landed during shutdown) outer ctx --
-		// so the result still has a chance to be reported.
-		reportCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := companion.ReportResult(reportCtx, cfg.AggregatorURL, identity, result); err != nil {
-			log.Printf("companion: reporting result for %s: %v", action.ID, err)
-		}
-		cancel()
+		report(result)
 	})
 
 	log.Println("companion: shutting down")

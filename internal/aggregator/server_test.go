@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 
 	"update-detector/internal/checker"
 	"update-detector/internal/notifier"
+	"update-detector/internal/selfupdate"
+	"update-detector/internal/version"
 )
 
 func newTestServer(t *testing.T) (*Server, *Registry) {
@@ -22,7 +25,28 @@ func newTestServer(t *testing.T) (*Server, *Registry) {
 func newTestServerWithSecret(t *testing.T, adminApplySecret string) (*Server, *Registry) {
 	reg := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
 	hub := NewCompanionHub()
-	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret), reg
+	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, nil), reg
+}
+
+// newTestServerWithLatestVersion is like newTestServerWithSecret, but
+// with a real *selfupdate.Client already refreshed (against a throwaway
+// fake Forgejo server) to report latestVersion as the newest release --
+// for exercising the admin page's update-available banner/buttons.
+func newTestServerWithLatestVersion(t *testing.T, adminApplySecret, latestVersion string) (*Server, *Registry) {
+	t.Helper()
+	fakeForgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"tag_name": latestVersion}})
+	}))
+	t.Cleanup(fakeForgejo.Close)
+
+	client := selfupdate.New(fakeForgejo.URL, false)
+	if err := client.Refresh(context.Background()); err != nil {
+		t.Fatalf("refreshing fake selfupdate client: %v", err)
+	}
+
+	reg := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	hub := NewCompanionHub()
+	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, client), reg
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
@@ -576,6 +600,99 @@ func TestHandleAdminPageAgentOnlyShowsRecheckButNotApply(t *testing.T) {
 	}
 }
 
+func TestHandleAdminPageShowsAggregatorUpdateBanner(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, _ := newTestServerWithLatestVersion(t, "", "v2.0.0")
+
+	rec := doJSON(t, s, http.MethodGet, "/admin", nil, nil)
+	body := rec.Body.String()
+	if !strings.Contains(body, "v2.0.0") || !strings.Contains(body, "is available") {
+		t.Fatalf("expected an update-available banner mentioning v2.0.0, got: %s", body)
+	}
+}
+
+func TestHandleAdminPageNoBannerWhenAggregatorUpToDate(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, _ := newTestServerWithLatestVersion(t, "", "v1.0.0")
+
+	rec := doJSON(t, s, http.MethodGet, "/admin", nil, nil)
+	body := rec.Body.String()
+	if strings.Contains(body, "is available") {
+		t.Fatalf("expected no update banner when already on the latest version, got: %s", body)
+	}
+}
+
+func TestHandleAdminPageShowsSelfUpdateButtonsWhenCompanionConnectedAndBehind(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithLatestVersion(t, "", "v2.0.0")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/report", checker.Status{Hostname: "web01", OK: true, AgentVersion: "v0.9.0"}, map[string]string{
+		"X-Agent-ID": "a1", "Authorization": "Bearer tok",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	res := s.hub.Connect("a1", KindCompanion, "v0.9.0")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	// Check for the actual button markup (postSelfUpdate('a1', <component>),
+	// not the loose text "Update agent"/etc, which also appears in the
+	// fleet-wide banner's own descriptive copy above and would otherwise
+	// false-match regardless of whether any button was actually rendered.
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if !strings.Contains(body, "postSelfUpdate('a1', 'agent'") {
+		t.Fatalf("expected an Update agent button, got: %s", body)
+	}
+	if !strings.Contains(body, "postSelfUpdate('a1', 'companion'") {
+		t.Fatalf("expected an Update companion button, got: %s", body)
+	}
+	if !strings.Contains(body, "postSelfUpdate('a1', 'aggregator'") {
+		t.Fatalf("expected an Update aggregator button (the aggregator itself is also behind), got: %s", body)
+	}
+}
+
+func TestHandleAdminPageNoSelfUpdateButtonsWhenUpToDate(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithLatestVersion(t, "", "v1.0.0")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/report", checker.Status{Hostname: "web01", OK: true, AgentVersion: "v1.0.0"}, map[string]string{
+		"X-Agent-ID": "a1", "Authorization": "Bearer tok",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rec.Code, rec.Body.String())
+	}
+	res := s.hub.Connect("a1", KindCompanion, "v1.0.0")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if strings.Contains(body, `onclick="postSelfUpdate(`) {
+		t.Fatalf("expected no self-update buttons when everything is already up to date, got: %s", body)
+	}
+}
+
+func TestHandleAdminPageNoSelfUpdateButtonsForAgentOnlyStream(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithLatestVersion(t, "", "v2.0.0")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/report", checker.Status{Hostname: "web01", OK: true, AgentVersion: "v0.9.0"}, map[string]string{
+		"X-Agent-ID": "a1", "Authorization": "Bearer tok",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rec.Code, rec.Body.String())
+	}
+	res := s.hub.Connect("a1", KindAgent, "")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if strings.Contains(body, `onclick="postSelfUpdate(`) {
+		t.Fatalf("expected no self-update buttons for an agent-only stream (self-update always requires a real companion), got: %s", body)
+	}
+}
+
 func TestHandleAdminApplyDisabledWithoutSecret(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
@@ -698,6 +815,165 @@ func TestHandleAdminRecheckRequiresConnectedCompanion(t *testing.T) {
 	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/recheck", nil, nil)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("got status %d, want 409 with no companion connected", rec.Code)
+	}
+}
+
+// withVersion temporarily overrides the package-level version.Version
+// for the duration of a test -- handleAdminSelfUpdate's dependency-
+// ordering check compares a request's target against this aggregator's
+// own currently-running version, which defaults to the unparseable "dev"
+// placeholder under `go test` (no -ldflags), so most of these tests need
+// a real vX.Y.Z value to exercise that comparison at all.
+func withVersion(t *testing.T, v string) {
+	t.Helper()
+	orig := version.Version
+	version.Version = v
+	t.Cleanup(func() { version.Version = orig })
+}
+
+func TestHandleAdminSelfUpdateRequiresSecret(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{Component: "agent", TargetVersion: "v1.0.0"}, nil)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 when ADMIN_APPLY_SHARED_SECRET is unset", rec.Code)
+	}
+
+	s2, reg2 := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s2, reg2, "a1", "web01", "tok")
+	rec = doJSON(t, s2, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{Component: "agent", TargetVersion: "v1.0.0"}, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 with no secret header", rec.Code)
+	}
+}
+
+func TestHandleAdminSelfUpdateValidatesRequest(t *testing.T) {
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	headers := map[string]string{"X-Admin-Apply-Secret": "s3cret"}
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{Component: "bogus", TargetVersion: "v1.0.0"}, headers)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for an invalid component", rec.Code)
+	}
+
+	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{Component: "agent"}, headers)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for a missing target_version", rec.Code)
+	}
+
+	rec = doJSON(t, s, http.MethodPost, "/admin/agents/unknown/self-update", selfUpdateRequest{Component: "agent", TargetVersion: "v1.0.0"}, headers)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 for unknown agent", rec.Code)
+	}
+}
+
+func TestHandleAdminSelfUpdateRejectsAgentTargetNewerThanAggregator(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{
+		Component: "agent", TargetVersion: "v2.0.0",
+	}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, body %s, want 409 for a target newer than the aggregator's own version", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case <-res.Ch:
+		t.Fatal("expected nothing to be pushed to the companion for a rejected request")
+	default:
+	}
+}
+
+func TestHandleAdminSelfUpdateAllowsAgentTargetNotNewerThanAggregator(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{
+		Component: "agent", TargetVersion: "v1.0.0",
+	}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, body %s, want 202 for a target equal to the aggregator's own version", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case action := <-res.Ch:
+		if action.Type != ActionSelfUpdate || action.Component != "agent" || action.TargetVersion != "v1.0.0" {
+			t.Fatalf("unexpected action pushed: %#v", action)
+		}
+	default:
+		t.Fatal("expected an action to be pushed to the connected channel")
+	}
+}
+
+func TestHandleAdminSelfUpdateAggregatorComponentSkipsOrderingCheck(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	// A target "newer" than the aggregator's own version is exactly what
+	// updating the aggregator itself means -- must not be rejected by
+	// the same ordering check that applies to agent/companion.
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{
+		Component: "aggregator", TargetVersion: "v2.0.0",
+	}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, body %s, want 202 for component=aggregator regardless of target version", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminSelfUpdateRequiresConnectedCompanion(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{
+		Component: "agent", TargetVersion: "v1.0.0",
+	}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want 409 with no companion connected", rec.Code)
+	}
+}
+
+func TestHandleAdminSelfUpdateRejectsAgentOnlyStream(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithSecret(t, "s3cret")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	s.hub.Connect("a1", KindAgent, "")
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/self-update", selfUpdateRequest{
+		Component: "agent", TargetVersion: "v1.0.0",
+	}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, body %s, want 409 -- self-update always needs a real companion, never an agent-only stream", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHealthz(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodGet, "/healthz", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("got status field %q, want ok", body["status"])
+	}
+	if _, ok := body["version"]; !ok {
+		t.Fatal("expected a version field in the healthz response")
 	}
 }
 

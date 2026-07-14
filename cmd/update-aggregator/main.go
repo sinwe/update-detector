@@ -15,6 +15,7 @@ import (
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorconfig"
 	"update-detector/internal/notifier"
+	"update-detector/internal/selfupdate"
 	"update-detector/internal/version"
 )
 
@@ -52,8 +53,12 @@ func run() error {
 		log.Println("apply endpoint enabled")
 	}
 
+	selfUpdateClient := selfupdate.New("", cfg.SelfUpdateIncludePreRelease)
+	log.Printf("self-update check enabled (channel=%s, interval=%s)",
+		selfUpdateChannelLabel(cfg.SelfUpdateIncludePreRelease), cfg.SelfUpdateCheckInterval)
+
 	hub := aggregator.NewCompanionHub()
-	srv := aggregator.NewServer(registry, hub, notifyMgr, cfg.AdminApplySharedSecret)
+	srv := aggregator.NewServer(registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient)
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: srv.Handler(),
@@ -69,9 +74,20 @@ func run() error {
 		}
 	}()
 
+	go selfupdate.Run(ctx, selfUpdateClient, cfg.SelfUpdateCheckInterval, func(err error) {
+		log.Printf("self-update: checking for a new release: %v", err)
+	})
+
 	<-ctx.Done()
 	log.Println("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return httpSrv.Shutdown(shutdownCtx)
+}
+
+func selfUpdateChannelLabel(includePreRelease bool) string {
+	if includePreRelease {
+		return "prerelease"
+	}
+	return "stable"
 }

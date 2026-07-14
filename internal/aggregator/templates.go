@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/version"
 )
 
 var adminTemplate = template.Must(template.New("admin").Parse(adminTemplateSrc))
@@ -44,6 +45,13 @@ type agentView struct {
 	ConnectedVia       string
 	CompanionVersion   string
 	RecentResults      []resultView
+
+	// AgentUpdateAvailable/CompanionUpdateAvailable compare this row's own
+	// reported agent/companion version against adminPageData.LatestVersion
+	// -- false whenever LatestVersion is empty (no successful self-update
+	// check has completed yet) or the reported version doesn't parse.
+	AgentUpdateAvailable     bool
+	CompanionUpdateAvailable bool
 }
 
 type resultView struct {
@@ -54,21 +62,41 @@ type resultView struct {
 
 type adminPageData struct {
 	AggregatorVersion string
-	Pending           []agentView
-	Approved          []agentView
-	Rejected          []agentView
+	// LatestVersion is the latest release internal/selfupdate has found,
+	// or "" if no successful check has completed yet.
+	LatestVersion             string
+	AggregatorUpdateAvailable bool
+	Pending                   []agentView
+	Approved                  []agentView
+	Rejected                  []agentView
 }
 
-func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
+// updateAvailable reports whether latest (adminPageData.LatestVersion,
+// possibly "") is a newer release than current (a specific host's own
+// reported agent/companion version, possibly "" if never reported) --
+// false, not an error, for anything unset or unparseable, since this
+// only ever gates a UI affordance, never a trust decision (that
+// enforcement lives server-side in handleAdminSelfUpdate itself).
+func updateAvailable(latest, current string) bool {
+	if latest == "" || current == "" {
+		return false
+	}
+	cmp, err := version.Compare(latest, current)
+	return err == nil && cmp > 0
+}
+
+func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agentView {
 	kind, connected := hub.Kind(rec.ID)
+	companionVersion := hub.CompanionVersion(rec.ID)
 	v := agentView{
-		ID:                 rec.ID,
-		ShortID:            shortID(rec.ID),
-		Hostname:           rec.Hostname,
-		AnyStreamConnected: connected,
-		CompanionConnected: connected && kind == KindCompanion,
-		ConnectedVia:       string(kind),
-		CompanionVersion:   hub.CompanionVersion(rec.ID),
+		ID:                       rec.ID,
+		ShortID:                  shortID(rec.ID),
+		Hostname:                 rec.Hostname,
+		AnyStreamConnected:       connected,
+		CompanionConnected:       connected && kind == KindCompanion,
+		ConnectedVia:             string(kind),
+		CompanionVersion:         companionVersion,
+		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion),
 	}
 	if !rec.FirstSeen.IsZero() {
 		v.FirstSeen = rec.FirstSeen.Format(time.RFC3339)
@@ -86,6 +114,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
+		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion)
 	}
 	// Results() is oldest-first; show most recent first.
 	results := hub.Results(rec.ID)
@@ -127,10 +156,20 @@ const adminTemplateSrc = `<!DOCTYPE html>
     .muted { color: #666; }
     .apply-section { margin-top: 0.5rem; }
     .apply-section button { margin-right: 0.3rem; margin-top: 0.3rem; }
+    .banner { background: #fff8e1; border: 1px solid #e0c66b; border-radius: 4px; padding: 0.6rem 1rem; margin-bottom: 1rem; }
+    .restart-banner { display: none; position: sticky; top: 0; background: #1a7f37; color: #fff; padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
+  <div id="restartBanner" class="restart-banner">Updating the aggregator&hellip; this page will reload automatically once it's back.</div>
   <h1>update-detector aggregator <small class="muted">{{.AggregatorVersion}}</small></h1>
+  {{if .AggregatorUpdateAvailable}}
+  <div class="banner">
+    <strong>{{.LatestVersion}}</strong> is available (this aggregator is running <strong>{{.AggregatorVersion}}</strong>).
+    Use "Update aggregator" from whichever host's row below actually runs it -- there's no single button here since
+    the aggregator itself isn't one of the per-host rows.
+  </div>
+  {{end}}
   <p><a href="/widgets/packages">all pending packages (fleet-wide)</a> &middot; <a href="/widgets/packages?security=true">security only</a> &middot; <a href="/widgets/summary">summary</a></p>
 
   <h2>Pending ({{len .Pending}})</h2>
@@ -197,6 +236,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
             {{end}}
             <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
+            {{if .AgentUpdateAvailable}}
+            <button onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update this host's agent to {{$.LatestVersion}}">Update agent</button>
+            {{end}}
+            {{if $.AggregatorUpdateAvailable}}
+            <button onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update the aggregator co-located with this host, if any, to {{$.LatestVersion}}">Update aggregator</button>
+            {{end}}
+            {{if .CompanionUpdateAvailable}}
+            <button onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update this host's companion to {{$.LatestVersion}}">Update companion</button>
+            {{end}}
           {{else}}
             <span class="muted">install companion to enable apply</span><br>
           {{end}}
@@ -307,6 +355,78 @@ const adminTemplateSrc = `<!DOCTYPE html>
       } catch (e) {
         alert('recheck failed: ' + e);
       }
+    }
+
+    // This page's own aggregator version at load time -- html/template
+    // context-escapes this correctly for a JS string literal, same as
+    // every other templated value elsewhere on this page.
+    const startingAggregatorVersion = "{{.AggregatorVersion}}";
+
+    async function postSelfUpdate(id, component, targetVersion) {
+      const secret = getAdminApplySecret();
+      if (!secret) return;
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/self-update', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Admin-Apply-Secret': secret},
+          body: JSON.stringify({component: component, target_version: targetVersion}),
+        });
+        if (!resp.ok) {
+          if (resp.status === 403) {
+            localStorage.removeItem('adminApplySecret');
+            alert('self-update failed (403): wrong secret -- cleared it, try again with the correct value');
+          } else {
+            alert('self-update failed (' + resp.status + '): ' + await resp.text());
+          }
+          return;
+        }
+        // Updating the agent or companion doesn't take down this page at
+        // all (only the aggregator restarting does) -- same
+        // accept-and-reload-later treatment as apply/recheck already
+        // use for those two.
+        if (component === 'aggregator') {
+          watchAggregatorRestart();
+        } else {
+          alert('update accepted -- reload this page in a bit to see the result');
+        }
+      } catch (e) {
+        alert('self-update failed: ' + e);
+      }
+    }
+
+    // Jenkins-style: show a banner, keep polling /healthz in the
+    // background through the restart window (fetch failures are
+    // expected and ignored while the aggregator is actually down), and
+    // reload only once it reports a version that's actually different
+    // from what was running when this update was triggered -- not just
+    // "got any response," since a stale response during the restart
+    // window shouldn't look like success.
+    function watchAggregatorRestart() {
+      const banner = document.getElementById('restartBanner');
+      banner.style.display = 'block';
+      let attempts = 0;
+      const maxAttempts = 60; // ~2 minutes at 2s each
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const resp = await fetch('/healthz', {cache: 'no-store'});
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.version && data.version !== startingAggregatorVersion) {
+              clearInterval(poll);
+              location.reload();
+              return;
+            }
+          }
+        } catch (e) {
+          // Expected while the aggregator is actually down mid-restart --
+          // keep polling rather than treating this as a failure.
+        }
+        if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          banner.textContent = 'Aggregator restart is taking longer than expected -- reload manually once it\'s back.';
+        }
+      }, 2000);
     }
   </script>
 </body>

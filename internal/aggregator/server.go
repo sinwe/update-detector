@@ -11,6 +11,7 @@ import (
 
 	"update-detector/internal/checker"
 	"update-detector/internal/notifier"
+	"update-detector/internal/selfupdate"
 	"update-detector/internal/version"
 	"update-detector/openapi"
 )
@@ -23,18 +24,24 @@ type Server struct {
 	// endpoint is disabled (501) -- this higher-stakes capability is
 	// opt-in, unlike the rest of /admin which trusts the network path.
 	adminApplySecret string
-	mux              *http.ServeMux
+	// selfUpdate is nil when self-update version checking is disabled
+	// (or, in tests, simply not exercised) -- every read of it must be
+	// nil-checked, never assumed non-nil.
+	selfUpdate *selfupdate.Client
+	mux        *http.ServeMux
 }
 
-func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string) *Server {
+func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client) *Server {
 	s := &Server{
 		registry:         registry,
 		hub:              hub,
 		notifyMgr:        notifyMgr,
 		adminApplySecret: adminApplySecret,
+		selfUpdate:       selfUpdate,
 		mux:              http.NewServeMux(),
 	}
 	s.mux.HandleFunc("/", s.handleRoot)
+	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/enroll", s.handleEnroll)
 	s.mux.HandleFunc("/report", s.handleReport)
 	s.mux.HandleFunc("/companion/stream", s.handleCompanionStream)
@@ -57,6 +64,17 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+// handleHealthz mirrors the agent's own GET /healthz
+// (internal/httpserver/server.go) -- this is what the admin page's
+// Jenkins-style banner polls after triggering a self-update of the
+// aggregator itself, to know when it's actually back up and confirm
+// which version it's now running (not just "got any response," since a
+// stale response during the restart window shouldn't look like success).
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.Version})
 }
 
 type enrollRequest struct {
@@ -288,8 +306,16 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := adminPageData{AggregatorVersion: version.Version}
+	if s.selfUpdate != nil {
+		if latest, _, ok := s.selfUpdate.Latest(); ok {
+			data.LatestVersion = latest
+			if cmp, err := version.Compare(latest, version.Version); err == nil && cmp > 0 {
+				data.AggregatorUpdateAvailable = true
+			}
+		}
+	}
 	for _, rec := range s.registry.List() {
-		v := toAgentView(rec, s.hub)
+		v := toAgentView(rec, s.hub, data.LatestVersion)
 		switch rec.Status {
 		case StatusPending:
 			data.Pending = append(data.Pending, v)
@@ -326,6 +352,10 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if action == "recheck" {
 		s.handleAdminRecheck(w, r, id)
+		return
+	}
+	if action == "self-update" {
+		s.handleAdminSelfUpdate(w, r, id)
 		return
 	}
 
@@ -432,6 +462,89 @@ func (s *Server) handleAdminRecheck(w http.ResponseWriter, _ *http.Request, id s
 	}
 
 	action := Action{ID: newActionID(), Type: ActionRecheck, CreatedAt: time.Now()}
+	if err := s.hub.Push(id, action); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+}
+
+type selfUpdateRequest struct {
+	Component     string `json:"component"`
+	TargetVersion string `json:"target_version"`
+}
+
+// handleAdminSelfUpdate pushes an ActionSelfUpdate to the companion
+// connected for id, asking it to update its own host's agent,
+// aggregator (if one happens to be co-located there), or itself to
+// TargetVersion. Gated by the same shared secret as handleAdminApply --
+// self-update is at least as high-stakes as an apply, since it can
+// restart the aggregator process serving this very request.
+//
+// The dependency-ordering rule lives here, not just in the admin page's
+// UI: agent/companion must never be pushed to a version newer than the
+// aggregator's own currently-running version.Version, to avoid the exact
+// protocol-mismatch confusion a newer agent talking to an older
+// aggregator can cause (confirmed live earlier -- a new agent connecting
+// to an old aggregator that doesn't know about X-Client-Kind at all just
+// gets silently mistreated as a companion). This is the actual trust
+// boundary; greying out a button client-side is UX on top of this, not
+// a substitute for it.
+func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, id string) {
+	if s.adminApplySecret == "" {
+		http.Error(w, "self-update is disabled: ADMIN_APPLY_SHARED_SECRET is not configured", http.StatusNotImplemented)
+		return
+	}
+	presented := r.Header.Get("X-Admin-Apply-Secret")
+	if presented == "" || subtle.ConstantTimeCompare([]byte(presented), []byte(s.adminApplySecret)) != 1 {
+		http.Error(w, "invalid or missing X-Admin-Apply-Secret", http.StatusForbidden)
+		return
+	}
+
+	rec, ok := s.registry.Get(id)
+	if !ok || rec.Status != StatusApproved {
+		http.Error(w, "agent not found or not approved", http.StatusNotFound)
+		return
+	}
+
+	var req selfUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	switch req.Component {
+	case "agent", "aggregator", "companion":
+	default:
+		http.Error(w, "component must be one of: agent, aggregator, companion", http.StatusBadRequest)
+		return
+	}
+	if req.TargetVersion == "" {
+		http.Error(w, "target_version is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Component != "aggregator" {
+		cmp, err := version.Compare(req.TargetVersion, version.Version)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("target_version %q: %v", req.TargetVersion, err), http.StatusBadRequest)
+			return
+		}
+		if cmp > 0 {
+			http.Error(w, fmt.Sprintf(
+				"target_version %s is newer than this aggregator's own version %s -- update the aggregator first",
+				req.TargetVersion, version.Version), http.StatusConflict)
+			return
+		}
+	}
+
+	action := Action{
+		ID:            newActionID(),
+		Type:          ActionSelfUpdate,
+		Component:     req.Component,
+		TargetVersion: req.TargetVersion,
+		CreatedAt:     time.Now(),
+	}
 	if err := s.hub.Push(id, action); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

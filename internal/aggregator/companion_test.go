@@ -138,7 +138,7 @@ func TestCompanionHubResultsCapped(t *testing.T) {
 }
 
 func TestActionTypeValid(t *testing.T) {
-	valid := []ActionType{ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck}
+	valid := []ActionType{ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck, ActionSelfUpdate}
 	for _, v := range valid {
 		if !v.valid() {
 			t.Fatalf("expected %q to be valid", v)
@@ -146,6 +146,22 @@ func TestActionTypeValid(t *testing.T) {
 	}
 	if ActionType("bogus").valid() {
 		t.Fatal("expected an unknown action type to be invalid")
+	}
+}
+
+func TestActionSelfUpdateRequiresCompanion(t *testing.T) {
+	if !ActionSelfUpdate.requiresCompanion() {
+		t.Fatal("expected ActionSelfUpdate to require a real companion, like every action except recheck")
+	}
+}
+
+func TestCompanionHubPushRequiresCompanionForSelfUpdate(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1", KindAgent, "")
+
+	action := Action{ID: "act1", Type: ActionSelfUpdate, Component: "agent", TargetVersion: "v0.11.0"}
+	if err := h.Push("a1", action); err != ErrCompanionRequired {
+		t.Fatalf("got err %v, want ErrCompanionRequired for a self-update action on an agent-only stream", err)
 	}
 }
 

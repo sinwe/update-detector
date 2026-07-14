@@ -495,6 +495,57 @@ at all).
 
 Repeat steps 2–4 for the next agent host.
 
+## Self-updating update-detector
+
+The aggregator periodically checks Forgejo for a newer update-detector
+release (`SELF_UPDATE_CHECK_INTERVAL`, default 24h) and surfaces it on
+`/admin`: a fleet-wide banner if the aggregator itself is behind, and
+**Update agent**/**Update companion**/**Update aggregator** buttons on
+each host row whose companion is connected and reports an older version.
+Applying one works exactly like a package apply — pushed to that host's
+companion over the same SSE connection, gated by the same
+`ADMIN_APPLY_SHARED_SECRET`/`X-Admin-Apply-Secret` — and the companion
+executes it the same way `install.sh` or `docker compose pull && up -d`
+would by hand: native components get a fresh binary swapped in and their
+systemd unit restarted; Docker-based ones get `docker compose pull && up
+-d` for that service, using the exact compose file/working directory
+Docker Compose itself recorded when the container was created (so it
+respects whatever `.env`, volumes, etc. you're actually running).
+
+**The aggregator is always the dependency root.** Agent/companion can
+never be updated past the aggregator's own currently-running version —
+enforced server-side (not just hidden in the UI), specifically to avoid
+the kind of protocol confusion a newer agent talking to an older
+aggregator can cause (confirmed live during development: an aggregator
+that predates a given protocol change just mistreats a newer client
+instead of rejecting it cleanly). Update the aggregator first if you want
+to bring the whole fleet forward.
+
+**Updating the aggregator restarts the process serving this very page.**
+The admin page handles this like Jenkins does after a plugin install: a
+banner appears and the page polls `GET /healthz` in the background
+(fetch failures during the actual restart window are expected and
+ignored), reloading automatically only once that endpoint reports a
+version that's genuinely newer than what was running before — not just
+"got any response," so a brief blip mid-restart can't trigger a
+premature reload.
+
+**Updating the aggregator itself needs a companion on *its own* host.**
+Every update — including the aggregator's — is executed by a companion,
+and a companion's identity is always derived from an agent paired with
+it on the same host. A host that runs *only* the aggregator (a real,
+explicitly-supported setup — see `docker-compose.aggregator.yml`, "runs
+once, wherever you want it... not per-host") has no companion at all, and
+so no way to execute this. If you want the aggregator itself to be
+self-updatable this way, also run an agent + companion pair on whichever
+host actually runs it, and trigger "Update aggregator" from that host's
+own row.
+
+Set `SELF_UPDATE_INCLUDE_PRERELEASE=true` on the aggregator to also
+surface `-rcN` tags as "available" (always picking the single highest
+tag across both real releases and pre-releases) — off by default, since
+most fleets should only ever be offered stable releases.
+
 ## API reference
 
 Both services have an OpenAPI 3.0 spec — committed at `openapi/update-detector.yaml`
@@ -536,6 +587,8 @@ in `docker-compose.yml`.
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
 | `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
+| `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check Forgejo for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
+| `SELF_UPDATE_INCLUDE_PRERELEASE` | `false` | `true` also considers `-rcN` tags, and always prefers the single highest tag across both channels — see [Self-updating update-detector](#self-updating-update-detector) |
 
 `update-detector-companion` (host-native, not a container) reads:
 
@@ -567,7 +620,10 @@ and `linux/arm64` (no QEMU needed — Go cross-compiles natively) and
 attaches all six as plain binary assets on that tag's Forgejo release.
 `install.sh` fetches whichever it needs: just the companion on a
 Docker-based host (see [Triggering updates](#triggering-updates-companion)),
-or any/all three for a native WSL2 install (see [WSL2](docs/wsl2.md)).
+or any/all three for a native WSL2 install (see [WSL2](docs/wsl2.md)). The
+aggregator also reads this same release list on its own, periodically, to
+know when a newer version is available to offer from `/admin` — see
+[Self-updating update-detector](#self-updating-update-detector).
 
 Requires two repo secrets, scoped separately on purpose (least-privilege —
 a leaked/misused token from one step can't touch what the other covers):

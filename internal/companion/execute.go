@@ -38,6 +38,13 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		}
 	}
 
+	// Self-update replaces a binary and restarts a systemd unit or
+	// Docker container -- none of that is apt-get, and none of the
+	// pending-packages validation below applies to it either.
+	if action.Type == aggregator.ActionSelfUpdate {
+		return SelfUpdate(ctx, action)
+	}
+
 	status, err := fetchLocalStatus(ctx, agentStatusURL)
 	if err != nil {
 		return aggregator.ActionResult{

@@ -1,6 +1,14 @@
 # Standalone compose file for the central aggregator. This runs once,
 # wherever you want it (e.g. next to Homepage) — it's not per-host like
 # docker-compose.yml. Agents connect out to it via AGGREGATOR_URL.
+#
+# If you want this aggregator to be self-updatable from its own /admin
+# page (see README "Self-updating update-detector"), also run an agent +
+# companion pair on this same host -- every self-update, including the
+# aggregator's own, is executed by a companion, and a companion's
+# identity always comes from an agent paired with it on the same host.
+# A host running only the aggregator, as here, has no companion and so
+# no way to execute that -- a real, deliberate limitation, not a bug.
 services:
   update-aggregator:
     # For real deploys: `docker compose pull && docker compose up -d` uses

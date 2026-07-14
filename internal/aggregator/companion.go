@@ -20,11 +20,20 @@ const (
 	// change anything on the host, so unlike the other three it needs no
 	// shared secret (see handleAdminRecheck).
 	ActionRecheck ActionType = "recheck"
+	// ActionSelfUpdate asks the companion to update update-detector's own
+	// Component ("agent"|"aggregator"|"companion") to TargetVersion,
+	// detecting native vs. Docker on that host itself (see
+	// internal/companion/deploykind.go) -- one type, not three, since the
+	// three components differ only in which detect+execute branch runs
+	// and which field selects it, not in the outer shape the way
+	// packages/upgrade/full-upgrade genuinely run different apt-get
+	// subcommands.
+	ActionSelfUpdate ActionType = "self-update"
 )
 
 func (t ActionType) valid() bool {
 	switch t {
-	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck:
+	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck, ActionSelfUpdate:
 		return true
 	default:
 		return false
@@ -70,6 +79,12 @@ type Action struct {
 	Type      ActionType `json:"type"`
 	Packages  []string   `json:"packages,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
+
+	// Component and TargetVersion are only set for ActionSelfUpdate --
+	// which of update-detector's own three binaries to update, and which
+	// release tag to update it to.
+	Component     string `json:"component,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
 }
 
 // ActionResult is what a companion reports back after attempting an Action.

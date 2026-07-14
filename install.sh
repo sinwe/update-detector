@@ -24,9 +24,14 @@
 # have a real in-distro Docker engine (in which case the normal
 # docker-compose.yml path works fine and this native install isn't needed).
 #
-# Set INSTALL_VERSION to pin a release instead of "latest". On WSL2, set
-# INSTALL_COMPONENTS (comma-separated: aggregator,agent,companion) to skip
-# the interactive prompt for scripted/non-interactive use.
+# Set INSTALL_VERSION to pin a release instead of "latest". Set
+# INSTALL_COMPONENTS (comma-separated: aggregator,agent,companion) for a
+# scripted/non-interactive native install of any of those three on *any*
+# host, not just WSL2 -- this is also how the companion's own self-update
+# feature re-invokes this exact script to update a specific native
+# component wherever it's actually running. On WSL2 specifically, leaving
+# INSTALL_COMPONENTS unset still gets the interactive prompt described
+# above instead of the plain companion-only default.
 #
 # To remove a native install instead, either pipe with an explicit
 # argument --
@@ -45,7 +50,13 @@
 set -eu
 
 FORGEJO_API="https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+INSTALL_SH_RAW_URL="https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
+# Where the companion caches its own copy of this script for self-update
+# use (see internal/companion/selfupdate.go) -- it re-invokes this file
+# non-interactively rather than duplicating the download/atomic-swap/
+# systemctl-restart logic already tested and shipped here.
+CACHED_INSTALL_SH="/usr/local/lib/update-detector/install.sh"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "install.sh: must be run as root" >&2
@@ -116,6 +127,26 @@ download_binary() {
   curl -fsSL "$download_url" -o "$dest.new"
   chmod 0755 "$dest.new"
   mv "$dest.new" "$dest"
+}
+
+# cache_install_sh_for_companion -> saves a fresh copy of this exact
+# script to CACHED_INSTALL_SH, for the companion's own self-update
+# feature to re-invoke later (this script is normally run via
+# `curl | sh`, piped straight from stdin with no file of its own on
+# disk to copy -- so this re-downloads it by URL instead). Only called
+# from install_companion, since only a host with a companion has any
+# use for this at all. Best-effort: a failure here is a warning, not
+# fatal -- the companion still works for apply/recheck either way, and
+# every future companion install/self-update naturally retries this.
+cache_install_sh_for_companion() {
+  echo "install.sh: caching a copy of install.sh for the companion's own self-update use..."
+  mkdir -p "$(dirname "$CACHED_INSTALL_SH")"
+  if curl -fsSL "$INSTALL_SH_RAW_URL" -o "$CACHED_INSTALL_SH.new"; then
+    chmod 0755 "$CACHED_INSTALL_SH.new"
+    mv "$CACHED_INSTALL_SH.new" "$CACHED_INSTALL_SH"
+  else
+    echo "install.sh: warning: could not cache a copy of install.sh -- self-update via the companion won't work until this succeeds" >&2
+  fi
 }
 
 # install_unit NAME -> daemon-reload + enable + restart. Not `enable --now`
@@ -419,6 +450,7 @@ WantedBy=multi-user.target
 EOF
 
   install_unit update-detector-companion
+  cache_install_sh_for_companion
   echo "install.sh: done. Check status with: systemctl status update-detector-companion"
 }
 
@@ -521,6 +553,7 @@ uninstall_companion() {
   rm -f /etc/systemd/system/update-detector-companion.service
   systemctl daemon-reload
   rm -f /usr/local/bin/update-detector-companion
+  rm -f "$CACHED_INSTALL_SH"
 }
 
 # prompt_components -> prints a comma-separated list of components to
@@ -635,7 +668,14 @@ if [ "$uninstall_requested" = "1" ]; then
   case ",$components," in *,companion,*) uninstall_companion ;; esac
   case ",$components," in *,agent,*) uninstall_agent ;; esac
   case ",$components," in *,aggregator,*) uninstall_aggregator ;; esac
-elif is_wsl2; then
+# INSTALL_COMPONENTS is honored regardless of platform, not just on
+# WSL2 -- this is also how the companion's own self-update feature
+# re-invokes this exact script to install a specific native component
+# (see internal/companion/selfupdate.go) on whatever host it's actually
+# running on, WSL2 or not. is_wsl2 only decides the *default*,
+# no-env-vars-set behavior: an interactive multi-component prompt there,
+# vs. the original companion-only install everywhere else.
+elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2; then
   components=$(prompt_components)
   case ",$components," in *,aggregator,*) install_aggregator_native ;; esac
   case ",$components," in *,agent,*) install_agent_native ;; esac

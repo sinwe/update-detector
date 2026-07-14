@@ -209,6 +209,22 @@ func TestApplyRecheckSkipsAptAndTriggersRecheck(t *testing.T) {
 	}
 }
 
+func TestApplySelfUpdateSkipsAptAndLocalValidation(t *testing.T) {
+	// No writeFakeAptGet, and the local status server would reject a
+	// packages-type action for an empty pending list -- if this
+	// incorrectly fell through to the normal apt-get path, it would fail
+	// closed on one of those, catching the bug implicitly.
+	writeFakeInstallSh(t, filepath.Join(t.TempDir(), "calls.log"), 0)
+	srv, _ := recheckTrackingServer(t, checker.Status{})
+
+	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{
+		ID: "act1", Type: aggregator.ActionSelfUpdate, Component: "companion", TargetVersion: "v0.11.0",
+	})
+	if !result.Success {
+		t.Fatalf("expected success, got %#v", result)
+	}
+}
+
 func TestApplyRejectionDoesNotTriggerRecheck(t *testing.T) {
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{
 		Packages: checker.PackageInfo{Upgrades: []checker.PackageUpgrade{{Name: "vim"}}},
