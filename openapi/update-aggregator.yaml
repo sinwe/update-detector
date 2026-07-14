@@ -280,6 +280,114 @@ paths:
         "409":
           description: No companion currently connected for this agent, or this agent already has an unresolved action in flight
 
+  /admin/agents/{id}/self-update:
+    post:
+      summary: Trigger a self-update of the agent, aggregator, or companion on one host
+      description: >
+        Gated by the same shared secret as apply -- self-update is at
+        least as high-stakes, since updating the aggregator restarts the
+        process serving this very request. Rejects (409) any
+        component other than "aggregator" whose target_version is newer
+        than this aggregator's own currently-running version, enforced
+        server-side rather than just hidden in the UI, to avoid the kind
+        of protocol confusion a newer agent talking to an older
+        aggregator can cause. Relayed through the connected companion the
+        same way apply is; Docker-based components are pulled and pinned
+        to the exact target_version rather than whatever the image's
+        existing tag currently resolves to.
+      operationId: selfUpdateAgentAction
+      security:
+        - adminApplySecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SelfUpdateRequest"
+      responses:
+        "202":
+          description: Action accepted and pushed to the connected companion
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action_id:
+                    type: string
+        "400":
+          description: Invalid component, missing target_version, or target_version doesn't parse
+        "403":
+          description: Missing or invalid X-Admin-Apply-Secret
+        "404":
+          description: Unknown agent id, or agent not approved
+        "409":
+          description: No companion currently connected for this agent, this agent already has an unresolved action in flight, or target_version is newer than the aggregator's own version for a non-aggregator component
+        "501":
+          description: Self-update is disabled (ADMIN_APPLY_SHARED_SECRET not configured)
+
+  /admin/self-update-channel:
+    post:
+      summary: Switch which release channel "latest available" self-update checks consider
+      description: >
+        Overrides SELF_UPDATE_INCLUDE_PRERELEASE at runtime and refreshes
+        immediately, so a pre-release cut can be tested against a live
+        fleet without editing the aggregator's env and restarting it.
+        Resets back to SELF_UPDATE_INCLUDE_PRERELEASE's own value on the
+        next aggregator restart, same as the version cache itself.
+      operationId: setSelfUpdateChannel
+      security:
+        - adminApplySecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SelfUpdateChannelRequest"
+      responses:
+        "200":
+          description: Channel switched (refresh_error is present if the immediate refresh failed, but the switch itself still took effect)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  include_prerelease:
+                    type: boolean
+                  refresh_error:
+                    type: string
+        "403":
+          description: Missing or invalid X-Admin-Apply-Secret
+        "501":
+          description: Self-update is disabled (ADMIN_APPLY_SHARED_SECRET not configured, or no selfupdate.Client configured at all)
+
+  /healthz:
+    get:
+      summary: Liveness/version check
+      description: >
+        Polled by the admin page's Jenkins-style banner after triggering a
+        self-update of the aggregator itself, to know when it's actually
+        back up and confirm which version it's now running.
+      operationId: getHealthz
+      responses:
+        "200":
+          description: Aggregator is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  version:
+                    type: string
+
   /widgets/summary:
     get:
       summary: Fleet-wide totals for a Homepage "Custom API" widget
@@ -394,11 +502,18 @@ components:
           type: string
         type:
           type: string
-          enum: [packages, upgrade, full-upgrade, recheck]
+          enum: [packages, upgrade, full-upgrade, recheck, self-update]
         packages:
           type: array
           items:
             type: string
+        component:
+          type: string
+          enum: [agent, aggregator, companion]
+          description: Set only when type=self-update.
+        target_version:
+          type: string
+          description: Set only when type=self-update.
         created_at:
           type: string
           format: date-time
@@ -426,6 +541,24 @@ components:
           items:
             type: string
           description: Required (and non-empty) when type=packages; ignored otherwise.
+
+    SelfUpdateRequest:
+      type: object
+      required: [component, target_version]
+      properties:
+        component:
+          type: string
+          enum: [agent, aggregator, companion]
+        target_version:
+          type: string
+          example: v0.11.0
+
+    SelfUpdateChannelRequest:
+      type: object
+      required: [include_prerelease]
+      properties:
+        include_prerelease:
+          type: boolean
 
     EnrollRequest:
       type: object

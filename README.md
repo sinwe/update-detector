@@ -504,13 +504,17 @@ release (`SELF_UPDATE_CHECK_INTERVAL`, default 24h) and surfaces it on
 each host row whose companion is connected and reports an older version.
 Applying one works exactly like a package apply — pushed to that host's
 companion over the same SSE connection, gated by the same
-`ADMIN_APPLY_SHARED_SECRET`/`X-Admin-Apply-Secret` — and the companion
-executes it the same way `install.sh` or `docker compose pull && up -d`
-would by hand: native components get a fresh binary swapped in and their
-systemd unit restarted; Docker-based ones get `docker compose pull && up
--d` for that service, using the exact compose file/working directory
-Docker Compose itself recorded when the container was created (so it
-respects whatever `.env`, volumes, etc. you're actually running).
+`ADMIN_APPLY_SHARED_SECRET`/`X-Admin-Apply-Secret`. Native components get
+a fresh binary swapped in (via `install.sh`) and their systemd unit
+restarted. Docker-based ones pull the *exact* requested version's image,
+retag it locally onto whatever tag the container's own compose file
+already references (usually `:latest`), then `docker compose up -d` for
+that service — deliberately not a plain `docker compose pull`, which
+would just re-fetch whatever `:latest` currently points to on the
+registry rather than the version actually requested. Everything runs
+against the exact compose file/working directory Docker Compose itself
+recorded when the container was created (so it respects whatever `.env`,
+volumes, etc. you're actually running).
 
 **The aggregator is always the dependency root.** Agent/companion can
 never be updated past the aggregator's own currently-running version —
@@ -544,7 +548,12 @@ own row.
 Set `SELF_UPDATE_INCLUDE_PRERELEASE=true` on the aggregator to also
 surface `-rcN` tags as "available" (always picking the single highest
 tag across both real releases and pre-releases) — off by default, since
-most fleets should only ever be offered stable releases.
+most fleets should only ever be offered stable releases. The admin page
+also has a live toggle for this (release-only vs. include pre-releases)
+that takes effect immediately without a restart — handy for testing a
+pre-release cut against a live fleet — but it resets back to whatever
+`SELF_UPDATE_INCLUDE_PRERELEASE` says on every aggregator restart, same
+as the version cache itself.
 
 ## API reference
 
