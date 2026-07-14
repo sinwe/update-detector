@@ -94,26 +94,50 @@ func nativeUnitPresent(name string) bool {
 // "update-detector-companion" image either direction), returning both its
 // ID and its exact image reference. Returns "", "", nil if docker isn't
 // on PATH at all, or if nothing matches.
+//
+// Deliberately not "docker ps --format {{.Image}}": that field silently
+// falls back to printing a bare image ID once the tag a container was
+// created from has since been reassigned to a different image (e.g. a
+// later `docker pull` of the same :latest this repo's own compose files
+// pin, which release.yml moves on every tag push including -rcN builds)
+// -- confirmed live against a real long-running container whose `docker
+// ps` showed a raw hex ID while `docker inspect .Config.Image` still
+// correctly reported "forgejo.winar.to/winarto/update-detector:latest".
+// docker inspect's Config.Image is the reference the container was
+// actually created with and never silently changes, so it's used
+// instead -- one extra call, but a single "docker inspect id1 id2 ..."
+// across every candidate rather than one call per container.
 func dockerContainerFor(ctx context.Context, name string) (id, image string, err error) {
 	if _, lookErr := exec.LookPath("docker"); lookErr != nil {
 		return "", "", nil
 	}
 
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}} {{.Image}}")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if runErr := cmd.Run(); runErr != nil {
+	psCmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}}")
+	var psOut bytes.Buffer
+	psCmd.Stdout = &psOut
+	if runErr := psCmd.Run(); runErr != nil {
 		return "", "", fmt.Errorf("deploykind: docker ps: %w", runErr)
 	}
+	ids := strings.Fields(psOut.String())
+	if len(ids) == 0 {
+		return "", "", nil
+	}
+
+	inspectCmd := exec.CommandContext(ctx, "docker", append([]string{"inspect", "--format", "{{.Config.Image}}"}, ids...)...)
+	var inspectOut bytes.Buffer
+	inspectCmd.Stdout = &inspectOut
+	if runErr := inspectCmd.Run(); runErr != nil {
+		return "", "", fmt.Errorf("deploykind: docker inspect: %w", runErr)
+	}
+	images := strings.Split(strings.TrimRight(inspectOut.String(), "\n"), "\n")
 
 	pattern := regexp.MustCompile(`(^|/)` + regexp.QuoteMeta(name) + `(:|$)`)
-	for _, line := range strings.Split(out.String(), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
+	for i, containerImage := range images {
+		if i >= len(ids) {
+			break
 		}
-		if fields[1] != "" && pattern.MatchString(fields[1]) {
-			return fields[0], fields[1], nil
+		if containerImage != "" && pattern.MatchString(containerImage) {
+			return ids[i], containerImage, nil
 		}
 	}
 	return "", "", nil

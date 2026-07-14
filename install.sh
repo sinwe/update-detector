@@ -198,10 +198,23 @@ native_unit_present() {
 # "(^|/)update-detector(:|$)" -- see install_companion's own discovery
 # awk below for why the anchoring matters (so "update-detector" can't
 # accidentally match an "update-detector-companion" image).
+#
+# Deliberately not "docker ps --format {{.Image}}": that field silently
+# falls back to printing a bare image ID once a container's original tag
+# has been reassigned to a different image (e.g. a later `docker pull`
+# of the same :latest this repo's own compose files pin, moved every
+# time release.yml pushes a new tag) -- confirmed live against a real
+# long-running container whose `docker ps` showed a raw hex ID while
+# `docker inspect .Config.Image` still correctly reported its real tag.
+# Config.Image is the reference the container was actually created with
+# and never silently changes, so each candidate is inspected instead.
 docker_container_for() {
   command -v docker >/dev/null 2>&1 || return 0
-  docker ps -a --format '{{.ID}} {{.Image}}' 2>/dev/null \
-    | awk -v pat="$1" '$2 ~ pat {print $1; exit}'
+  {
+    for id in $(docker ps -a --format '{{.ID}}' 2>/dev/null); do
+      echo "$id $(docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null)"
+    done
+  } | awk -v pat="$1" '$2 ~ pat {print $1; exit}'
 }
 
 install_agent_native() {
@@ -344,8 +357,16 @@ install_companion() {
   # even when it didn't: the "neither found" case below gives a clear
   # error either way).
   if command -v docker >/dev/null 2>&1; then
-    container_id=$(docker ps --format '{{.ID}} {{.Image}}' 2>/dev/null \
-      | awk '$2 ~ /(^|\/)update-detector(:|$)/ {print $1; exit}') || container_id=""
+    # Not "docker ps --format {{.Image}}" -- see docker_container_for's
+    # own comment above for why: that field goes stale (falls back to a
+    # bare image ID) once this container's tag has since been reassigned
+    # to a different image, which is exactly what happens to a
+    # long-running agent pinned to :latest across later release pushes.
+    container_id=$(
+      for cid in $(docker ps --format '{{.ID}}' 2>/dev/null); do
+        echo "$cid $(docker inspect --format '{{.Config.Image}}' "$cid" 2>/dev/null)"
+      done | awk '$2 ~ /(^|\/)update-detector(:|$)/ {print $1; exit}'
+    ) || container_id=""
     if [ -n "$container_id" ]; then
       docker_found=1
       if [ "$native_found" = "1" ]; then

@@ -246,10 +246,18 @@ func TestSelfUpdateAgentDockerDetected(t *testing.T) {
 	writeFakeDocker(t, `
 case "$1" in
   ps)
-    echo "cid123 forgejo.winar.to/winarto/update-detector:v0.9.0"
+    echo "cid123"
     ;;
   inspect)
     case "$3" in
+      '{{.Config.Image}}')
+        shift 3
+        for id in "$@"; do
+          case "$id" in
+            cid123) echo "forgejo.winar.to/winarto/update-detector:v0.9.0" ;;
+          esac
+        done
+        ;;
       *.project.config_files*) echo "`+composeDir+`/docker-compose.yml" ;;
       *.project.working_dir*) echo "`+composeDir+`" ;;
       *.service*) echo "update-detector" ;;
@@ -316,9 +324,17 @@ func TestSelfUpdateAmbiguousNotesBothPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFakeDocker(t, `
-if [ "$1" = "ps" ]; then
-  echo "cid123 forgejo.winar.to/winarto/update-detector:v0.9.0"
-fi
+case "$1" in
+  ps) echo "cid123" ;;
+  inspect)
+    shift 3
+    for id in "$@"; do
+      case "$id" in
+        cid123) echo "forgejo.winar.to/winarto/update-detector:v0.9.0" ;;
+      esac
+    done
+    ;;
+esac
 `)
 	writeFakeInstallSh(t, filepath.Join(t.TempDir(), "calls.log"), 0)
 

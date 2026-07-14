@@ -58,10 +58,18 @@ func TestDockerContainerForNoDockerOnPath(t *testing.T) {
 
 func TestDockerContainerForMatchesAnchored(t *testing.T) {
 	writeFakeDocker(t, `
-if [ "$1" = "ps" ]; then
-  echo "aaa111 forgejo.winar.to/winarto/update-detector-companion:v0.9.0"
-  echo "bbb222 forgejo.winar.to/winarto/update-detector:v0.9.0"
-fi
+case "$1" in
+  ps) echo "aaa111"; echo "bbb222" ;;
+  inspect)
+    shift 3
+    for id in "$@"; do
+      case "$id" in
+        aaa111) echo "forgejo.winar.to/winarto/update-detector-companion:v0.9.0" ;;
+        bbb222) echo "forgejo.winar.to/winarto/update-detector:v0.9.0" ;;
+      esac
+    done
+    ;;
+esac
 `)
 	id, image, err := dockerContainerFor(context.Background(), "update-detector")
 	if err != nil {
@@ -77,9 +85,17 @@ fi
 
 func TestDockerContainerForNoMatch(t *testing.T) {
 	writeFakeDocker(t, `
-if [ "$1" = "ps" ]; then
-  echo "aaa111 some-other-image:latest"
-fi
+case "$1" in
+  ps) echo "aaa111" ;;
+  inspect)
+    shift 3
+    for id in "$@"; do
+      case "$id" in
+        aaa111) echo "some-other-image:latest" ;;
+      esac
+    done
+    ;;
+esac
 `)
 	id, image, err := dockerContainerFor(context.Background(), "update-detector")
 	if err != nil {
@@ -126,9 +142,17 @@ func TestDetectEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFakeDocker(t, `
-if [ "$1" = "ps" ]; then
-  echo "aaa111 forgejo.winar.to/winarto/update-aggregator:v0.9.0"
-fi
+case "$1" in
+  ps) echo "aaa111" ;;
+  inspect)
+    shift 3
+    for id in "$@"; do
+      case "$id" in
+        aaa111) echo "forgejo.winar.to/winarto/update-aggregator:v0.9.0" ;;
+      esac
+    done
+    ;;
+esac
 `)
 
 	d, err := Detect(context.Background(), "update-detector")
@@ -145,6 +169,46 @@ fi
 	}
 	if d.Native || d.DockerContainerID != "aaa111" {
 		t.Fatalf("got %#v, want docker-only (id=aaa111) for update-aggregator", d)
+	}
+}
+
+// TestDockerContainerForSurvivesTagDrift is the regression test for a
+// real bug caught live: `docker ps --format '{{.Image}}'` silently falls
+// back to printing a bare image ID once a container's original tag has
+// been reassigned to a different image on the registry (e.g. a later
+// `docker pull` under the same :latest this repo's own compose files
+// pin, moved every time release.yml pushes a new tag). This confirmed
+// live against a real long-running container: `docker ps` showed a raw
+// hex ID while `docker inspect .Config.Image` still correctly reported
+// its actual "...update-detector:latest" reference. Detection must use
+// the latter, not the former, or it silently stops finding any container
+// that hasn't been recreated since the tag last moved.
+func TestDockerContainerForSurvivesTagDrift(t *testing.T) {
+	writeFakeDocker(t, `
+case "$1" in
+  ps) echo "aaa111" ;;
+  inspect)
+    shift 3
+    for id in "$@"; do
+      case "$id" in
+        # docker ps itself would show a bare ID like this for aaa111 --
+        # dockerContainerFor must never ask docker ps for the image at
+        # all, only docker inspect, which still resolves it correctly.
+        aaa111) echo "forgejo.winar.to/winarto/update-detector:latest" ;;
+      esac
+    done
+    ;;
+esac
+`)
+	id, image, err := dockerContainerFor(context.Background(), "update-detector")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "aaa111" {
+		t.Fatalf("got id %q, want aaa111", id)
+	}
+	if image != "forgejo.winar.to/winarto/update-detector:latest" {
+		t.Fatalf("got image %q, want the tag docker inspect reports, not whatever docker ps would have shown", image)
 	}
 }
 
