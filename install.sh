@@ -141,7 +141,18 @@ download_binary() {
 cache_install_sh_for_companion() {
   echo "install.sh: caching a copy of install.sh for the companion's own self-update use..."
   mkdir -p "$(dirname "$CACHED_INSTALL_SH")"
-  if curl -fsSL "$INSTALL_SH_RAW_URL" -o "$CACHED_INSTALL_SH.new"; then
+  # Pinned to the exact tag just installed/self-updated to, not main's
+  # raw content -- fetching main here would cache whatever install.sh
+  # happens to be on main *right now*, which can be arbitrarily far
+  # behind (or, on a release branch not yet merged, entirely missing
+  # fixes) the version actually running. This keeps the cached script
+  # self-consistent with the release it was cached alongside.
+  if [ "$INSTALL_VERSION" = "latest" ]; then
+    raw_url="$INSTALL_SH_RAW_URL"
+  else
+    raw_url="https://forgejo.winar.to/winarto/update-detector/raw/tag/$INSTALL_VERSION/install.sh"
+  fi
+  if curl -fsSL "$raw_url" -o "$CACHED_INSTALL_SH.new"; then
     chmod 0755 "$CACHED_INSTALL_SH.new"
     mv "$CACHED_INSTALL_SH.new" "$CACHED_INSTALL_SH"
   else
