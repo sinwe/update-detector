@@ -346,6 +346,29 @@ curl -X POST http://aggregator-host:9090/admin/agents/<id>/apply \
 # type is one of: packages (requires "packages"), upgrade, full-upgrade
 ```
 
+**`upgrade` vs. `full-upgrade` — which one actually clears what's
+pending depends on OS flavor**, because of how each one's checker detects
+"pending" in the first place:
+
+- **Ubuntu** hosts detect pending packages via `apt-check`/`apt list
+  --upgradable` (`internal/checker/ubuntu/packages.go`) — exactly the set
+  plain `apt-get upgrade` (`type: upgrade`) can resolve. `upgrade` alone
+  should normally clear everything shown as pending.
+- **Debian / Raspberry Pi OS** hosts detect pending packages by
+  *simulating* `apt-get dist-upgrade` (`internal/checker/debian/packages.go`)
+  — a broader set that can include packages plain `upgrade` will hold
+  back (skip without erroring) because resolving them needs to install a
+  new dependency or remove an obsolete one. Only `full-upgrade` clears
+  those.
+
+Rule of thumb regardless of flavor: run `upgrade` first — it's the safer
+one, since it never adds or removes packages, only ever a risk-free
+version bump. Then check whether anything's still pending (**Force
+recheck** gives an immediate answer instead of waiting for the next
+`CHECK_INTERVAL`). If so — a real possibility on Debian/Pi given how
+detection works there, less likely but not impossible on Ubuntu — that's
+the signal to run `full-upgrade` to finish the job.
+
 If you *do* already run a reverse-proxy auth setup (Authentik or
 similar), you can point it at the aggregator and have it inject this same
 header itself after login instead — the aggregator checks the header
