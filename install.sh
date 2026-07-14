@@ -27,6 +27,20 @@
 # Set INSTALL_VERSION to pin a release instead of "latest". On WSL2, set
 # INSTALL_COMPONENTS (comma-separated: aggregator,agent,companion) to skip
 # the interactive prompt for scripted/non-interactive use.
+#
+# To remove a native install instead, either pipe with an explicit
+# argument --
+#
+#   curl -fsSL .../install.sh | sudo sh -s -- --uninstall
+#
+# -- (the `-s --` is required: plain `sh --uninstall` treats that as a
+# script *pathname*, not stdin+args, and will not work) or, for
+# scripted/non-interactive use, set UNINSTALL_COMPONENTS the same way as
+# INSTALL_COMPONENTS above -- no special invocation needed for that one.
+# Either way, this only ever touches a *native* install it can find unit
+# files for; a Docker-based agent/aggregator is left alone with a warning,
+# since install.sh never created that deployment and has no compose file
+# path or volume names to safely act on.
 
 set -eu
 
@@ -124,6 +138,39 @@ ensure_system_user() {
   if ! id "$1" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$1"
   fi
+}
+
+# remove_system_user NAME -> symmetric counterpart to ensure_system_user,
+# for uninstall. Guarded the same way (id check first) so removing an
+# already-clean or never-created user is a safe no-op under set -eu,
+# rather than aborting the rest of an uninstall.
+remove_system_user() {
+  if id "$1" >/dev/null 2>&1; then
+    userdel "$1"
+  fi
+}
+
+# native_unit_present NAME -> true if a NAME.service unit file exists on
+# this host, regardless of its enabled/active state -- a stopped unit
+# still counts as "installed" for uninstall purposes.
+native_unit_present() {
+  [ -f "/etc/systemd/system/$1.service" ]
+}
+
+# docker_container_for PATTERN -> prints the first container ID (running
+# or stopped -- unlike install_companion's own discovery below, which
+# deliberately only looks at running containers since it needs a *live*
+# agent to wire a new companion against; this is for uninstall's "is
+# anything here at all" question instead, a different purpose, so it's
+# a separate helper rather than reusing that code) whose image matches
+# PATTERN, or nothing. Callers must pass an anchored pattern, e.g.
+# "(^|/)update-detector(:|$)" -- see install_companion's own discovery
+# awk below for why the anchoring matters (so "update-detector" can't
+# accidentally match an "update-detector-companion" image).
+docker_container_for() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker ps -a --format '{{.ID}} {{.Image}}' 2>/dev/null \
+    | awk -v pat="$1" '$2 ~ pat {print $1; exit}'
 }
 
 install_agent_native() {
@@ -375,6 +422,107 @@ EOF
   echo "install.sh: done. Check status with: systemctl status update-detector-companion"
 }
 
+# warn_docker_not_managed NAME PATTERN -> if a Docker container matching
+# PATTERN exists (running or stopped), print a warning that install.sh
+# won't touch it -- it never created that deployment, so it has no
+# compose file path or volume names to safely act on, unlike a native
+# systemd unit it fully owns end to end. Covers both the Docker-only case
+# and the ambiguous both-native-and-Docker case (called unconditionally
+# after any native teardown below).
+warn_docker_not_managed() {
+  container_id=$(docker_container_for "$2")
+  if [ -n "$container_id" ]; then
+    echo "install.sh: found a Docker container for $1 (id=$container_id) --" >&2
+    echo "  install.sh doesn't manage Docker deployments it didn't create." >&2
+    echo "  Remove it yourself, e.g. \`docker compose down\` from wherever" >&2
+    echo "  that service's docker-compose.yml lives." >&2
+  fi
+}
+
+uninstall_agent() {
+  native=0
+  native_unit_present update-detector && native=1
+
+  if [ "$native" = "0" ]; then
+    echo "install.sh: no native update-detector (agent) install found"
+  else
+    echo "install.sh: removing update-detector (agent)..."
+    # Extracted inside a subshell, not a top-level "." source -- the
+    # agent's and aggregator's env files define same-named vars
+    # (LISTEN_ADDR, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID), so sourcing
+    # both at top level in the same run (uninstalling all three) would
+    # let the second clobber the first's values.
+    # shellcheck disable=SC1091
+    agent_state_dir=$( . /etc/default/update-detector 2>/dev/null; printf '%s\n' "${AGENT_IDENTITY_FILE:-}" )
+    agent_state_dir=$(dirname "$agent_state_dir")
+
+    systemctl disable --now update-detector 2>/dev/null || true
+    rm -f /etc/systemd/system/update-detector.service
+    systemctl daemon-reload
+    rm -f /usr/local/bin/update-detector
+    rm -f /etc/default/update-detector
+    # dirname on an empty/malformed path returns "." or "/" -- guard
+    # against both, or a degenerate case turns into `rm -rf .` as root.
+    if [ -n "$agent_state_dir" ] && [ "$agent_state_dir" != "." ] && [ "$agent_state_dir" != "/" ]; then
+      echo "install.sh: removing $agent_state_dir (includes this agent's aggregator identity)"
+      rm -rf "$agent_state_dir"
+    fi
+    remove_system_user update-detector
+  fi
+
+  warn_docker_not_managed update-detector '(^|/)update-detector(:|$)'
+
+  if native_unit_present update-detector-companion; then
+    echo "install.sh: note: update-detector-companion is still installed on this" >&2
+    echo "  host and depends on the agent -- consider uninstalling it too." >&2
+  fi
+}
+
+uninstall_aggregator() {
+  native=0
+  native_unit_present update-aggregator && native=1
+
+  if [ "$native" = "0" ]; then
+    echo "install.sh: no native update-aggregator install found"
+  else
+    echo "install.sh: removing update-aggregator..."
+    # shellcheck disable=SC1091
+    agg_data_dir=$( . /etc/default/update-aggregator 2>/dev/null; printf '%s\n' "${REGISTRY_FILE:-}" )
+    agg_data_dir=$(dirname "$agg_data_dir")
+
+    systemctl disable --now update-aggregator 2>/dev/null || true
+    rm -f /etc/systemd/system/update-aggregator.service
+    systemctl daemon-reload
+    rm -f /usr/local/bin/update-aggregator
+    rm -f /etc/default/update-aggregator
+    if [ -n "$agg_data_dir" ] && [ "$agg_data_dir" != "." ] && [ "$agg_data_dir" != "/" ]; then
+      echo "install.sh: removing $agg_data_dir (includes the fleet registry -- all enrolled/approved hosts)"
+      rm -rf "$agg_data_dir"
+    fi
+    remove_system_user update-aggregator
+  fi
+
+  warn_docker_not_managed update-aggregator '(^|/)update-aggregator(:|$)'
+}
+
+uninstall_companion() {
+  if ! native_unit_present update-detector-companion; then
+    echo "install.sh: no update-detector-companion install found"
+    return
+  fi
+
+  echo "install.sh: removing update-detector-companion..."
+  # Companion is always native, never containerized (needs real root to
+  # run apt-get) -- no Docker case to check here. It also has no
+  # separate env file, state dir, or dedicated system user: its unit
+  # sets Environment= directly and it runs as root (see
+  # install_companion above).
+  systemctl disable --now update-detector-companion 2>/dev/null || true
+  rm -f /etc/systemd/system/update-detector-companion.service
+  systemctl daemon-reload
+  rm -f /usr/local/bin/update-detector-companion
+}
+
 # prompt_components -> prints a comma-separated list of components to
 # install (aggregator,agent,companion), read from INSTALL_COMPONENTS if
 # set (for scripted/non-interactive use), otherwise prompted interactively.
@@ -415,7 +563,79 @@ prompt_components() {
   esac
 }
 
-if is_wsl2; then
+# prompt_uninstall_components -> like prompt_components, but for
+# uninstall: prints what was actually detected (native or Docker) before
+# offering the menu, and prints nothing (not exit -- this runs inside a
+# command substitution, where exit would only terminate that subshell,
+# not the script) if nothing is found anywhere.
+prompt_uninstall_components() {
+  if [ -n "${UNINSTALL_COMPONENTS:-}" ]; then
+    echo "$UNINSTALL_COMPONENTS"
+    return
+  fi
+
+  found=""
+  agg_docker_id=$(docker_container_for '(^|/)update-aggregator(:|$)') || agg_docker_id=""
+  if native_unit_present update-aggregator || [ -n "$agg_docker_id" ]; then
+    found="$found aggregator"
+  fi
+  agent_docker_id=$(docker_container_for '(^|/)update-detector(:|$)') || agent_docker_id=""
+  if native_unit_present update-detector || [ -n "$agent_docker_id" ]; then
+    found="$found agent"
+  fi
+  if native_unit_present update-detector-companion; then
+    found="$found companion"
+  fi
+
+  if [ -z "$found" ]; then
+    echo "install.sh: --uninstall requested, but no update-detector components" >&2
+    echo "  (native or Docker) were found on this host." >&2
+    return
+  fi
+
+  if [ ! -r /dev/tty ]; then
+    echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
+    echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly to proceed non-interactively." >&2
+    return
+  fi
+
+  echo "Found installed:$found" >&2
+  echo "Which would you like to uninstall?" >&2
+  echo >&2
+  echo "  1) aggregator" >&2
+  echo "  2) detector (agent)" >&2
+  echo "  3) companion" >&2
+  echo "  4) all three" >&2
+  printf "Choose [1-4]: " >&2
+  read -r choice < /dev/tty
+  case "$choice" in
+    1) echo "aggregator" ;;
+    2) echo "agent" ;;
+    3) echo "companion" ;;
+    4) echo "aggregator,agent,companion" ;;
+    *) echo "install.sh: invalid choice: $choice" >&2; exit 1 ;;
+  esac
+}
+
+uninstall_requested=0
+if [ "${1:-}" = "--uninstall" ] || [ -n "${UNINSTALL_COMPONENTS:-}" ]; then
+  uninstall_requested=1
+fi
+
+if [ "$uninstall_requested" = "1" ]; then
+  components=$(prompt_uninstall_components)
+  if [ -z "$components" ]; then
+    echo "install.sh: nothing to uninstall" >&2
+    exit 0
+  fi
+  # Reverse of the install order below -- companion first, so
+  # uninstall_agent's "companion still installed" note only fires for the
+  # genuinely useful case (removing just the agent while leaving
+  # companion installed on purpose), not as noise during a full teardown.
+  case ",$components," in *,companion,*) uninstall_companion ;; esac
+  case ",$components," in *,agent,*) uninstall_agent ;; esac
+  case ",$components," in *,aggregator,*) uninstall_aggregator ;; esac
+elif is_wsl2; then
   components=$(prompt_components)
   case ",$components," in *,aggregator,*) install_aggregator_native ;; esac
   case ",$components," in *,agent,*) install_agent_native ;; esac
