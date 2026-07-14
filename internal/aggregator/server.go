@@ -151,10 +151,11 @@ func (s *Server) authenticateCompanion(w http.ResponseWriter, r *http.Request) (
 	return rec, true
 }
 
-// handleCompanionStream is the SSE endpoint a host-native companion holds
-// open long-term: one Action at a time, pushed down whenever an admin
-// triggers an apply for this agent. Plain HTTP/1.1, not HTTP/2, to avoid
-// TLS/ALPN complexity for what's meant to run over a private network.
+// handleCompanionStream is the SSE endpoint a host-native companion (or,
+// when no companion is running, the agent itself) holds open long-term:
+// one Action at a time, pushed down whenever an admin triggers an action
+// for this agent. Plain HTTP/1.1, not HTTP/2, to avoid TLS/ALPN complexity
+// for what's meant to run over a private network.
 func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -164,6 +165,19 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// hub.Connect must be called -- and its result checked -- before any
+	// header is written: a status code can't be un-written once sent, and
+	// a rejected connect (companion already holds this agent's slot, and
+	// this request is from the lower-priority agent) needs to come back
+	// as a plain 409, never an SSE upgrade.
+	kind := ParseClientKind(r.Header.Get("X-Client-Kind"))
+	result := s.hub.Connect(rec.ID, kind, r.Header.Get("X-Companion-Version"))
+	if !result.Accepted {
+		http.Error(w, "superseded: a companion is already connected for this agent", http.StatusConflict)
+		return
+	}
+	defer s.hub.Disconnect(rec.ID, result.Ch)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -177,9 +191,6 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch := s.hub.Connect(rec.ID, r.Header.Get("X-Companion-Version"))
-	defer s.hub.Disconnect(rec.ID, ch)
-
 	heartbeat := time.NewTicker(30 * time.Second)
 	defer heartbeat.Stop()
 
@@ -187,12 +198,19 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-result.Superseded:
+			// A companion just connected and preempted this (necessarily
+			// agent-kind) stream -- one last distinguishing frame so the
+			// client knows not to hot-loop reconnecting, then tear down.
+			io.WriteString(w, "event: superseded\ndata: {}\n\n")
+			flusher.Flush()
+			return
 		case <-heartbeat.C:
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
-		case action := <-ch:
+		case action := <-result.Ch:
 			payload, err := json.Marshal(action)
 			if err != nil {
 				continue

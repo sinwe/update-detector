@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"update-detector/internal/agentstream"
+	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
 	"update-detector/internal/checker/debian"
@@ -87,8 +89,10 @@ func run() error {
 
 	var aggClient *aggregatorclient.Client
 	var companionSrv *companiontoken.Server
+	var identity aggregatorclient.Identity
 	if cfg.AggregatorURL != "" {
-		identity, err := aggregatorclient.LoadOrCreateIdentity(cfg.AgentIdentityFile)
+		var err error
+		identity, err = aggregatorclient.LoadOrCreateIdentity(cfg.AgentIdentityFile)
 		if err != nil {
 			return err
 		}
@@ -137,6 +141,29 @@ func run() error {
 			log.Printf("http server: %v", err)
 		}
 	}()
+
+	if aggClient != nil {
+		// Holds the aggregator's stream connection whenever no companion
+		// is running (or hasn't connected yet) -- the aggregator's
+		// CompanionHub always lets a companion preempt this, since only
+		// it can carry out apply-type actions; this only ever receives
+		// (and can only ever receive, per that same server-side gate)
+		// ActionRecheck. Handled in-process, unlike the companion's own
+		// loopback HTTP call, since the agent already is that process.
+		onAction := func(action aggregator.Action) {
+			if action.Type != aggregator.ActionRecheck {
+				log.Printf("aggregator: ignoring unexpected action type %q on agent stream", action.Type)
+				return
+			}
+			srv.TriggerRecheck()
+			resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := aggClient.ReportActionResult(resultCtx, action.ID, true, "recheck triggered"); err != nil {
+				log.Printf("aggregator: reporting recheck result for %s: %v", action.ID, err)
+			}
+			cancel()
+		}
+		go agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindAgent, onAction)
+	}
 
 	if aggClient != nil {
 		enrollCtx, cancel := context.WithTimeout(ctx, 15*time.Second)

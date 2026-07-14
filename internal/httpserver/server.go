@@ -79,6 +79,21 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.Version})
 }
 
+// TriggerRecheck queues an out-of-band detection cycle, coalescing with
+// one already queued rather than blocking or dropping the request. Exposed
+// so the agent's own in-process aggregator-stream handler can trigger a
+// recheck directly (no loopback HTTP round-trip needed, unlike the
+// companion which is a separate process and must go through
+// handleRecheck below).
+func (s *Server) TriggerRecheck() {
+	select {
+	case s.recheck <- struct{}{}:
+	default:
+		// One's already queued -- this request coalesces with it rather
+		// than blocking or being silently dropped.
+	}
+}
+
 // handleRecheck queues an out-of-band detection cycle and returns
 // immediately -- the actual check (up to 5 minutes, per its own internal
 // timeout) runs asynchronously on the main loop, not on this request.
@@ -87,12 +102,7 @@ func (s *Server) handleRecheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	select {
-	case s.recheck <- struct{}{}:
-	default:
-		// One's already queued -- this request coalesces with it rather
-		// than blocking or being silently dropped.
-	}
+	s.TriggerRecheck()
 	w.WriteHeader(http.StatusAccepted)
 }
 

@@ -364,6 +364,20 @@ it report sooner), so use it any time the numbers look stale and you
 don't want to wait for the next `CHECK_INTERVAL`, without needing to
 apply a package first just to trigger a refresh.
 
+**Force recheck works even without a companion installed.** The agent
+itself can hold the same aggregator connection the companion normally
+does — whichever of the two is actually running holds it, and ownership
+transfers automatically as they start and stop, so there's never more
+than one connection per host. A companion always takes over from the
+agent the moment it starts (it needs the connection more: it's the only
+one that can actually apply anything), and the agent reclaims it
+automatically if the companion later stops or crashes. The admin page
+shows which one currently holds it ("connected" vs. "connected (via
+agent)"). **Apply still strictly requires a real companion** — an
+agent-only connection can only ever carry a recheck, never an apply, no
+matter what's requested; the apply buttons and per-package selector
+simply don't appear until a companion is actually connected.
+
 **Every version is visible on the admin page** — the aggregator's own
 build version is in the page header; each approved host shows its
 agent's version under "Last report" and its companion's version next to

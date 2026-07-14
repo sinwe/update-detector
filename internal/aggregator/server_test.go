@@ -335,6 +335,161 @@ func TestHandleCompanionStreamPushesAction(t *testing.T) {
 	}
 }
 
+// TestHandleCompanionStreamMissingKindHeaderDefaultsToCompanion locks in
+// backward compat: existing companion binaries predate the X-Client-Kind
+// header entirely, and must still be treated as a companion connection
+// (able to receive apply-type actions), not rejected or downgraded.
+func TestHandleCompanionStreamMissingKindHeaderDefaultsToCompanion(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Agent-ID", "a1")
+	req.Header.Set("Authorization", "Bearer tok")
+	// Deliberately no X-Client-Kind at all.
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !s.hub.Connected("a1") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if kind, ok := s.hub.Kind("a1"); !ok || kind != KindCompanion {
+		t.Fatalf("got kind=%q ok=%v, want KindCompanion when the header is absent", kind, ok)
+	}
+}
+
+// TestHandleCompanionStreamAgentRejectedWhileCompanionConnected covers the
+// "existing=companion, new=agent" arbitration rule end-to-end over real
+// HTTP: the agent must get an immediate 409, never an SSE upgrade, and the
+// companion's own connection must be completely unaffected.
+func TestHandleCompanionStreamAgentRejectedWhileCompanionConnected(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Agent-ID", "a1")
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("X-Client-Kind", "companion")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	companionResp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer companionResp.Body.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !s.hub.Connected("a1") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.hub.Connected("a1") {
+		t.Fatal("companion never showed as connected")
+	}
+
+	rec := doJSON(t, s, http.MethodGet, "/companion/stream", nil, map[string]string{
+		"X-Agent-ID": "a1", "Authorization": "Bearer tok", "X-Client-Kind": "agent",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want 409 for an agent connecting while a companion already holds the slot", rec.Code)
+	}
+
+	if kind, ok := s.hub.Kind("a1"); !ok || kind != KindCompanion {
+		t.Fatalf("got kind=%q ok=%v, want the existing companion connection untouched", kind, ok)
+	}
+}
+
+// TestHandleCompanionStreamCompanionPreemptsAgent covers the
+// "existing=agent, new=companion" arbitration rule end-to-end over real
+// HTTP: the agent's stream must receive one final "event: superseded"
+// frame and the slot must flip to companion.
+func TestHandleCompanionStreamCompanionPreemptsAgent(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	agentReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentReq.Header.Set("X-Agent-ID", "a1")
+	agentReq.Header.Set("Authorization", "Bearer tok")
+	agentReq.Header.Set("X-Client-Kind", "agent")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	agentResp, err := client.Do(agentReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentResp.Body.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if kind, ok := s.hub.Kind("a1"); ok && kind == KindAgent {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("agent never showed as connected")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	companionReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	companionReq.Header.Set("X-Agent-ID", "a1")
+	companionReq.Header.Set("Authorization", "Bearer tok")
+	companionReq.Header.Set("X-Client-Kind", "companion")
+	companionResp, err := client.Do(companionReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer companionResp.Body.Close()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		if kind, ok := s.hub.Kind("a1"); ok && kind == KindCompanion {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("companion never took over the slot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	buf := make([]byte, 4096)
+	n, err := agentResp.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(buf[:n]), "event: superseded") {
+		t.Fatalf("expected a superseded frame on the preempted agent stream, got: %q", buf[:n])
+	}
+}
+
 func TestHandleCompanionResult(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
@@ -375,8 +530,8 @@ func TestHandleAdminPageShowsCompanionStatus(t *testing.T) {
 		t.Fatalf("expected no apply UI before a companion connects, got: %s", body)
 	}
 
-	ch := s.hub.Connect("a1", "v0.0.0-test")
-	defer s.hub.Disconnect("a1", ch)
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
 
 	body = adminBody()
 	if strings.Contains(body, "not connected") || !strings.Contains(body, "Upgrade all") {
@@ -387,6 +542,37 @@ func TestHandleAdminPageShowsCompanionStatus(t *testing.T) {
 	body = adminBody()
 	if !strings.Contains(body, "recent actions") || !strings.Contains(body, "upgraded curl") {
 		t.Fatalf("expected recent action result shown, got: %s", body)
+	}
+}
+
+// TestHandleAdminPageAgentOnlyShowsRecheckButNotApply covers the
+// agent-only connection case: Force-recheck must be available (recheck
+// works with either kind), but apply-only controls (Upgrade all, Full
+// upgrade all, per-package apply) must not be, since only a real
+// companion can run apt-get.
+func TestHandleAdminPageAgentOnlyShowsRecheckButNotApply(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	res := s.hub.Connect("a1", KindAgent, "")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+
+	if strings.Contains(body, "not connected") {
+		t.Fatalf("expected a connected label for an agent-only stream, got: %s", body)
+	}
+	if !strings.Contains(body, "Force recheck") {
+		t.Fatalf("expected Force recheck to be available for an agent-only stream, got: %s", body)
+	}
+	if strings.Contains(body, "Upgrade all") || strings.Contains(body, "Full upgrade all") {
+		t.Fatalf("expected no apply UI for an agent-only stream (no companion), got: %s", body)
+	}
+	if !strings.Contains(body, "install companion to enable apply") {
+		t.Fatalf("expected a hint to install the companion, got: %s", body)
 	}
 }
 
@@ -462,8 +648,8 @@ func TestHandleAdminApplyPushesToConnectedCompanion(t *testing.T) {
 	s, reg := newTestServerWithSecret(t, "s3cret")
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
-	ch := s.hub.Connect("a1", "v0.0.0-test")
-	defer s.hub.Disconnect("a1", ch)
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
 
 	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{
 		Type: ActionPackages, Packages: []string{"curl"},
@@ -473,7 +659,7 @@ func TestHandleAdminApplyPushesToConnectedCompanion(t *testing.T) {
 	}
 
 	select {
-	case action := <-ch:
+	case action := <-res.Ch:
 		if action.Type != ActionPackages || len(action.Packages) != 1 || action.Packages[0] != "curl" {
 			t.Fatalf("unexpected action pushed: %#v", action)
 		}
@@ -487,8 +673,8 @@ func TestHandleAdminRecheckNeedsNoSecret(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
-	ch := s.hub.Connect("a1", "v0.0.0-test")
-	defer s.hub.Disconnect("a1", ch)
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
 
 	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/recheck", nil, nil)
 	if rec.Code != http.StatusAccepted {
@@ -496,7 +682,7 @@ func TestHandleAdminRecheckNeedsNoSecret(t *testing.T) {
 	}
 
 	select {
-	case action := <-ch:
+	case action := <-res.Ch:
 		if action.Type != ActionRecheck {
 			t.Fatalf("got action type %q, want recheck", action.Type)
 		}
@@ -527,8 +713,8 @@ func TestHandleAdminApplyRejectsWhenActionInFlight(t *testing.T) {
 	s, reg := newTestServerWithSecret(t, "s3cret")
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
-	ch := s.hub.Connect("a1", "v0.0.0-test")
-	defer s.hub.Disconnect("a1", ch)
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
 	headers := map[string]string{"X-Admin-Apply-Secret": "s3cret"}
 
 	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionUpgrade}, headers)
@@ -543,7 +729,7 @@ func TestHandleAdminApplyRejectsWhenActionInFlight(t *testing.T) {
 
 	// Draining the first action and reporting its result should unblock
 	// a subsequent apply.
-	action := <-ch
+	action := <-res.Ch
 	s.hub.RecordResult("a1", ActionResult{ActionID: action.ID, Success: true})
 
 	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionUpgrade}, headers)

@@ -157,3 +157,44 @@ func (c *Client) Report(ctx context.Context, status checker.Status) error {
 	}
 	return nil
 }
+
+type actionResultRequest struct {
+	ActionID string `json:"action_id"`
+	Success  bool   `json:"success"`
+	Message  string `json:"message,omitempty"`
+}
+
+// ReportActionResult reports the outcome of a previously pushed action
+// (e.g. a recheck the aggregator asked this agent to run directly, over
+// its own stream connection -- see internal/agentstream) back to the
+// aggregator's POST /companion/result. Named for the wire endpoint it
+// hits, not for "companion": the agent uses this exact same endpoint when
+// it's the one holding the stream, not just the host-native companion.
+// Takes primitive fields rather than internal/aggregator's own
+// ActionResult type, deliberately -- this package has no need to depend
+// on internal/aggregator for anything else, and the wire format is small
+// enough not to be worth sharing a type for.
+func (c *Client) ReportActionResult(ctx context.Context, actionID string, success bool, message string) error {
+	body, err := json.Marshal(actionResultRequest{ActionID: actionID, Success: success, Message: message})
+	if err != nil {
+		return fmt.Errorf("aggregatorclient: encoding action result: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/companion/result", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("aggregatorclient: building action result request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-ID", c.identity.AgentID)
+	req.Header.Set("Authorization", "Bearer "+c.identity.Token)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("aggregatorclient: action result request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("aggregatorclient: action result: unexpected status %s", resp.Status)
+	}
+	return nil
+}

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"update-detector/internal/agentstream"
 	"update-detector/internal/aggregator"
 	"update-detector/internal/companion"
 	"update-detector/internal/companionconfig"
@@ -47,7 +48,7 @@ func run() error {
 	}
 	log.Printf("companion: fetched identity for agent %s", identity.AgentID)
 
-	companion.StreamRun(ctx, cfg.AggregatorURL, identity, func(action aggregator.Action) {
+	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, func(action aggregator.Action) {
 		log.Printf("companion: received action %s (%s)", action.ID, action.Type)
 
 		result := companion.Apply(ctx, cfg.AgentStatusURL, action)

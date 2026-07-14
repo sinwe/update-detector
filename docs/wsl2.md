@@ -44,17 +44,41 @@ If you have a genuine engine, the normal
 work exactly as documented — nothing WSL2-specific needed. The rest of
 this page is for the (much more common) shim case.
 
-## Native install
+## Native install, step by step
 
 Same `install.sh` used everywhere else in this project — it detects WSL2
-automatically and offers a different choice than it does elsewhere:
+automatically and offers a different choice than it does elsewhere. This
+walkthrough covers all three components in one run (the most common case
+if you're setting up a fresh host); skip whichever numbered step doesn't
+apply if you're only installing a subset.
+
+### 1. (Optional) Set configuration before running install.sh
+
+Native config isn't `.env`-based — see
+[Configuration](#configuration--theres-no-env-here) below for the full
+explanation. If you need anything other than defaults (an aggregator
+elsewhere, Telegram credentials, an apply secret), export it now, in the
+same shell that's about to run `install.sh`:
 
 ```sh
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+export AGGREGATOR_URL=http://localhost:9090   # only needed on an agent/companion-only host pointing elsewhere
+export ADMIN_APPLY_SHARED_SECRET=$(openssl rand -hex 32)   # only meaningful if installing the aggregator
 ```
 
-You'll be asked which of these to install, each as its own native systemd
-service — no Docker involved for any of them:
+If you skip this step, every value just takes its documented default —
+nothing below breaks, you just get default behavior (e.g. no apply secret
+set, so `/admin` apply buttons stay disabled until you set one later).
+
+### 2. Run install.sh and pick components
+
+```sh
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo -E sh
+```
+
+(`-E` carries through anything you exported in step 1 — plain `sudo`
+silently drops it instead, see below.)
+
+It detects WSL2 on its own and prompts:
 
 ```
   1) aggregator only
@@ -63,21 +87,63 @@ service — no Docker involved for any of them:
   4) all three
 ```
 
-For scripted/non-interactive use, skip the prompt with
-`INSTALL_COMPONENTS` (comma-separated):
+For scripted/non-interactive use (e.g. provisioning automation), skip the
+prompt entirely with `INSTALL_COMPONENTS` (comma-separated):
 
 ```sh
-INSTALL_COMPONENTS=aggregator,agent,companion curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+INSTALL_COMPONENTS=aggregator,agent,companion curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo -E sh
 ```
+
+### 3. Check that everything you picked actually started
 
 Each component becomes a normal systemd unit (`update-detector.service`,
 `update-aggregator.service`, `update-detector-companion.service`) — check
-status the same way you would for any of them:
+status the same way you would for any of them, for each one you installed:
 
 ```sh
-systemctl status update-detector
+systemctl status update-detector update-aggregator update-detector-companion
 journalctl -u update-detector -f
 ```
+
+All should show `active (running)`. If the agent's log shows `report
+failed: ... unexpected status 403 Forbidden` right now, that's expected —
+continue to step 4, it resolves itself there.
+
+### 4. If you installed the agent: approve it
+
+A newly-installed agent enrolls with the aggregator as `pending` on its
+very first contact — it gets rejected with that `403` above until a human
+approves it, by design (trust-on-first-contact). Open
+`http://<aggregator-host>:9090/admin`, find the new host under "Pending,"
+and click **Approve**. It starts reporting successfully within one
+`CHECK_INTERVAL` (6h by default) on its own, or immediately if you
+`systemctl restart update-detector` right after approving.
+
+### 5. If you installed the companion: confirm it's connected
+
+Refresh `/admin` — the approved host's row should say **connected**
+(not "not connected"), and a **Force recheck** button should be present.
+If you installed the agent *without* a companion, you'll still see
+"connected (via agent)" here — that's the agent holding the same
+connection a companion normally would, enough for Force-recheck but not
+for applying anything; see [Companion discovery, either
+way](#companion-discovery-either-way) below for how the two coordinate.
+
+### 6. Verify the data is actually correct
+
+Since the whole point of this page is avoiding a *silent* wrong-data bug
+(see [The risk this avoids](#the-risk-this-avoids) above), it's worth a
+one-time sanity check: compare the agent's own count against a direct
+`apt` check in the same distro.
+
+```sh
+curl -s http://localhost:8080/status | python3 -c "import json,sys; print(json.load(sys.stdin)['packages']['upgradable_total'])"
+apt list --upgradable 2>/dev/null | tail -n +2 | wc -l
+```
+
+These two numbers should match exactly. If they don't, something's
+resolving against the wrong filesystem — recheck the Docker-shim question
+at the top of this page.
 
 ## Configuration — there's no `.env` here
 
@@ -142,20 +208,5 @@ is fine. **Never point it at a `/mnt/c/...` Windows-drive path.** Unix
 domain sockets (used for the companion's one-time token handoff) and POSIX
 permission bits don't work correctly on Windows drvfs/9p mounts, and the
 handoff would silently fail.
-
-## Verifying it's actually correct
-
-Since the whole point of this page is avoiding a *silent* wrong-data bug,
-it's worth a one-time sanity check after installing: compare the agent's
-own count against a direct `apt` check in the same distro.
-
-```sh
-curl -s http://localhost:8080/status | python3 -c "import json,sys; print(json.load(sys.stdin)['packages']['upgradable_total'])"
-apt list --upgradable 2>/dev/null | tail -n +2 | wc -l
-```
-
-These two numbers should match exactly. If they don't, something's
-resolving against the wrong filesystem — recheck the Docker-shim question
-above.
 
 Back to [README](../README.md).

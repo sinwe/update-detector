@@ -29,10 +29,19 @@ type agentView struct {
 	OSUpdateAvailable  bool
 	AgentVersion       string
 
-	// CompanionConnected, CompanionVersion, and RecentResults are only
-	// meaningful once Approved -- a companion has nothing to connect to,
-	// or report on, before that.
+	// AnyStreamConnected, CompanionConnected, CompanionVersion, and
+	// RecentResults are only meaningful once Approved -- nothing has
+	// anything to connect to, or report on, before that.
+	//
+	// AnyStreamConnected is true whether the connected stream is the
+	// companion or the agent itself (see ClientKind) -- gates the
+	// "connected"/Force-recheck display, since recheck works either way.
+	// CompanionConnected is strictly kind==companion -- gates apply-only
+	// controls, since only a real companion can run apt-get. ConnectedVia
+	// is "agent"/"companion"/"" (not connected), for the on-page label.
+	AnyStreamConnected bool
 	CompanionConnected bool
+	ConnectedVia       string
 	CompanionVersion   string
 	RecentResults      []resultView
 }
@@ -51,11 +60,14 @@ type adminPageData struct {
 }
 
 func toAgentView(rec AgentRecord, hub *CompanionHub) agentView {
+	kind, connected := hub.Kind(rec.ID)
 	v := agentView{
 		ID:                 rec.ID,
 		ShortID:            shortID(rec.ID),
 		Hostname:           rec.Hostname,
-		CompanionConnected: hub.Connected(rec.ID),
+		AnyStreamConnected: connected,
+		CompanionConnected: connected && kind == KindCompanion,
+		ConnectedVia:       string(kind),
 		CompanionVersion:   hub.CompanionVersion(rec.ID),
 	}
 	if !rec.FirstSeen.IsZero() {
@@ -169,21 +181,25 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{end}}
       </td>
       <td class="apply-section">
-        {{if .CompanionConnected}}
-          <span class="ok">connected</span>{{if .CompanionVersion}} <span class="muted">{{.CompanionVersion}}</span>{{end}}<br>
-          {{if .Upgrades}}
-          <details>
-            <summary>apply packages</summary>
-            <form onsubmit="return applyPackages(event, '{{.ID}}')">
-              {{range .Upgrades}}
-              <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{.Name}}</label><br>
-              {{end}}
-              <button type="submit">Apply selected</button>
-            </form>
-          </details>
+        {{if .AnyStreamConnected}}
+          <span class="ok">connected{{if eq .ConnectedVia "agent"}} (via agent){{end}}</span>{{if .CompanionVersion}} <span class="muted">{{.CompanionVersion}}</span>{{end}}<br>
+          {{if .CompanionConnected}}
+            {{if .Upgrades}}
+            <details>
+              <summary>apply packages</summary>
+              <form onsubmit="return applyPackages(event, '{{.ID}}')">
+                {{range .Upgrades}}
+                <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{.Name}}</label><br>
+                {{end}}
+                <button type="submit">Apply selected</button>
+              </form>
+            </details>
+            {{end}}
+            <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
+            <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
+          {{else}}
+            <span class="muted">install companion to enable apply</span><br>
           {{end}}
-          <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
-          <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
           <button onclick="forceRecheck('{{.ID}}')" title="Re-scan this host now instead of waiting for the next CHECK_INTERVAL">Force recheck</button>
         {{else}}
           <span class="muted">not connected</span>

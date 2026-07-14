@@ -103,3 +103,38 @@ func TestClientReportSuccessAndFailure(t *testing.T) {
 		t.Fatal("expected error on non-200 response")
 	}
 }
+
+func TestClientReportActionResultSuccessAndFailure(t *testing.T) {
+	var gotHeader http.Header
+	var gotBody actionResultRequest
+	statusCode := http.StatusOK
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.URL.Path; got != "/companion/result" {
+			t.Fatalf("got path %q, want /companion/result", got)
+		}
+		w.WriteHeader(statusCode)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, Identity{AgentID: "agent-1", Token: "tok"})
+
+	if err := client.ReportActionResult(context.Background(), "act1", true, "recheck triggered"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotHeader.Get("X-Agent-ID") != "agent-1" || gotHeader.Get("Authorization") != "Bearer tok" {
+		t.Fatalf("unexpected headers: %v", gotHeader)
+	}
+	if gotBody.ActionID != "act1" || !gotBody.Success || gotBody.Message != "recheck triggered" {
+		t.Fatalf("unexpected body: %#v", gotBody)
+	}
+
+	statusCode = http.StatusForbidden
+	if err := client.ReportActionResult(context.Background(), "act2", false, ""); err == nil {
+		t.Fatal("expected error on non-200 response")
+	}
+}
