@@ -32,6 +32,14 @@ var systemdUnitDir = "/etc/systemd/system"
 type Detection struct {
 	Native            bool
 	DockerContainerID string // "" if no Docker container found
+	// DockerImage is the exact image reference (e.g.
+	// "forgejo.winar.to/winarto/update-detector:latest") the container
+	// is currently running -- needed to pull and pin a *specific*
+	// version later (see updateDockerCompose), since a plain
+	// `docker compose pull` would just re-fetch whatever this same tag
+	// currently points to on the registry, not necessarily the version
+	// actually requested.
+	DockerImage string
 }
 
 // Kind resolves Detection to a single answer, preferring native when
@@ -66,11 +74,11 @@ func (d Detection) Ambiguous() bool {
 // from the caller.
 func Detect(ctx context.Context, name string) (Detection, error) {
 	native := nativeUnitPresent(name)
-	dockerID, err := dockerContainerFor(ctx, name)
+	dockerID, dockerImage, err := dockerContainerFor(ctx, name)
 	if err != nil {
 		return Detection{}, err
 	}
-	return Detection{Native: native, DockerContainerID: dockerID}, nil
+	return Detection{Native: native, DockerContainerID: dockerID, DockerImage: dockerImage}, nil
 }
 
 // nativeUnitPresent mirrors install.sh's own native_unit_present.
@@ -83,18 +91,19 @@ func nativeUnitPresent(name string) bool {
 // finds the first container (running or stopped, via "docker ps -a")
 // whose image matches name, anchored the same way install.sh's own awk
 // pattern is (so "update-detector" can't match an
-// "update-detector-companion" image either direction). Returns "" with
-// no error if docker isn't on PATH at all, or if nothing matches.
-func dockerContainerFor(ctx context.Context, name string) (string, error) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		return "", nil
+// "update-detector-companion" image either direction), returning both its
+// ID and its exact image reference. Returns "", "", nil if docker isn't
+// on PATH at all, or if nothing matches.
+func dockerContainerFor(ctx context.Context, name string) (id, image string, err error) {
+	if _, lookErr := exec.LookPath("docker"); lookErr != nil {
+		return "", "", nil
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}} {{.Image}}")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("deploykind: docker ps: %w", err)
+	if runErr := cmd.Run(); runErr != nil {
+		return "", "", fmt.Errorf("deploykind: docker ps: %w", runErr)
 	}
 
 	pattern := regexp.MustCompile(`(^|/)` + regexp.QuoteMeta(name) + `(:|$)`)
@@ -103,9 +112,9 @@ func dockerContainerFor(ctx context.Context, name string) (string, error) {
 		if len(fields) != 2 {
 			continue
 		}
-		if id, image := fields[0], fields[1]; pattern.MatchString(image) {
-			return id, nil
+		if fields[1] != "" && pattern.MatchString(fields[1]) {
+			return fields[0], fields[1], nil
 		}
 	}
-	return "", nil
+	return "", "", nil
 }

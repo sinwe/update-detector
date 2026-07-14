@@ -85,7 +85,7 @@ func SelfUpdate(ctx context.Context, action aggregator.Action) aggregator.Action
 			return fail("%v", err)
 		}
 	case DeployDocker:
-		if err := updateDockerCompose(ctx, detection.DockerContainerID); err != nil {
+		if err := updateDockerCompose(ctx, detection.DockerContainerID, detection.DockerImage, action.TargetVersion); err != nil {
 			return fail("%v", err)
 		}
 	default:
@@ -212,14 +212,28 @@ func translate(values map[string]string, rename map[string]string) []string {
 	return env
 }
 
-// updateDockerCompose updates a Docker-based component via
-// `docker compose pull && up -d` for the specific service, using the
-// exact compose file(s)/working dir/service name Docker Compose itself
-// recorded as labels on containerID when it created it -- so this
-// respects the user's own compose file, env, and volumes exactly,
-// without install.sh or the companion needing to track or duplicate
-// that path anywhere.
-func updateDockerCompose(ctx context.Context, containerID string) error {
+// updateDockerCompose updates a Docker-based component to targetVersion,
+// using the exact compose file(s)/working dir/service name Docker Compose
+// itself recorded as labels on containerID when it created it -- so this
+// respects the user's own compose file, env, and volumes exactly, without
+// install.sh or the companion needing to track or duplicate that path
+// anywhere.
+//
+// Deliberately NOT a plain `docker compose pull && up -d`: this repo's
+// own compose files pin `image: .../update-detector:latest`, and that
+// tag gets moved on *every* release push, including -rcN ones (see
+// .forgejo/workflows/release.yml) -- a plain pull fetches whatever
+// :latest currently is on the registry, which is not necessarily
+// targetVersion at all. Confirmed live: requesting a downgrade to an
+// older real release instead silently pulled a newer -rc build that had
+// been pushed moments earlier for an unrelated reason. Instead, pull the
+// *specific* targetVersion tag by name, then locally retag it as
+// whatever tag the container's own image reference already uses (so the
+// compose file's own `image:` line, unedited, resolves to the right
+// content) -- then `up -d` alone, deliberately never `pull` again here,
+// since that would immediately undo the retag by re-fetching the
+// registry's current tag.
+func updateDockerCompose(ctx context.Context, containerID, image, targetVersion string) error {
 	configFiles, err := dockerInspectLabel(ctx, containerID, "com.docker.compose.project.config_files")
 	if err != nil {
 		return err
@@ -236,6 +250,28 @@ func updateDockerCompose(ctx context.Context, containerID string) error {
 		return fmt.Errorf("selfupdate: container %s is missing expected Docker Compose labels -- was it started with `docker compose up`?", containerID)
 	}
 
+	// Splitting on the *last* colon, not the first, since a registry
+	// host can itself contain a colon for a non-default port (e.g.
+	// "registry.example.com:5000/name:tag") -- this repo's own images
+	// never do that (forgejo.winar.to has no port in the hostname), so
+	// this is a deliberate simplification, not general image-reference
+	// parsing, matching how internal/version.Compare is also scoped to
+	// this repo's own tag convention rather than general semver.
+	sep := strings.LastIndex(image, ":")
+	if sep < 0 {
+		return fmt.Errorf("selfupdate: container %s's image %q has no tag to replace", containerID, image)
+	}
+	repo, currentTag := image[:sep], image[sep+1:]
+
+	pullCmd := exec.CommandContext(ctx, "docker", "pull", repo+":"+targetVersion)
+	if out, err := runCapped(pullCmd); err != nil {
+		return fmt.Errorf("selfupdate: docker pull %s:%s: %w\n%s", repo, targetVersion, err, out)
+	}
+	tagCmd := exec.CommandContext(ctx, "docker", "tag", repo+":"+targetVersion, repo+":"+currentTag)
+	if out, err := runCapped(tagCmd); err != nil {
+		return fmt.Errorf("selfupdate: docker tag %s:%s %s:%s: %w\n%s", repo, targetVersion, repo, currentTag, err, out)
+	}
+
 	// config_files can be a comma-separated list if the original compose
 	// invocation used more than one -f flag -- pass each as its own -f,
 	// not a single comma-joined value (docker compose's -f takes one
@@ -244,15 +280,11 @@ func updateDockerCompose(ctx context.Context, containerID string) error {
 	for _, f := range strings.Split(configFiles, ",") {
 		fileArgs = append(fileArgs, "-f", f)
 	}
-
-	for _, extra := range [][]string{{"pull", service}, {"up", "-d", service}} {
-		args := append(append([]string{"compose"}, fileArgs...), extra...)
-		cmd := exec.CommandContext(ctx, "docker", args...)
-		cmd.Dir = workingDir
-		out, err := runCapped(cmd)
-		if err != nil {
-			return fmt.Errorf("selfupdate: docker %s: %w\n%s", strings.Join(args, " "), err, out)
-		}
+	args := append(append([]string{"compose"}, fileArgs...), "up", "-d", service)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = workingDir
+	if out, err := runCapped(cmd); err != nil {
+		return fmt.Errorf("selfupdate: docker %s: %w\n%s", strings.Join(args, " "), err, out)
 	}
 	return nil
 }

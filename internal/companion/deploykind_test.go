@@ -47,12 +47,12 @@ func TestNativeUnitPresent(t *testing.T) {
 
 func TestDockerContainerForNoDockerOnPath(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // guarantees no "docker" binary anywhere on PATH
-	id, err := dockerContainerFor(context.Background(), "update-detector")
+	id, image, err := dockerContainerFor(context.Background(), "update-detector")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if id != "" {
-		t.Fatalf("got id %q, want empty when docker isn't on PATH", id)
+	if id != "" || image != "" {
+		t.Fatalf("got id %q image %q, want both empty when docker isn't on PATH", id, image)
 	}
 }
 
@@ -63,12 +63,15 @@ if [ "$1" = "ps" ]; then
   echo "bbb222 forgejo.winar.to/winarto/update-detector:v0.9.0"
 fi
 `)
-	id, err := dockerContainerFor(context.Background(), "update-detector")
+	id, image, err := dockerContainerFor(context.Background(), "update-detector")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if id != "bbb222" {
 		t.Fatalf("got id %q, want bbb222 -- must not match the -companion image for a bare \"update-detector\" pattern", id)
+	}
+	if image != "forgejo.winar.to/winarto/update-detector:v0.9.0" {
+		t.Fatalf("got image %q, want the matching container's own image reference", image)
 	}
 }
 
@@ -78,12 +81,12 @@ if [ "$1" = "ps" ]; then
   echo "aaa111 some-other-image:latest"
 fi
 `)
-	id, err := dockerContainerFor(context.Background(), "update-detector")
+	id, image, err := dockerContainerFor(context.Background(), "update-detector")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if id != "" {
-		t.Fatalf("got id %q, want empty for no matching image", id)
+	if id != "" || image != "" {
+		t.Fatalf("got id %q image %q, want both empty for no matching image", id, image)
 	}
 }
 
@@ -147,7 +150,7 @@ fi
 
 func TestDockerContainerForPropagatesRealError(t *testing.T) {
 	writeFakeDocker(t, `exit 1`)
-	if _, err := dockerContainerFor(context.Background(), "update-detector"); err == nil {
+	if _, _, err := dockerContainerFor(context.Background(), "update-detector"); err == nil {
 		t.Fatal("expected an error when docker itself exits non-zero")
 	}
 }
