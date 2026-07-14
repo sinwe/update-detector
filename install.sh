@@ -395,8 +395,20 @@ install_companion() {
             agg_url="http://localhost:$agg_host_port"
           else
             # No published-port mapping found -- likely --network host,
-            # where the container's own port already *is* the host's port,
-            # unchanged.
+            # where the container's own LISTEN_ADDR *is* the host's own
+            # port. Read that directly from the aggregator container's
+            # own env, rather than assuming it still matches whatever
+            # port happens to be in the agent's AGGREGATOR_URL string --
+            # confirmed live, those two can go stale independently of
+            # each other (e.g. the aggregator's LISTEN_ADDR changed after
+            # switching to host networking, while the agent's own
+            # AGGREGATOR_URL, baked in at the agent's own install time,
+            # still says the old internal port).
+            agg_own_listen_addr=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$agg_container_id" \
+              | sed -n 's/^LISTEN_ADDR=//p')
+            if [ -n "$agg_own_listen_addr" ]; then
+              agg_port="${agg_own_listen_addr#*:}"
+            fi
             echo "install.sh: $agg_host is a local container with no published-port mapping (likely --network host) -- using localhost:$agg_port"
             agg_url="http://localhost:$agg_port"
           fi
