@@ -959,6 +959,43 @@ func TestHandleAdminSelfUpdateRejectsAgentOnlyStream(t *testing.T) {
 	}
 }
 
+func TestHandleAdminSelfUpdateChannelRequiresConfiguredSelfUpdate(t *testing.T) {
+	s, _ := newTestServerWithSecret(t, "s3cret")
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 when the server has no selfupdate.Client at all", rec.Code)
+	}
+}
+
+func TestHandleAdminSelfUpdateChannelRequiresSecret(t *testing.T) {
+	s, _ := newTestServerWithLatestVersion(t, "", "v1.0.0")
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, nil)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 when ADMIN_APPLY_SHARED_SECRET is unset", rec.Code)
+	}
+
+	s2, _ := newTestServerWithLatestVersion(t, "s3cret", "v1.0.0")
+	rec = doJSON(t, s2, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 with no secret header", rec.Code)
+	}
+}
+
+func TestHandleAdminSelfUpdateChannelSwitchesAndRefreshesImmediately(t *testing.T) {
+	s, _ := newTestServerWithLatestVersion(t, "s3cret", "v1.0.0")
+	if s.selfUpdate.IncludePreRelease() {
+		t.Fatal("expected the fake client to start on the release-only channel")
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s, want 200", rec.Code, rec.Body.String())
+	}
+	if !s.selfUpdate.IncludePreRelease() {
+		t.Fatal("expected the channel to actually switch to include-prerelease")
+	}
+}
+
 func TestHandleHealthz(t *testing.T) {
 	s, _ := newTestServer(t)
 	rec := doJSON(t, s, http.MethodGet, "/healthz", nil, nil)

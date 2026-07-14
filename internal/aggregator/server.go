@@ -47,6 +47,7 @@ func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manage
 	s.mux.HandleFunc("/companion/stream", s.handleCompanionStream)
 	s.mux.HandleFunc("/companion/result", s.handleCompanionResult)
 	s.mux.HandleFunc("/admin", s.handleAdmin)
+	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
 	s.mux.HandleFunc("/widgets/hosts", s.handleWidgetHosts)
@@ -307,6 +308,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	data := adminPageData{AggregatorVersion: version.Version}
 	if s.selfUpdate != nil {
+		data.SelfUpdateConfigured = true
+		data.SelfUpdateIncludePreRelease = s.selfUpdate.IncludePreRelease()
 		if latest, _, ok := s.selfUpdate.Latest(); ok {
 			data.LatestVersion = latest
 			if cmp, err := version.Compare(latest, version.Version); err == nil && cmp > 0 {
@@ -551,6 +554,56 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+}
+
+type selfUpdateChannelRequest struct {
+	IncludePreRelease bool `json:"include_prerelease"`
+}
+
+// handleAdminSelfUpdateChannel switches which release channel
+// internal/selfupdate's Latest() considers "available" -- e.g. to test
+// a pre-release cut against a live fleet without waiting for a real
+// release. Gated by the same shared secret as apply/self-update: it
+// can't change anything on a host directly, but it does control which
+// "Update available" buttons appear, so it gets the same trust level as
+// everything else that shapes what those buttons will do.
+func (s *Server) handleAdminSelfUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.selfUpdate == nil {
+		http.Error(w, "self-update checking is disabled", http.StatusNotImplemented)
+		return
+	}
+	if s.adminApplySecret == "" {
+		http.Error(w, "self-update is disabled: ADMIN_APPLY_SHARED_SECRET is not configured", http.StatusNotImplemented)
+		return
+	}
+	presented := r.Header.Get("X-Admin-Apply-Secret")
+	if presented == "" || subtle.ConstantTimeCompare([]byte(presented), []byte(s.adminApplySecret)) != 1 {
+		http.Error(w, "invalid or missing X-Admin-Apply-Secret", http.StatusForbidden)
+		return
+	}
+
+	var req selfUpdateChannelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	s.selfUpdate.SetIncludePreRelease(req.IncludePreRelease)
+	// Refresh synchronously so the very next GET /admin reflects the new
+	// channel right away, instead of waiting for the next
+	// SELF_UPDATE_CHECK_INTERVAL tick. A refresh failure here doesn't undo
+	// the channel switch -- it just means the operator sees a stale
+	// LatestVersion until the next successful refresh, same as any other
+	// transient Refresh failure.
+	resp := map[string]any{"include_prerelease": req.IncludePreRelease}
+	if err := s.selfUpdate.Refresh(r.Context()); err != nil {
+		resp["refresh_error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type summaryResponse struct {

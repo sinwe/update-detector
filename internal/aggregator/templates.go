@@ -66,9 +66,17 @@ type adminPageData struct {
 	// or "" if no successful check has completed yet.
 	LatestVersion             string
 	AggregatorUpdateAvailable bool
-	Pending                   []agentView
-	Approved                  []agentView
-	Rejected                  []agentView
+	// SelfUpdateConfigured is false when the aggregator was built without
+	// a selfupdate.Client at all -- hides the channel toggle entirely
+	// rather than showing a control that would just 501 on every use.
+	SelfUpdateConfigured bool
+	// SelfUpdateIncludePreRelease mirrors selfupdate.Client's own current
+	// channel (SELF_UPDATE_INCLUDE_PRERELEASE at startup, or whatever an
+	// operator has since switched it to via the toggle below).
+	SelfUpdateIncludePreRelease bool
+	Pending                     []agentView
+	Approved                    []agentView
+	Rejected                    []agentView
 }
 
 // updateAvailable reports whether latest (adminPageData.LatestVersion,
@@ -163,6 +171,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
 <body>
   <div id="restartBanner" class="restart-banner">Updating the aggregator&hellip; this page will reload automatically once it's back.</div>
   <h1>update-detector aggregator <small class="muted">{{.AggregatorVersion}}</small></h1>
+  {{if .SelfUpdateConfigured}}
+  <p class="muted">
+    Self-update channel:
+    <label><input type="radio" name="selfUpdateChannel" value="release" {{if not .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(false)"> release only</label>
+    <label><input type="radio" name="selfUpdateChannel" value="prerelease" {{if .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(true)"> include pre-releases (-rcN)</label>
+  </p>
+  {{end}}
   {{if .AggregatorUpdateAvailable}}
   <div class="banner">
     <strong>{{.LatestVersion}}</strong> is available (this aggregator is running <strong>{{.AggregatorVersion}}</strong>).
@@ -354,6 +369,30 @@ const adminTemplateSrc = `<!DOCTYPE html>
         alert('recheck triggered -- reload this page in a bit to see updated data');
       } catch (e) {
         alert('recheck failed: ' + e);
+      }
+    }
+
+    async function postSelfUpdateChannel(includePreRelease) {
+      const secret = getAdminApplySecret();
+      if (!secret) return;
+      try {
+        const resp = await fetch('/admin/self-update-channel', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Admin-Apply-Secret': secret},
+          body: JSON.stringify({include_prerelease: includePreRelease}),
+        });
+        if (!resp.ok) {
+          if (resp.status === 403) {
+            localStorage.removeItem('adminApplySecret');
+            alert('channel switch failed (403): wrong secret -- cleared it, try again with the correct value');
+          } else {
+            alert('channel switch failed (' + resp.status + '): ' + await resp.text());
+          }
+          return;
+        }
+        location.reload();
+      } catch (e) {
+        alert('channel switch failed: ' + e);
       }
     }
 

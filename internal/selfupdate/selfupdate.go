@@ -24,14 +24,14 @@ type release struct {
 // tag matching the configured channel, caching the result in memory.
 // Safe for concurrent use.
 type Client struct {
-	apiBase           string
-	http              *http.Client
-	includePreRelease bool
+	apiBase string
+	http    *http.Client
 
-	mu        sync.Mutex
-	latestTag string
-	fetchedAt time.Time
-	hasResult bool
+	mu                sync.Mutex
+	includePreRelease bool // mutable via SetIncludePreRelease, e.g. from an admin-page toggle
+	latestTag         string
+	fetchedAt         time.Time
+	hasResult         bool
 }
 
 // New returns a Client for apiBase (e.g.
@@ -87,7 +87,7 @@ func (c *Client) Refresh(ctx context.Context) error {
 		return fmt.Errorf("selfupdate: decoding response: %w", err)
 	}
 
-	latest, ok := highestRelease(releases, c.includePreRelease)
+	latest, ok := highestRelease(releases, c.IncludePreRelease())
 	if !ok {
 		return fmt.Errorf("selfupdate: no matching release found")
 	}
@@ -140,6 +140,24 @@ func (c *Client) Latest() (tag string, fetchedAt time.Time, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.latestTag, c.fetchedAt, c.hasResult
+}
+
+// SetIncludePreRelease changes which channel future Refresh calls
+// consider (see New's includePreRelease) -- e.g. from an admin-page
+// toggle. It doesn't itself refresh; the caller should call Refresh
+// afterwards so Latest() reflects the new channel promptly instead of
+// waiting for the next timer tick.
+func (c *Client) SetIncludePreRelease(v bool) {
+	c.mu.Lock()
+	c.includePreRelease = v
+	c.mu.Unlock()
+}
+
+// IncludePreRelease reports the channel currently in effect.
+func (c *Client) IncludePreRelease() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.includePreRelease
 }
 
 // Run refreshes c on a timer until ctx is done -- once immediately, then
