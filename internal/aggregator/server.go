@@ -461,6 +461,10 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminOutputStream(w, r, parts[0])
 		return
 	}
+	if r.Method == http.MethodGet && len(parts) == 2 && parts[1] == "version" {
+		s.handleAdminAgentVersion(w, r, parts[0])
+		return
+	}
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -677,6 +681,33 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+}
+
+// handleAdminAgentVersion reports id's currently-known agent/companion
+// versions, straight from the registry/hub -- polled by the admin page's
+// own JS after a self-update's action stream reports "done", instead of
+// blindly reloading. A companion's SelfUpdate call (see
+// internal/companion/selfupdate.go) returns as soon as the restart/`docker
+// compose up -d` command has been *issued*, not once the new process has
+// actually finished starting up and reported back in -- for a self-update
+// of "agent" or "companion" specifically, that report is the only thing
+// that ever updates what this endpoint returns, so a fixed short delay
+// before reloading routinely lands before it arrives, showing the old
+// version until a manual refresh (or several) finally lands after it.
+func (s *Server) handleAdminAgentVersion(w http.ResponseWriter, _ *http.Request, id string) {
+	rec, ok := s.registry.Get(id)
+	if !ok {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	agentVersion := ""
+	if rec.LastReport != nil {
+		agentVersion = rec.LastReport.AgentVersion
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"agent_version":     agentVersion,
+		"companion_version": s.hub.CompanionVersion(id),
+	})
 }
 
 type selfUpdateChannelRequest struct {

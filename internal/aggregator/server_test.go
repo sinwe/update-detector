@@ -1235,6 +1235,56 @@ func TestHandleAdminRecheckUnknownAgent(t *testing.T) {
 	}
 }
 
+func TestHandleAdminAgentVersionUnknownAgent(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodGet, "/admin/agents/unknown/version", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404 for unknown agent", rec.Code)
+	}
+}
+
+// TestHandleAdminAgentVersionReflectsLastReportAndCompanionVersion covers
+// the fix for the admin page reloading onto a stale agent/companion
+// version after a self-update: the poll this endpoint backs must reflect
+// the registry's/hub's own current state directly, not some snapshot
+// taken at a page render that predates the update actually landing.
+func TestHandleAdminAgentVersionReflectsLastReportAndCompanionVersion(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodGet, "/admin/agents/a1/version", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["agent_version"] != "" || resp["companion_version"] != "" {
+		t.Fatalf("got %+v, want both empty before any report/connect", resp)
+	}
+
+	if outcome, err := reg.Report("a1", "tok", checker.Status{AgentVersion: "v1.2.3"}); err != nil || outcome != ReportAccepted {
+		t.Fatalf("Report: outcome=%v err=%v", outcome, err)
+	}
+	connectRes := s.hub.Connect("a1", KindCompanion, "v1.2.0")
+	defer s.hub.Disconnect("a1", connectRes.Ch)
+
+	rec = doJSON(t, s, http.MethodGet, "/admin/agents/a1/version", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["agent_version"] != "v1.2.3" {
+		t.Fatalf("got agent_version %q, want v1.2.3", resp["agent_version"])
+	}
+	if resp["companion_version"] != "v1.2.0" {
+		t.Fatalf("got companion_version %q, want v1.2.0", resp["companion_version"])
+	}
+}
+
 func TestHandleAdminApplyRejectsWhenActionInFlight(t *testing.T) {
 	s, reg := newTestServerWithSecret(t, "s3cret")
 	approvedAgent(t, s, reg, "a1", "web01", "tok")

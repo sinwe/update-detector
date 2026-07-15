@@ -347,7 +347,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
     // are fully independent EventSource connections -- this is what lets
     // several hosts update concurrently, each with its own live view, on
     // the same page load.
-    function openLiveOutput(id, actionId) {
+    //
+    // selfUpdateExpect is only set for a self-update of "agent" or
+    // "companion" -- {component, targetVersion}. For anything else
+    // (package apply/upgrade/full-upgrade/recheck, or a self-update of
+    // "aggregator", which watchAggregatorRestart already watches
+    // separately), null.
+    function openLiveOutput(id, actionId, selfUpdateExpect) {
       if (!actionId) return;
       const pane = document.getElementById('output-' + id);
       if (!pane) return;
@@ -361,21 +367,64 @@ const adminTemplateSrc = `<!DOCTYPE html>
         pane.scrollTop = pane.scrollHeight;
       });
       es.addEventListener('done', () => {
-        // The rest of this row (version label, update buttons, recent-
-        // actions log) is only ever computed at page-render time -- it
-        // won't reflect this action's outcome until the page reloads, so
-        // do that automatically instead of leaving the operator to
-        // notice and refresh manually. Same pattern watchAggregatorRestart
-        // already uses; the brief delay just lets "done" register visually
-        // first.
-        pane.textContent += '--- done -- reloading this page shortly ---\n';
         es.close();
-        setTimeout(() => location.reload(), 800);
+        if (selfUpdateExpect) {
+          // "done" here only means the companion's restart/redeploy
+          // command was *issued* successfully -- the row's version
+          // label won't actually reflect it until the new agent/companion
+          // process finishes starting up and reports back in on its own,
+          // which routinely takes longer than any fixed short delay would
+          // assume. Poll for that report specifically instead of guessing.
+          pane.textContent += '--- done -- waiting for ' + selfUpdateExpect.component +
+            ' to report version ' + selfUpdateExpect.targetVersion + ' ---\n';
+          watchComponentVersion(id, selfUpdateExpect, pane);
+        } else {
+          // The rest of this row (package counts, recent-actions log) is
+          // only ever computed at page-render time -- it won't reflect
+          // this action's outcome until the page reloads, so do that
+          // automatically instead of leaving the operator to notice and
+          // refresh manually. The brief delay just lets "done" register
+          // visually first.
+          pane.textContent += '--- done -- reloading this page shortly ---\n';
+          setTimeout(() => location.reload(), 800);
+        }
       });
       es.addEventListener('disconnected', () => {
         pane.textContent += '--- companion disconnected -- waiting for it to come back ---\n';
         es.close();
       });
+    }
+
+    // Polls GET /admin/agents/{id}/version (straight from the registry/hub,
+    // not the page's own stale render) until expect.component's reported
+    // version actually matches expect.targetVersion, then reloads. Same
+    // "poll instead of assume" pattern as watchAggregatorRestart. Gives up
+    // after maxAttempts and leaves a message instead of ever reloading onto
+    // what might still be a stale render.
+    function watchComponentVersion(id, expect, pane) {
+      const field = expect.component === 'companion' ? 'companion_version' : 'agent_version';
+      let attempts = 0;
+      const maxAttempts = 60; // ~2 minutes at 2s each
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const resp = await fetch('/admin/agents/' + id + '/version', {cache: 'no-store'});
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data[field] === expect.targetVersion) {
+              clearInterval(poll);
+              location.reload();
+              return;
+            }
+          }
+        } catch (e) {
+          // Transient fetch failure -- keep polling rather than giving up.
+        }
+        if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          pane.textContent += '--- still on the old version after 2 minutes -- reload manually once it catches up ---\n';
+        }
+      }, 2000);
     }
 
     async function postApply(id, body) {
@@ -478,7 +527,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
           return;
         }
         const data = await resp.json();
-        openLiveOutput(id, data.action_id);
+        // "aggregator" has no version-polling expectation here -- the
+        // page itself is about to go down and watchAggregatorRestart
+        // below is what actually detects it coming back up on the new
+        // version; agent/companion have no such signal, so they poll
+        // /admin/agents/{id}/version instead of guessing a delay.
+        const expect = component === 'aggregator' ? null : {component: component, targetVersion: targetVersion};
+        openLiveOutput(id, data.action_id, expect);
         // Updating the aggregator additionally takes down this page's own
         // process -- watch for it coming back on top of (not instead of)
         // the live view above, since the live view itself will just show
