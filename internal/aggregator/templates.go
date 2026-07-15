@@ -52,6 +52,12 @@ type agentView struct {
 	// check has completed yet) or the reported version doesn't parse.
 	AgentUpdateAvailable     bool
 	CompanionUpdateAvailable bool
+
+	// PendingActionID is the action currently in flight for this agent,
+	// if any (mirrors CompanionHub's own pending map) -- lets a page
+	// load/reload auto-resume watching its live output, not just the tab
+	// that originally triggered it.
+	PendingActionID string
 }
 
 type resultView struct {
@@ -105,6 +111,9 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ConnectedVia:             string(kind),
 		CompanionVersion:         companionVersion,
 		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion),
+	}
+	if actionID, ok := hub.Pending(rec.ID); ok {
+		v.PendingActionID = actionID
 	}
 	if !rec.FirstSeen.IsZero() {
 		v.FirstSeen = rec.FirstSeen.Format(time.RFC3339)
@@ -166,6 +175,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
     .apply-section button { margin-right: 0.3rem; margin-top: 0.3rem; }
     .banner { background: #fff8e1; border: 1px solid #e0c66b; border-radius: 4px; padding: 0.6rem 1rem; margin-bottom: 1rem; }
     .restart-banner { display: none; position: sticky; top: 0; background: #1a7f37; color: #fff; padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+    .output-pane { display: none; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.8rem; padding: 0.5rem; margin-top: 0.4rem; max-height: 240px; overflow-y: auto; white-space: pre-wrap; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -267,6 +277,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{else}}
           <span class="muted">not connected</span>
         {{end}}
+        <pre id="output-{{.ID}}" class="output-pane" data-agent-id="{{.ID}}"{{if .PendingActionID}} data-pending-action-id="{{.PendingActionID}}"{{end}}></pre>
         {{if .RecentResults}}
         <details>
           <summary>recent actions ({{len .RecentResults}})</summary>
@@ -321,6 +332,34 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return secret;
     }
 
+    // Opens a live view of actionID's output on id's row, replacing
+    // whatever this row's pane was showing before. Multiple rows' streams
+    // are fully independent EventSource connections -- this is what lets
+    // several hosts update concurrently, each with its own live view, on
+    // the same page load.
+    function openLiveOutput(id, actionId) {
+      if (!actionId) return;
+      const pane = document.getElementById('output-' + id);
+      if (!pane) return;
+      pane.style.display = 'block';
+      pane.textContent = '';
+
+      const es = new EventSource('/admin/agents/' + id + '/output/stream');
+      es.addEventListener('line', (e) => {
+        const data = JSON.parse(e.data);
+        pane.textContent += data.line + '\n';
+        pane.scrollTop = pane.scrollHeight;
+      });
+      es.addEventListener('done', () => {
+        pane.textContent += '--- done ---\n';
+        es.close();
+      });
+      es.addEventListener('disconnected', () => {
+        pane.textContent += '--- companion disconnected -- waiting for it to come back ---\n';
+        es.close();
+      });
+    }
+
     async function postApply(id, body) {
       const secret = getAdminApplySecret();
       if (!secret) return;
@@ -339,7 +378,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
           }
           return;
         }
-        alert('action accepted -- reload this page in a bit to see the result');
+        const data = await resp.json();
+        openLiveOutput(id, data.action_id);
       } catch (e) {
         alert('apply failed: ' + e);
       }
@@ -419,14 +459,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
           }
           return;
         }
-        // Updating the agent or companion doesn't take down this page at
-        // all (only the aggregator restarting does) -- same
-        // accept-and-reload-later treatment as apply/recheck already
-        // use for those two.
+        const data = await resp.json();
+        openLiveOutput(id, data.action_id);
+        // Updating the aggregator additionally takes down this page's own
+        // process -- watch for it coming back on top of (not instead of)
+        // the live view above, since the live view itself will just show
+        // "disconnected" once the restart actually happens.
         if (component === 'aggregator') {
           watchAggregatorRestart();
-        } else {
-          alert('update accepted -- reload this page in a bit to see the result');
         }
       } catch (e) {
         alert('self-update failed: ' + e);
@@ -467,6 +507,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
         }
       }, 2000);
     }
+
+    // Resume watching any action already in flight when this page loads
+    // -- e.g. triggered from another tab, by another operator, or before
+    // a reload -- not just ones this exact page load itself triggers.
+    document.querySelectorAll('[data-pending-action-id]').forEach((pane) => {
+      openLiveOutput(pane.dataset.agentId, pane.dataset.pendingActionId);
+    });
   </script>
 </body>
 </html>

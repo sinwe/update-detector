@@ -152,6 +152,86 @@ paths:
         "403":
           description: Agent known but not (yet) approved
 
+  /companion/output:
+    post:
+      summary: Stream one action's live command output as it's produced
+      description: >
+        A single chunked (streaming) request body held open for the whole
+        lifetime of the action named by action_id, one newline-delimited
+        JSON {"action_id","line"} frame per output line. Best-effort and
+        purely additive to the existing report/result flow -- if this
+        never arrives, or drops mid-action (e.g. the companion process is
+        killed while self-updating itself), the action's real outcome
+        still arrives separately via POST /companion/result. action_id
+        must match this agent's currently in-flight action (see
+        POST /admin/agents/{id}/apply); a mismatch is rejected outright
+        rather than silently ignored.
+      operationId: companionOutput
+      security:
+        - agentToken: []
+      parameters:
+        - name: X-Agent-ID
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: action_id
+          in: query
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+              description: Newline-delimited JSON, one {"action_id","line"} object per line.
+      responses:
+        "200":
+          description: Stream ended (the body reached EOF)
+        "400":
+          description: Missing action_id
+        "401":
+          description: Unknown agent or invalid token
+        "403":
+          description: Agent known but not (yet) approved
+        "409":
+          description: action_id doesn't match this agent's currently in-flight action
+
+  /admin/agents/{id}/output/stream:
+    get:
+      summary: SSE stream of one agent's live action output, for the admin page
+      description: >
+        Long-lived Server-Sent-Events response (plain HTTP/1.1, same
+        shape as GET /companion/stream) that a browser holds open to
+        watch one host's in-progress action. Events are "line" (one
+        output line), "done" (the action's final result was recorded --
+        the normal end of a stream), or "disconnected" (the companion's
+        own POST /companion/output body ended without a prior "done" --
+        notably, it was killed mid-action while self-updating itself).
+        No history: a subscriber only sees lines from the moment it
+        connects onward.
+      operationId: adminOutputStream
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: text/event-stream of line/done/disconnected events
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                properties:
+                  action_id:
+                    type: string
+                  line:
+                    type: string
+
   /admin:
     get:
       summary: Approval dashboard (HTML)

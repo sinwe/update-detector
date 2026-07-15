@@ -336,6 +336,16 @@ apply call from then on (a wrong value gets cleared automatically so you
 can retype it). That's the whole setup: set the env var, click a button,
 paste the secret once.
 
+**Live output**: once accepted, the admin page opens a live view of that
+action's own output right on the triggering row — one line at a time, as
+apt-get/install.sh/docker actually produce it, over a per-row `EventSource`
+(`GET /admin/agents/{id}/output/stream`). Several hosts updating at once
+each get their own independent live view. Reloading the page (or opening
+it in another tab) picks up whatever's still in flight automatically. It's
+best-effort and shows no history from before the moment it connects — the
+action's final (truncated) output is still in the existing "recent
+actions" log either way.
+
 You can also trigger it directly, e.g. for scripting:
 
 ```sh
@@ -544,6 +554,13 @@ so no way to execute this. If you want the aggregator itself to be
 self-updatable this way, also run an agent + companion pair on whichever
 host actually runs it, and trigger "Update aggregator" from that host's
 own row.
+
+**Self-updating the companion itself is the one case where the live
+output view can drop mid-update** — that restarts the very process
+producing it. It shows as "companion disconnected — waiting for it to
+come back" rather than going silent; the action's real outcome still
+arrives once the new process comes up and reports back, same as it
+always has.
 
 Set `SELF_UPDATE_INCLUDE_PRERELEASE=true` on the aggregator to also
 surface `-rcN` tags as "available" (always picking the single highest
