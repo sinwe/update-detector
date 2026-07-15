@@ -351,21 +351,31 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return secret;
     }
 
-    // Opens a live view of actionID's output on id's row, replacing
-    // whatever this row's pane was showing before. Multiple rows' streams
-    // are fully independent EventSource connections -- this is what lets
-    // several hosts update concurrently, each with its own live view, on
-    // the same page load.
+    // Opens a live view of id's in-flight action, replacing whatever this
+    // row's pane was showing before. Multiple rows' streams are fully
+    // independent EventSource connections -- this is what lets several
+    // hosts update concurrently, each with its own live view, on the
+    // same page load. Returns the EventSource so a caller whose trigger
+    // request then fails can close it again (see closeLiveOutput).
+    //
+    // Deliberately takes no action_id and subscribes immediately, before
+    // the caller has even fired the request that triggers the action --
+    // the endpoint is scoped per-agent, not per-action, specifically so
+    // this doesn't need one. Subscribing only *after* that request's
+    // response comes back (as this used to work) loses anything for an
+    // action fast enough to finish within that one extra round-trip --
+    // recheck runs no shell command at all, so it routinely finishes
+    // (and its own "done" already broadcast to zero subscribers) before
+    // a second, separate request to open this connection would even land.
     //
     // selfUpdateExpect is only set for a self-update of "agent" or
     // "companion" -- {component, targetVersion}. For anything else
     // (package apply/upgrade/full-upgrade/recheck, or a self-update of
     // "aggregator", which watchAggregatorRestart already watches
-    // separately), null.
-    function openLiveOutput(id, actionId, selfUpdateExpect) {
-      if (!actionId) return;
+    // separately), omit it.
+    function openLiveOutput(id, selfUpdateExpect) {
       const pane = document.getElementById('output-' + id);
-      if (!pane) return;
+      if (!pane) return null;
       pane.style.display = 'block';
       pane.textContent = '';
 
@@ -412,6 +422,17 @@ const adminTemplateSrc = `<!DOCTYPE html>
         pane.textContent += '--- companion disconnected -- waiting for it to come back ---\n';
         es.close();
       });
+      return es;
+    }
+
+    // Reverts what openLiveOutput just did, for when the request that was
+    // actually supposed to trigger an action turns out to have failed (bad
+    // secret, 409 conflict, network error, ...) -- there's no action to
+    // watch after all.
+    function closeLiveOutput(id, es) {
+      if (es) es.close();
+      const pane = document.getElementById('output-' + id);
+      if (pane) pane.style.display = 'none';
     }
 
     // Best-effort fetch of GET /admin/agents/{id}/version -- straight from
@@ -481,6 +502,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
     async function postApply(id, body) {
       const secret = getAdminApplySecret();
       if (!secret) return;
+      const es = openLiveOutput(id);
       try {
         const resp = await fetch('/admin/agents/' + id + '/apply', {
           method: 'POST',
@@ -488,6 +510,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           body: JSON.stringify(body),
         });
         if (!resp.ok) {
+          closeLiveOutput(id, es);
           if (resp.status === 403) {
             localStorage.removeItem('adminApplySecret');
             alert('apply failed (403): wrong secret -- cleared it, try again with the correct value');
@@ -496,9 +519,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
           }
           return;
         }
-        const data = await resp.json();
-        openLiveOutput(id, data.action_id);
       } catch (e) {
+        closeLiveOutput(id, es);
         alert('apply failed: ' + e);
       }
     }
@@ -518,15 +540,16 @@ const adminTemplateSrc = `<!DOCTYPE html>
     // No secret needed here, unlike postApply -- recheck can't change
     // anything on the host, only make it report sooner.
     async function forceRecheck(id) {
+      const es = openLiveOutput(id);
       try {
         const resp = await fetch('/admin/agents/' + id + '/recheck', {method: 'POST'});
         if (!resp.ok) {
+          closeLiveOutput(id, es);
           alert('recheck failed (' + resp.status + '): ' + await resp.text());
           return;
         }
-        const data = await resp.json();
-        openLiveOutput(id, data.action_id);
       } catch (e) {
+        closeLiveOutput(id, es);
         alert('recheck failed: ' + e);
       }
     }
@@ -563,6 +586,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
     async function postSelfUpdate(id, component, targetVersion) {
       const secret = getAdminApplySecret();
       if (!secret) return;
+      // "aggregator" has no version-polling expectation here -- the page
+      // itself is about to go down and watchAggregatorRestart below is
+      // what actually detects it coming back up on the new version;
+      // agent/companion have no such signal, so they poll
+      // /admin/agents/{id}/version instead of guessing a delay.
+      const expect = component === 'aggregator' ? null : {component: component, targetVersion: targetVersion};
+      const es = openLiveOutput(id, expect);
       try {
         const resp = await fetch('/admin/agents/' + id + '/self-update', {
           method: 'POST',
@@ -570,6 +600,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           body: JSON.stringify({component: component, target_version: targetVersion}),
         });
         if (!resp.ok) {
+          closeLiveOutput(id, es);
           if (resp.status === 403) {
             localStorage.removeItem('adminApplySecret');
             alert('self-update failed (403): wrong secret -- cleared it, try again with the correct value');
@@ -578,14 +609,6 @@ const adminTemplateSrc = `<!DOCTYPE html>
           }
           return;
         }
-        const data = await resp.json();
-        // "aggregator" has no version-polling expectation here -- the
-        // page itself is about to go down and watchAggregatorRestart
-        // below is what actually detects it coming back up on the new
-        // version; agent/companion have no such signal, so they poll
-        // /admin/agents/{id}/version instead of guessing a delay.
-        const expect = component === 'aggregator' ? null : {component: component, targetVersion: targetVersion};
-        openLiveOutput(id, data.action_id, expect);
         // Updating the aggregator additionally takes down this page's own
         // process -- watch for it coming back on top of (not instead of)
         // the live view above, since the live view itself will just show
@@ -594,6 +617,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           watchAggregatorRestart();
         }
       } catch (e) {
+        closeLiveOutput(id, es);
         alert('self-update failed: ' + e);
       }
     }
@@ -636,8 +660,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
     // Resume watching any action already in flight when this page loads
     // -- e.g. triggered from another tab, by another operator, or before
     // a reload -- not just ones this exact page load itself triggers.
+    // No selfUpdateExpect: the template doesn't carry enough about an
+    // already-in-flight action to know its component/target version, so
+    // this always falls back to the generic "wait for a fresh report"
+    // path below, same as it already did before this function stopped
+    // needing an action_id at all.
     document.querySelectorAll('[data-pending-action-id]').forEach((pane) => {
-      openLiveOutput(pane.dataset.agentId, pane.dataset.pendingActionId);
+      openLiveOutput(pane.dataset.agentId);
     });
   </script>
 </body>
