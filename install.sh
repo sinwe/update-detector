@@ -199,6 +199,21 @@ native_unit_present() {
   [ -f "/etc/systemd/system/$1.service" ]
 }
 
+# env_value FILE KEY -> prints whatever follows the first "=" on KEY's
+# line in FILE, verbatim, or nothing if absent. Deliberately not `. FILE`
+# (shell-sourcing) -- these files are written for systemd's own
+# EnvironmentFile=, which treats everything after "=" as the literal
+# value with no shell parsing at all, so a value containing a space (e.g.
+# a HOSTNAME_OVERRIDE like "Pegasus WSL2") is completely valid there.
+# Sourcing the same file as a shell script instead tries to *execute*
+# that line as a command with an env var set, and fails outright the
+# moment any value contains whitespace or another shell metacharacter --
+# confirmed live, this is exactly what broke install_companion's own
+# native-agent discovery on a real WSL2 host.
+env_value() {
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
+}
+
 # docker_container_for PATTERN -> prints the first container ID (running
 # or stopped -- unlike install_companion's own discovery below, which
 # deliberately only looks at running containers since it needs a *live*
@@ -356,11 +371,11 @@ install_companion() {
     native_found=1
     echo "install.sh: found a native update-detector.service on this host"
     state_dir="/var/lib/update-detector"
-    # shellcheck disable=SC1090
-    . "$agent_env_file"
-    socket_path="${COMPANION_SOCKET_PATH:-$state_dir/companion.sock}"
-    agg_url="${AGGREGATOR_URL:-}"
-    agent_status_url="http://localhost:${LISTEN_ADDR#*:}/status"
+    socket_path="$(env_value "$agent_env_file" COMPANION_SOCKET_PATH)"
+    socket_path="${socket_path:-$state_dir/companion.sock}"
+    agg_url="$(env_value "$agent_env_file" AGGREGATOR_URL)"
+    agent_listen_addr="$(env_value "$agent_env_file" LISTEN_ADDR)"
+    agent_status_url="http://localhost:${agent_listen_addr#*:}/status"
   fi
 
   # docker is checked, but never required -- a broken/absent docker here
@@ -523,14 +538,7 @@ uninstall_agent() {
     echo "install.sh: no native update-detector (agent) install found"
   else
     echo "install.sh: removing update-detector (agent)..."
-    # Extracted inside a subshell, not a top-level "." source -- the
-    # agent's and aggregator's env files define same-named vars
-    # (LISTEN_ADDR, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID), so sourcing
-    # both at top level in the same run (uninstalling all three) would
-    # let the second clobber the first's values.
-    # shellcheck disable=SC1091
-    agent_state_dir=$( . /etc/default/update-detector 2>/dev/null; printf '%s\n' "${AGENT_IDENTITY_FILE:-}" )
-    agent_state_dir=$(dirname "$agent_state_dir")
+    agent_state_dir=$(dirname "$(env_value /etc/default/update-detector AGENT_IDENTITY_FILE)")
 
     systemctl disable --now update-detector 2>/dev/null || true
     rm -f /etc/systemd/system/update-detector.service
@@ -562,9 +570,7 @@ uninstall_aggregator() {
     echo "install.sh: no native update-aggregator install found"
   else
     echo "install.sh: removing update-aggregator..."
-    # shellcheck disable=SC1091
-    agg_data_dir=$( . /etc/default/update-aggregator 2>/dev/null; printf '%s\n' "${REGISTRY_FILE:-}" )
-    agg_data_dir=$(dirname "$agg_data_dir")
+    agg_data_dir=$(dirname "$(env_value /etc/default/update-aggregator REGISTRY_FILE)")
 
     systemctl disable --now update-aggregator 2>/dev/null || true
     rm -f /etc/systemd/system/update-aggregator.service
