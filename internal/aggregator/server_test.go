@@ -25,7 +25,7 @@ func newTestServer(t *testing.T) (*Server, *Registry) {
 func newTestServerWithSecret(t *testing.T, adminApplySecret string) (*Server, *Registry) {
 	reg := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
 	hub := NewCompanionHub()
-	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, nil), reg
+	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, nil, NewOutputHub()), reg
 }
 
 // newTestServerWithLatestVersion is like newTestServerWithSecret, but
@@ -46,7 +46,7 @@ func newTestServerWithLatestVersion(t *testing.T, adminApplySecret, latestVersio
 
 	reg := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
 	hub := NewCompanionHub()
-	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, client), reg
+	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, client, NewOutputHub()), reg
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
@@ -356,6 +356,182 @@ func TestHandleCompanionStreamPushesAction(t *testing.T) {
 	}
 	if !strings.Contains(string(buf[:n]), `"id":"act1"`) {
 		t.Fatalf("expected pushed action in SSE body, got: %q", buf[:n])
+	}
+}
+
+func TestHandleCompanionOutputRequiresActionID(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	rec := doJSON(t, s, http.MethodPost, "/companion/output", nil, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for missing action_id", rec.Code)
+	}
+}
+
+func TestHandleCompanionOutputRejectsMismatchedActionID(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionUpgrade, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/companion/output?action_id=wrong", nil, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want 409 for an action_id that doesn't match this agent's in-flight action", rec.Code)
+	}
+}
+
+// TestHandleCompanionOutputFansOutToAdminStream is the end-to-end path:
+// a companion's chunked /companion/output POST must reach a concurrent
+// browser subscriber on /admin/agents/{id}/output/stream as a "line" SSE
+// event, mirroring TestHandleCompanionStreamPushesAction's own real-server
+// + real-client shape (an httptest.ResponseRecorder can't do real
+// streaming).
+func TestHandleCompanionOutputFansOutToAdminStream(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionUpgrade, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/admin/agents/a1/output/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(streamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResp.Body.Close()
+	if streamResp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", streamResp.StatusCode)
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		_ = json.NewEncoder(pw).Encode(companionOutputFrame{ActionID: "act1", Line: "hello"})
+		pw.Close()
+	}()
+
+	outputReq, err := http.NewRequest(http.MethodPost, httpSrv.URL+"/companion/output?action_id=act1", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputReq.Header.Set("X-Agent-ID", "a1")
+	outputReq.Header.Set("Authorization", "Bearer tok")
+	outputResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(outputReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outputResp.Body.Close()
+	if outputResp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", outputResp.StatusCode)
+	}
+
+	buf := make([]byte, 4096)
+	n, err := streamResp.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	got := string(buf[:n])
+	if !strings.Contains(got, "event: line") || !strings.Contains(got, "hello") {
+		t.Fatalf("expected a line event mentioning hello in SSE body, got: %q", got)
+	}
+}
+
+// TestHandleCompanionOutputEndsAsDisconnectedWithoutPriorResult is the
+// regression test for the companion-self-update-restart case: the output
+// stream's body ending with no prior handleCompanionResult call must
+// surface as "disconnected" to browser subscribers, not silence.
+func TestHandleCompanionOutputEndsAsDisconnectedWithoutPriorResult(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionUpgrade, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/admin/agents/a1/output/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(streamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResp.Body.Close()
+
+	// An empty body that ends immediately -- simulates the companion
+	// process dying mid-action (e.g. self-updating itself) before ever
+	// sending a single line or a final result.
+	pr, pw := io.Pipe()
+	pw.Close()
+
+	outputReq, err := http.NewRequest(http.MethodPost, httpSrv.URL+"/companion/output?action_id=act1", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputReq.Header.Set("X-Agent-ID", "a1")
+	outputReq.Header.Set("Authorization", "Bearer tok")
+	outputResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(outputReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outputResp.Body.Close()
+
+	buf := make([]byte, 4096)
+	n, err := streamResp.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	got := string(buf[:n])
+	if !strings.Contains(got, "event: disconnected") {
+		t.Fatalf("expected a disconnected event, got: %q", got)
+	}
+}
+
+// TestHandleCompanionResultEndsOutputStreamAsDone confirms the normal,
+// successful path: recording a result via handleCompanionResult ends the
+// agent's output stream as "done" for browser subscribers.
+func TestHandleCompanionResultEndsOutputStreamAsDone(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionUpgrade, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	// Simulates the output stream already being active for this action --
+	// in reality, this is what handleCompanionOutput's own POST does
+	// before handleCompanionResult ever runs.
+	s.outputHub.Begin("a1", "act1")
+
+	ch, cancel := s.outputHub.Subscribe("a1")
+	defer cancel()
+
+	rec := doJSON(t, s, http.MethodPost, "/companion/result", companionResultRequest{ActionID: "act1", Success: true}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Kind != EventDone {
+			t.Fatalf("got %#v, want EventDone", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the done event")
 	}
 }
 

@@ -287,6 +287,17 @@ func (h *CompanionHub) Results(agentID string) []ActionResult {
 	return append([]ActionResult(nil), h.results[agentID]...)
 }
 
+// Pending returns the action ID currently in flight for agentID, if any --
+// lets a page load/reload notice an already-running action (e.g. triggered
+// from another tab, or before a reload) and resume watching its live
+// output instead of only the tab that started it.
+func (h *CompanionHub) Pending(agentID string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id, ok := h.pending[agentID]
+	return id, ok
+}
+
 func newActionID() string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {

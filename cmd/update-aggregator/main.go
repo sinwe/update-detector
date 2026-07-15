@@ -58,7 +58,8 @@ func run() error {
 		selfUpdateChannelLabel(cfg.SelfUpdateIncludePreRelease), cfg.SelfUpdateCheckInterval)
 
 	hub := aggregator.NewCompanionHub()
-	srv := aggregator.NewServer(registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient)
+	outputHub := aggregator.NewOutputHub()
+	srv := aggregator.NewServer(registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: srv.Handler(),

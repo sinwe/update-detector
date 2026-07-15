@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"bufio"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -28,16 +29,20 @@ type Server struct {
 	// (or, in tests, simply not exercised) -- every read of it must be
 	// nil-checked, never assumed non-nil.
 	selfUpdate *selfupdate.Client
-	mux        *http.ServeMux
+	// outputHub fans a companion's live action output out to browser
+	// subscribers -- never nil (unlike selfUpdate, every server has one).
+	outputHub *OutputHub
+	mux       *http.ServeMux
 }
 
-func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client) *Server {
+func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
 	s := &Server{
 		registry:         registry,
 		hub:              hub,
 		notifyMgr:        notifyMgr,
 		adminApplySecret: adminApplySecret,
 		selfUpdate:       selfUpdate,
+		outputHub:        outputHub,
 		mux:              http.NewServeMux(),
 	}
 	s.mux.HandleFunc("/", s.handleRoot)
@@ -46,6 +51,7 @@ func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manage
 	s.mux.HandleFunc("/report", s.handleReport)
 	s.mux.HandleFunc("/companion/stream", s.handleCompanionStream)
 	s.mux.HandleFunc("/companion/result", s.handleCompanionResult)
+	s.mux.HandleFunc("/companion/output", s.handleCompanionOutput)
 	s.mux.HandleFunc("/admin", s.handleAdmin)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
@@ -277,6 +283,7 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		Message:     req.Message,
 		CompletedAt: time.Now(),
 	})
+	s.outputHub.End(rec.ID, req.ActionID, EventDone)
 
 	if s.notifyMgr != nil {
 		outcome := "failed"
@@ -299,6 +306,112 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
+type companionOutputFrame struct {
+	ActionID string `json:"action_id"`
+	Line     string `json:"line"`
+}
+
+// handleCompanionOutput receives a companion's live action output as it's
+// produced: one newline-delimited JSON {"action_id","line"} frame per
+// output line, POSTed with a chunked (streaming) request body held open
+// for the entire lifetime of that action (see
+// internal/companion/outputstream.go). Fans each line out to any browser
+// subscribers via outputHub.Publish. However this request body ends --
+// cleanly, once the action's own final result already arrived via
+// handleCompanionResult, or abruptly, e.g. the companion process was
+// killed mid-action while self-updating itself -- outputHub.End's own
+// compare-and-clear decides which of those two actually gets reported to
+// subscribers; see OutputHub.End.
+func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rec, ok := s.authenticateCompanion(w, r)
+	if !ok {
+		return
+	}
+
+	actionID := r.URL.Query().Get("action_id")
+	if actionID == "" {
+		http.Error(w, "action_id is required", http.StatusBadRequest)
+		return
+	}
+	// Defense in depth, not just a UI nicety: a stream for an action this
+	// agent doesn't currently have in flight (stale retry, mismatched ID)
+	// must not be allowed to publish anything.
+	if pending, ok := s.hub.Pending(rec.ID); !ok || pending != actionID {
+		http.Error(w, "action_id does not match this agent's in-flight action", http.StatusConflict)
+		return
+	}
+
+	s.outputHub.Begin(rec.ID, actionID)
+	defer s.outputHub.End(rec.ID, actionID, EventDisconnected)
+
+	scanner := bufio.NewScanner(r.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var frame companionOutputFrame
+		if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
+			continue
+		}
+		if frame.ActionID != actionID {
+			continue
+		}
+		s.outputHub.Publish(rec.ID, actionID, frame.Line)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
+// handleAdminOutputStream is the SSE endpoint a browser holds open to
+// watch one agent's live action output -- mirrors handleCompanionStream's
+// exact shape (flusher, heartbeat, context-done) but subscribes to
+// outputHub instead of pushing Actions.
+func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request, id string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ch, cancel := s.outputHub.Subscribe(id)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case event := <-ch:
+			payload, err := json.Marshal(struct {
+				ActionID string `json:"action_id"`
+				Line     string `json:"line,omitempty"`
+			}{ActionID: event.ActionID, Line: event.Line})
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Kind, payload); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -334,15 +447,25 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAdminAction serves POST /admin/agents/{id}/approve and .../reject.
+// handleAdminAction serves POST /admin/agents/{id}/approve and .../reject,
+// among others, plus (the one GET among otherwise all-POST actions here)
+// /admin/agents/{id}/output/stream.
 // Revoking an approved agent reuses reject — there's no separate state for it.
 func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/admin/agents/")
+	parts := strings.Split(trimmed, "/")
+
+	// Peeled off before the POST-only gate below, since this one's a GET
+	// -- everything else this function dispatches to is POST-only.
+	if r.Method == http.MethodGet && len(parts) == 3 && parts[1] == "output" && parts[2] == "stream" {
+		s.handleAdminOutputStream(w, r, parts[0])
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	trimmed := strings.TrimPrefix(r.URL.Path, "/admin/agents/")
-	parts := strings.Split(trimmed, "/")
 	if len(parts) != 2 {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
