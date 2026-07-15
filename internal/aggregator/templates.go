@@ -49,7 +49,9 @@ type agentView struct {
 	// AgentUpdateAvailable/CompanionUpdateAvailable compare this row's own
 	// reported agent/companion version against adminPageData.LatestVersion
 	// -- false whenever LatestVersion is empty (no successful self-update
-	// check has completed yet) or the reported version doesn't parse.
+	// check has completed yet), the reported version doesn't parse, or
+	// the aggregator itself is behind (see toAgentView's aggregatorBehind
+	// -- the server would reject that request anyway).
 	AgentUpdateAvailable     bool
 	CompanionUpdateAvailable bool
 
@@ -102,6 +104,14 @@ func updateAvailable(latest, current string) bool {
 func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agentView {
 	kind, connected := hub.Kind(rec.ID)
 	companionVersion := hub.CompanionVersion(rec.ID)
+	// aggregatorBehind mirrors handleAdminSelfUpdate's own dependency-
+	// ordering rule (component != "aggregator" is rejected, 409, when
+	// TargetVersion is newer than the aggregator's own running version):
+	// while the aggregator itself is behind, any agent/companion update
+	// button would just target a version the server will refuse, so
+	// don't offer it at all -- "Update aggregator" is the only real
+	// option until that's no longer true.
+	aggregatorBehind := updateAvailable(latestVersion, version.Version)
 	v := agentView{
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
@@ -110,7 +120,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		CompanionConnected:       connected && kind == KindCompanion,
 		ConnectedVia:             string(kind),
 		CompanionVersion:         companionVersion,
-		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion),
+		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion) && !aggregatorBehind,
 	}
 	if actionID, ok := hub.Pending(rec.ID); ok {
 		v.PendingActionID = actionID
@@ -131,7 +141,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
-		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion)
+		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
 	}
 	// Results() is oldest-first; show most recent first.
 	results := hub.Results(rec.ID)
@@ -351,8 +361,16 @@ const adminTemplateSrc = `<!DOCTYPE html>
         pane.scrollTop = pane.scrollHeight;
       });
       es.addEventListener('done', () => {
-        pane.textContent += '--- done ---\n';
+        // The rest of this row (version label, update buttons, recent-
+        // actions log) is only ever computed at page-render time -- it
+        // won't reflect this action's outcome until the page reloads, so
+        // do that automatically instead of leaving the operator to
+        // notice and refresh manually. Same pattern watchAggregatorRestart
+        // already uses; the brief delay just lets "done" register visually
+        // first.
+        pane.textContent += '--- done -- reloading this page shortly ---\n';
         es.close();
+        setTimeout(() => location.reload(), 800);
       });
       es.addEventListener('disconnected', () => {
         pane.textContent += '--- companion disconnected -- waiting for it to come back ---\n';

@@ -799,7 +799,10 @@ func TestHandleAdminPageNoBannerWhenAggregatorUpToDate(t *testing.T) {
 }
 
 func TestHandleAdminPageShowsSelfUpdateButtonsWhenCompanionConnectedAndBehind(t *testing.T) {
-	withVersion(t, "v1.0.0")
+	// Aggregator itself is up to date (matches latest) -- only the
+	// agent/companion are behind, so their own buttons are the ones
+	// expected to show.
+	withVersion(t, "v2.0.0")
 	s, reg := newTestServerWithLatestVersion(t, "", "v2.0.0")
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
@@ -824,8 +827,42 @@ func TestHandleAdminPageShowsSelfUpdateButtonsWhenCompanionConnectedAndBehind(t 
 	if !strings.Contains(body, "postSelfUpdate('a1', 'companion'") {
 		t.Fatalf("expected an Update companion button, got: %s", body)
 	}
+	if strings.Contains(body, "postSelfUpdate('a1', 'aggregator'") {
+		t.Fatalf("expected no Update aggregator button -- it's already up to date, got: %s", body)
+	}
+}
+
+// TestHandleAdminPageHidesAgentCompanionButtonsWhenAggregatorItselfBehind
+// is the regression test for a real UX bug: handleAdminSelfUpdate already
+// rejects (409) any agent/companion target newer than the aggregator's
+// own running version, but the buttons themselves didn't reflect that --
+// an operator could click "Update agent" while the aggregator was behind
+// and just get a rejection. Only "Update aggregator" should be offered
+// until the aggregator itself catches up.
+func TestHandleAdminPageHidesAgentCompanionButtonsWhenAggregatorItselfBehind(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithLatestVersion(t, "", "v2.0.0")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/report", checker.Status{Hostname: "web01", OK: true, AgentVersion: "v0.9.0"}, map[string]string{
+		"X-Agent-ID": "a1", "Authorization": "Bearer tok",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	res := s.hub.Connect("a1", KindCompanion, "v0.9.0")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if strings.Contains(body, "postSelfUpdate('a1', 'agent'") {
+		t.Fatalf("expected no Update agent button while the aggregator itself is behind, got: %s", body)
+	}
+	if strings.Contains(body, "postSelfUpdate('a1', 'companion'") {
+		t.Fatalf("expected no Update companion button while the aggregator itself is behind, got: %s", body)
+	}
 	if !strings.Contains(body, "postSelfUpdate('a1', 'aggregator'") {
-		t.Fatalf("expected an Update aggregator button (the aggregator itself is also behind), got: %s", body)
+		t.Fatalf("expected an Update aggregator button, got: %s", body)
 	}
 }
 
