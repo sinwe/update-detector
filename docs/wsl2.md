@@ -61,13 +61,19 @@ elsewhere, Telegram credentials, an apply secret), export it now, in the
 same shell that's about to run `install.sh`:
 
 ```sh
-export AGGREGATOR_URL=http://localhost:9090   # only needed on an agent/companion-only host pointing elsewhere
+export AGGREGATOR_URL=http://localhost:9090   # required when installing agent or companion -- see below
 export ADMIN_APPLY_SHARED_SECRET=$(openssl rand -hex 32)   # only meaningful if installing the aggregator
 ```
 
-If you skip this step, every value just takes its documented default —
-nothing below breaks, you just get default behavior (e.g. no apply secret
-set, so `/admin` apply buttons stay disabled until you set one later).
+If you skip this step, every other value just takes its documented
+default — nothing below breaks, you just get default behavior (e.g. no
+apply secret set, so `/admin` apply buttons stay disabled until you set
+one later). `AGGREGATOR_URL` is the one exception: it's mandatory for
+both the agent and the companion (neither has any purpose without one —
+the agent can never enroll with or be applied through an aggregator, and
+a companion can't pair with an agent that has none), so if you're
+installing either and haven't set it, `install.sh` prompts for it
+interactively instead of silently defaulting to push-mode-disabled.
 
 ### 2. Run install.sh and pick components
 

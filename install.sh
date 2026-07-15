@@ -260,6 +260,21 @@ install_agent_native() {
   # point at paths WSL2 may never populate, which internal/checker/reboot
   # and the release-upgrades reader already handle gracefully (treated as
   # false/empty, not an error).
+  # Mandatory: without one, this agent can never enroll with (or be
+  # applied through) an aggregator at all, and a companion could never
+  # pair with it either -- there's no meaningful standalone mode for a
+  # native install the way there arguably is for a bare Docker Compose
+  # deployment. Prompts only when interactive and not already set (e.g.
+  # from the environment, or preserved across a self-update
+  # re-invocation) -- never hangs a scripted/non-interactive run waiting
+  # for input that will never come; that case is fatal instead, same as
+  # a human leaving the prompt blank.
+  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+  if [ -z "$resolved_aggregator_url" ]; then
+    echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
+    exit 1
+  fi
+
   env_file="/etc/default/update-detector"
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
@@ -276,7 +291,7 @@ STATE_FILE=$state_dir/state.json
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
 NOTIFY_ON_STARTUP=false
-AGGREGATOR_URL=${AGGREGATOR_URL:-}
+AGGREGATOR_URL=$resolved_aggregator_url
 AGENT_IDENTITY_FILE=$state_dir/agent-identity.json
 COMPANION_SOCKET_PATH=$state_dir/companion.sock
 EOF
@@ -412,10 +427,9 @@ install_companion() {
 
         agg_url=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_id" \
           | sed -n 's/^AGGREGATOR_URL=//p')
-        if [ -z "$agg_url" ]; then
-          echo "install.sh: container $container_id has no AGGREGATOR_URL set -- set it and restart the container first" >&2
-          exit 1
-        fi
+        # No hard failure here if empty -- the unified prompt fallback
+        # below (after both native and Docker discovery) gets a chance to
+        # ask for one interactively before this whole install gives up.
 
         # AGGREGATOR_URL is only guaranteed correct from *inside* the agent
         # container's own Docker network -- e.g. http://update-aggregator:8080,
@@ -428,36 +442,38 @@ install_companion() {
         # it to that container's host-published port instead; otherwise
         # leave it alone -- it's presumably already a real, externally-
         # reachable address for a genuinely separate aggregator host.
-        agg_hostport=${agg_url#*://}
-        agg_hostport=${agg_hostport%%/*}
-        agg_host=${agg_hostport%%:*}
-        agg_port=${agg_hostport#*:}
-        agg_container_id=$(docker ps --filter "label=com.docker.compose.service=$agg_host" --format '{{.ID}}' 2>/dev/null | head -1) || agg_container_id=""
-        if [ -n "$agg_container_id" ]; then
-          agg_host_port=$(docker inspect --format \
-            "{{with index .NetworkSettings.Ports \"$agg_port/tcp\"}}{{(index . 0).HostPort}}{{end}}" \
-            "$agg_container_id" 2>/dev/null) || agg_host_port=""
-          if [ -n "$agg_host_port" ]; then
-            echo "install.sh: $agg_host is a local container published at localhost:$agg_host_port -- using that instead of the Docker-internal address"
-            agg_url="http://localhost:$agg_host_port"
-          else
-            # No published-port mapping found -- likely --network host,
-            # where the container's own LISTEN_ADDR *is* the host's own
-            # port. Read that directly from the aggregator container's
-            # own env, rather than assuming it still matches whatever
-            # port happens to be in the agent's AGGREGATOR_URL string --
-            # confirmed live, those two can go stale independently of
-            # each other (e.g. the aggregator's LISTEN_ADDR changed after
-            # switching to host networking, while the agent's own
-            # AGGREGATOR_URL, baked in at the agent's own install time,
-            # still says the old internal port).
-            agg_own_listen_addr=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$agg_container_id" \
-              | sed -n 's/^LISTEN_ADDR=//p')
-            if [ -n "$agg_own_listen_addr" ]; then
-              agg_port="${agg_own_listen_addr#*:}"
+        if [ -n "$agg_url" ]; then
+          agg_hostport=${agg_url#*://}
+          agg_hostport=${agg_hostport%%/*}
+          agg_host=${agg_hostport%%:*}
+          agg_port=${agg_hostport#*:}
+          agg_container_id=$(docker ps --filter "label=com.docker.compose.service=$agg_host" --format '{{.ID}}' 2>/dev/null | head -1) || agg_container_id=""
+          if [ -n "$agg_container_id" ]; then
+            agg_host_port=$(docker inspect --format \
+              "{{with index .NetworkSettings.Ports \"$agg_port/tcp\"}}{{(index . 0).HostPort}}{{end}}" \
+              "$agg_container_id" 2>/dev/null) || agg_host_port=""
+            if [ -n "$agg_host_port" ]; then
+              echo "install.sh: $agg_host is a local container published at localhost:$agg_host_port -- using that instead of the Docker-internal address"
+              agg_url="http://localhost:$agg_host_port"
+            else
+              # No published-port mapping found -- likely --network host,
+              # where the container's own LISTEN_ADDR *is* the host's own
+              # port. Read that directly from the aggregator container's
+              # own env, rather than assuming it still matches whatever
+              # port happens to be in the agent's AGGREGATOR_URL string --
+              # confirmed live, those two can go stale independently of
+              # each other (e.g. the aggregator's LISTEN_ADDR changed after
+              # switching to host networking, while the agent's own
+              # AGGREGATOR_URL, baked in at the agent's own install time,
+              # still says the old internal port).
+              agg_own_listen_addr=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$agg_container_id" \
+                | sed -n 's/^LISTEN_ADDR=//p')
+              if [ -n "$agg_own_listen_addr" ]; then
+                agg_port="${agg_own_listen_addr#*:}"
+              fi
+              echo "install.sh: $agg_host is a local container with no published-port mapping (likely --network host) -- using localhost:$agg_port"
+              agg_url="http://localhost:$agg_port"
             fi
-            echo "install.sh: $agg_host is a local container with no published-port mapping (likely --network host) -- using localhost:$agg_port"
-            agg_url="http://localhost:$agg_port"
           fi
         fi
 
@@ -475,6 +491,21 @@ install_companion() {
   if [ "$native_found" = "0" ] && [ "$docker_found" = "0" ]; then
     echo "install.sh: no active update-detector.service and no running update-detector" >&2
     echo "  container found on this host -- install one first (see README)." >&2
+    exit 1
+  fi
+
+  # Neither discovery path above found one -- last chance, ask
+  # interactively before giving up. Unlike the agent's own native install,
+  # the companion has no meaningful way to run without one at all, so an
+  # empty result here (no terminal to prompt on, or left blank) is fatal.
+  if [ -z "$agg_url" ]; then
+    agg_url="$(prompt_aggregator_url "")"
+  fi
+  if [ -z "$agg_url" ]; then
+    echo "install.sh: no AGGREGATOR_URL available -- the companion has no purpose without one." >&2
+    echo "  Set AGGREGATOR_URL and re-run, or configure it on the agent this host" >&2
+    echo "  runs first (native: /etc/default/update-detector; Docker: the" >&2
+    echo "  container's own env) and re-run." >&2
     exit 1
   fi
 
@@ -644,6 +675,33 @@ prompt_components() {
     4) echo "aggregator,agent,companion" ;;
     *) echo "install.sh: invalid choice: $choice" >&2; exit 1 ;;
   esac
+}
+
+# prompt_aggregator_url CURRENT -> prints CURRENT unchanged if it's
+# already non-empty. Otherwise, if a terminal is available, prompts for
+# one interactively (same /dev/tty rationale as prompt_components
+# above -- this script is normally invoked via `curl | sh`, so stdin
+# can't be used for a plain read); otherwise prints nothing. AGGREGATOR_URL
+# is mandatory for both the agent and the companion -- without one,
+# neither has any purpose (the agent can never enroll with or be applied
+# through an aggregator; a companion can't even pair with an agent that
+# has none) -- so both callers treat an empty result (no terminal to
+# prompt on, or a human leaving it blank) as fatal.
+prompt_aggregator_url() {
+  if [ -n "${1:-}" ]; then
+    printf '%s' "$1"
+    return
+  fi
+  if [ ! -r /dev/tty ]; then
+    return
+  fi
+  echo "install.sh: no AGGREGATOR_URL could be found automatically." >&2
+  echo "  You only need one aggregator, reachable from this host -- it doesn't" >&2
+  echo "  have to be on the same network as this host; anywhere reachable over" >&2
+  echo "  the internet works fine too, as long as this installer can reach it." >&2
+  printf "Enter the aggregator's URL (e.g. http://aggregator-host:9090): " >&2
+  read -r url < /dev/tty
+  printf '%s' "$url"
 }
 
 # prompt_uninstall_components -> like prompt_components, but for
