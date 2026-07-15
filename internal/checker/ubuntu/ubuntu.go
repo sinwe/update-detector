@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package ubuntu implements checker.Checker for Ubuntu/Debian-based Linux
 // hosts using apt, dpkg, and Ubuntu's own update-notifier/release-upgrader
 // tooling. It never mutates host state: apt's writable paths are redirected
@@ -14,6 +16,26 @@ import (
 	"update-detector/internal/checker"
 	"update-detector/internal/checker/reboot"
 )
+
+// init registers this package with internal/checker's registry under
+// "ubuntu", so main.go can select it by name (via internal/config's
+// CheckerFields) without importing this package directly -- see
+// checker.Fields for why the handoff is a plain string-keyed map rather
+// than Config itself.
+func init() {
+	checker.Register("ubuntu", func(f checker.Fields) (checker.Checker, error) {
+		return New(Config{
+			Hostname:            f["hostname"],
+			AptSourcesList:      f["apt_sources_list"],
+			AptSourcesListD:     f["apt_sources_list_d"],
+			DpkgStatusFile:      f["dpkg_status_file"],
+			AptListsCacheDir:    f["apt_lists_cache_dir"],
+			OSReleaseFile:       f["os_release_file"],
+			ReleaseUpgradesFile: f["release_upgrades_file"],
+			RebootRequiredFile:  f["reboot_required_file"],
+		})
+	})
+}
 
 type Config struct {
 	Hostname string

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"update-detector/internal/checker"
 )
 
 type Config struct {
@@ -92,6 +94,27 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// CheckerFields translates this flat Config into the string-keyed bag a
+// registered checker.Factory actually consumes (see checker.Fields) --
+// Config itself stays flat rather than growing a nested per-platform
+// section; this is a 3-4 platform project, not a plugin ecosystem, so
+// that would be over-engineering. Every key here is always populated
+// regardless of which platform is actually selected -- an unused key
+// (e.g. "release_upgrades_file" for a factory whose Config has no such
+// field) is simply ignored by that factory, not an error.
+func (c Config) CheckerFields() checker.Fields {
+	return checker.Fields{
+		"hostname":              c.Hostname,
+		"apt_sources_list":      c.AptSourcesList,
+		"apt_sources_list_d":    c.AptSourcesListD,
+		"dpkg_status_file":      c.DpkgStatusFile,
+		"apt_lists_cache_dir":   c.AptListsCacheDir,
+		"os_release_file":       c.OSReleaseFile,
+		"release_upgrades_file": c.ReleaseUpgradesFile,
+		"reboot_required_file":  c.RebootRequiredFile,
+	}
 }
 
 func getEnv(key, fallback string) string {

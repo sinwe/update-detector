@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package debian implements checker.Checker for plain Debian-based hosts
 // (including Raspberry Pi OS) that don't have Ubuntu's update-notifier
 // tooling (apt-check) installed or available. Package detection instead
@@ -17,6 +19,26 @@ import (
 	"update-detector/internal/checker/reboot"
 	"update-detector/internal/osrelease"
 )
+
+// init registers this package with internal/checker's registry under
+// "debian", so main.go can select it by name (via internal/config's
+// CheckerFields) without importing this package directly -- see
+// checker.Fields for why the handoff is a plain string-keyed map rather
+// than Config itself. Unlike ubuntu, this Config has no
+// ReleaseUpgradesFile field -- that key in f is simply unused here.
+func init() {
+	checker.Register("debian", func(f checker.Fields) (checker.Checker, error) {
+		return New(Config{
+			Hostname:           f["hostname"],
+			AptSourcesList:     f["apt_sources_list"],
+			AptSourcesListD:    f["apt_sources_list_d"],
+			DpkgStatusFile:     f["dpkg_status_file"],
+			AptListsCacheDir:   f["apt_lists_cache_dir"],
+			OSReleaseFile:      f["os_release_file"],
+			RebootRequiredFile: f["reboot_required_file"],
+		})
+	})
+}
 
 type Config struct {
 	Hostname string

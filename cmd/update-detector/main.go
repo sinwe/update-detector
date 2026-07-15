@@ -17,8 +17,6 @@ import (
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
-	"update-detector/internal/checker/debian"
-	"update-detector/internal/checker/ubuntu"
 	"update-detector/internal/companiontoken"
 	"update-detector/internal/config"
 	"update-detector/internal/hostflavor"
@@ -50,30 +48,13 @@ func run() error {
 	flavor := hostflavor.Detect(cfg.OSReleaseFile)
 	log.Printf("detected host OS flavor: %s", flavor)
 
-	var chk checker.Checker
-	switch flavor {
-	case "debian":
-		chk, err = debian.New(debian.Config{
-			Hostname:           cfg.Hostname,
-			AptSourcesList:     cfg.AptSourcesList,
-			AptSourcesListD:    cfg.AptSourcesListD,
-			DpkgStatusFile:     cfg.DpkgStatusFile,
-			AptListsCacheDir:   cfg.AptListsCacheDir,
-			OSReleaseFile:      cfg.OSReleaseFile,
-			RebootRequiredFile: cfg.RebootRequiredFile,
-		})
-	default:
-		chk, err = ubuntu.New(ubuntu.Config{
-			Hostname:            cfg.Hostname,
-			AptSourcesList:      cfg.AptSourcesList,
-			AptSourcesListD:     cfg.AptSourcesListD,
-			DpkgStatusFile:      cfg.DpkgStatusFile,
-			AptListsCacheDir:    cfg.AptListsCacheDir,
-			OSReleaseFile:       cfg.OSReleaseFile,
-			ReleaseUpgradesFile: cfg.ReleaseUpgradesFile,
-			RebootRequiredFile:  cfg.RebootRequiredFile,
-		})
-	}
+	// Which platform packages are even available to select here is
+	// decided entirely by which of platforms_unix.go/platforms_windows.go
+	// got compiled in (their own build tags, blank-importing ubuntu/debian
+	// or windows for their init()-time checker.Register calls) -- main.go
+	// itself no longer names any platform package directly, so it compiles
+	// identically regardless of GOOS.
+	chk, err := checker.New(flavor, cfg.CheckerFields())
 	if err != nil {
 		return err
 	}

@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package hostflavor picks which checker implementation to run based on the
 // host's own OS, not the container's — the agent runs inside an
 // Ubuntu-based image regardless of the host it's deployed on, so the
