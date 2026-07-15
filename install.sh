@@ -366,6 +366,16 @@ EOF
 
   install_unit update-aggregator
   echo "install.sh: update-aggregator installed and started. Check: systemctl status update-aggregator"
+  if [ -n "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
+    echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$ADMIN_APPLY_SHARED_SECRET" >&2
+    echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
+    echo "  credential gating apply/self-update actions, it's stored 0600 in" >&2
+    echo "  $env_file and never printed again after this, and every browser or" >&2
+    echo "  script that triggers an apply needs this exact value." >&2
+  else
+    echo "install.sh: no ADMIN_APPLY_SHARED_SECRET set -- apply/self-update stay" >&2
+    echo "  disabled (501) until you set one and restart update-aggregator." >&2
+  fi
 }
 
 install_companion() {
