@@ -115,7 +115,7 @@ func installNative(ctx context.Context, component, targetVersion string) error {
 		"INSTALL_COMPONENTS="+component,
 		"INSTALL_VERSION="+targetVersion,
 	)
-	out, err := runCapped(cmd)
+	out, err := runCapped(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("selfupdate: install.sh failed: %w\n%s", err, out)
 	}
@@ -264,11 +264,11 @@ func updateDockerCompose(ctx context.Context, containerID, image, targetVersion 
 	repo, currentTag := image[:sep], image[sep+1:]
 
 	pullCmd := exec.CommandContext(ctx, "docker", "pull", repo+":"+targetVersion)
-	if out, err := runCapped(pullCmd); err != nil {
+	if out, err := runCapped(ctx, pullCmd); err != nil {
 		return fmt.Errorf("selfupdate: docker pull %s:%s: %w\n%s", repo, targetVersion, err, out)
 	}
 	tagCmd := exec.CommandContext(ctx, "docker", "tag", repo+":"+targetVersion, repo+":"+currentTag)
-	if out, err := runCapped(tagCmd); err != nil {
+	if out, err := runCapped(ctx, tagCmd); err != nil {
 		return fmt.Errorf("selfupdate: docker tag %s:%s %s:%s: %w\n%s", repo, targetVersion, repo, currentTag, err, out)
 	}
 
@@ -283,7 +283,7 @@ func updateDockerCompose(ctx context.Context, containerID, image, targetVersion 
 	args := append(append([]string{"compose"}, fileArgs...), "up", "-d", service)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = workingDir
-	if out, err := runCapped(cmd); err != nil {
+	if out, err := runCapped(ctx, cmd); err != nil {
 		return fmt.Errorf("selfupdate: docker %s: %w\n%s", strings.Join(args, " "), err, out)
 	}
 	return nil
@@ -292,7 +292,7 @@ func updateDockerCompose(ctx context.Context, containerID, image, targetVersion 
 func dockerInspectLabel(ctx context.Context, containerID, label string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", "inspect", "--format",
 		fmt.Sprintf(`{{index .Config.Labels "%s"}}`, label), containerID)
-	out, err := runCapped(cmd)
+	out, err := runCapped(ctx, cmd)
 	if err != nil {
 		return "", fmt.Errorf("selfupdate: docker inspect %s: %w\n%s", containerID, err, out)
 	}

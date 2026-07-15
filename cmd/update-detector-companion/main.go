@@ -62,6 +62,26 @@ func run() error {
 	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, func(action aggregator.Action) {
 		log.Printf("companion: received action %s (%s)", action.ID, action.Type)
 
+		// Live output for whatever command Apply is about to run, best-effort
+		// and non-blocking all the way down (see OutputSink.push and
+		// StreamOutput's own doc comment) -- a slow/unreachable aggregator
+		// must never stall the actual command. streamCtx is scoped to this
+		// one action, not the whole process, so the streaming POST ends
+		// promptly once Apply returns rather than living for cfg's entire
+		// lifetime.
+		sink := companion.NewOutputSink(1000)
+		streamCtx, cancelStream := context.WithCancel(ctx)
+		go func() {
+			if err := companion.StreamOutput(streamCtx, cfg.AggregatorURL, identity, action.ID, sink); err != nil {
+				log.Printf("companion: streaming output for %s: %v", action.ID, err)
+			}
+		}()
+		actionCtx := companion.WithOutputSink(ctx, sink)
+		defer func() {
+			sink.Close()
+			cancelStream()
+		}()
+
 		// Updating the companion itself restarts this very process, via
 		// install.sh's own systemctl restart -- report *before* running
 		// it, since code after that restart call may never run at all.
@@ -80,14 +100,14 @@ func run() error {
 				ActionID: action.ID, Success: true,
 				Message: "update installing, restarting shortly", CompletedAt: time.Now(),
 			})
-			if result := companion.Apply(ctx, cfg.AgentStatusURL, action); !result.Success && ctx.Err() == nil {
+			if result := companion.Apply(actionCtx, cfg.AgentStatusURL, action); !result.Success && ctx.Err() == nil {
 				log.Printf("companion: self-update of companion failed before restarting: %s", result.Message)
 				report(result)
 			}
 			return
 		}
 
-		result := companion.Apply(ctx, cfg.AgentStatusURL, action)
+		result := companion.Apply(actionCtx, cfg.AgentStatusURL, action)
 		if result.Success {
 			log.Printf("companion: action %s succeeded", action.ID)
 		} else {

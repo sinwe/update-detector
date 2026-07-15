@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -73,7 +74,7 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 	// even though a real upgrade is pending -- confirmed live: base-files
 	// showed 13.8+deb13u5 -> 13.8+deb13u6 pending, but the host's stale
 	// apt cache still thought 13.8+deb13u5 was current.
-	if updateOut, updateErr := runCapped(aptCommand(ctx, "update")); updateErr != nil {
+	if updateOut, updateErr := runCapped(ctx, aptCommand(ctx, "update")); updateErr != nil {
 		return aggregator.ActionResult{
 			ActionID:    action.ID,
 			Message:     fmt.Sprintf("apt-get update failed: %v\n%s", updateErr, updateOut),
@@ -98,7 +99,7 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		}
 	}
 
-	output, err := runCapped(cmd)
+	output, err := runCapped(ctx, cmd)
 	if err != nil {
 		// Still worth rechecking even on failure -- apt-get can partially
 		// apply changes before hitting an error on a later package.
@@ -113,7 +114,7 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 	// Best-effort cleanup that never gates the primary result -- an
 	// upgrade/dist-upgrade can leave packages autoremove would clear.
 	msg := fmt.Sprintf("%s succeeded\n%s", action.Type, output)
-	if autoOut, autoErr := runCapped(aptCommand(ctx, "autoremove", "-y")); autoErr != nil {
+	if autoOut, autoErr := runCapped(ctx, aptCommand(ctx, "autoremove", "-y")); autoErr != nil {
 		msg += fmt.Sprintf("\napt-get autoremove failed: %v\n%s", autoErr, autoOut)
 	}
 
@@ -155,11 +156,27 @@ func aptCommand(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
-func runCapped(cmd *exec.Cmd) (string, error) {
+// runCapped runs cmd, capturing combined stdout+stderr into the returned
+// string (truncated to the last outputTruncateLimit bytes). If ctx carries
+// an *OutputSink (see WithOutputSink), each complete line is also tapped
+// live as it's written -- purely additive, the returned string is
+// identical either way. cmd.Stdout and cmd.Stderr are always set to the
+// exact same writer value (whichever one that is), preserving os/exec's
+// single-writer-at-a-time guarantee that lineTee itself relies on.
+func runCapped(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	var w io.Writer = &buf
+	var tee *lineTee
+	if sink := sinkFromContext(ctx); sink != nil {
+		tee = newLineTee(&buf, sink.push)
+		w = tee
+	}
+	cmd.Stdout = w
+	cmd.Stderr = w
 	err := cmd.Run()
+	if tee != nil {
+		tee.flush()
+	}
 	out := buf.String()
 	if len(out) > outputTruncateLimit {
 		out = "...(truncated)...\n" + out[len(out)-outputTruncateLimit:]
