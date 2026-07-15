@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,10 +47,16 @@ var errSuperseded = errors.New("superseded by a higher-priority connection")
 // reset on a clean run); being superseded uses a separate, non-escalating
 // cadence (see supersededRetryInterval) -- see nextRetryDelay. Blocks
 // until ctx is done.
-func Run(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, onAction func(aggregator.Action)) {
+//
+// aggregatorPresent is only meaningful for kind == KindCompanion (see
+// CompanionHub.SetAggregatorPresent) -- the caller computes it once
+// up front (e.g. via companion.AggregatorColocated), not per reconnect
+// attempt, since it shells out to systemctl/docker and this host's
+// deploy shape essentially never changes within one process's lifetime.
+func Run(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent bool, onAction func(aggregator.Action)) {
 	backoff := time.Second
 	for ctx.Err() == nil {
-		err := runOnce(ctx, aggregatorURL, identity, kind, onAction)
+		err := runOnce(ctx, aggregatorURL, identity, kind, aggregatorPresent, onAction)
 		if err != nil && ctx.Err() != nil {
 			return
 		}
@@ -94,7 +101,7 @@ func nextRetryDelay(err error, backoff time.Duration) (wait, nextBackoff time.Du
 	}
 }
 
-func runOnce(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, onAction func(aggregator.Action)) error {
+func runOnce(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent bool, onAction func(aggregator.Action)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, aggregatorURL+"/companion/stream", nil)
 	if err != nil {
 		return fmt.Errorf("building stream request: %w", err)
@@ -103,6 +110,10 @@ func runOnce(ctx context.Context, aggregatorURL string, identity aggregatorclien
 	req.Header.Set("Authorization", "Bearer "+identity.Token)
 	req.Header.Set("X-Client-Kind", string(kind))
 	req.Header.Set("X-Companion-Version", version.Version)
+	// Only ever consulted by the aggregator for a KindCompanion connection
+	// (see CompanionHub.SetAggregatorPresent) -- sent unconditionally
+	// anyway since it's harmless for the agent's own connection too.
+	req.Header.Set("X-Aggregator-Present", strconv.FormatBool(aggregatorPresent))
 
 	// Deliberately no client Timeout: this response is a long-lived SSE
 	// stream by design. ctx governs cancellation instead.

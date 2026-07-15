@@ -48,6 +48,16 @@ func run() error {
 	}
 	log.Printf("companion: fetched identity for agent %s", identity.AgentID)
 
+	// Checked once at startup, not per reconnect -- this host's deploy
+	// shape essentially never changes within one process's lifetime, and
+	// re-running it on every reconnect would mean shelling out to
+	// systemctl/docker on every backoff retry for no benefit. If an
+	// aggregator does get installed on this host later, restarting the
+	// companion (which a self-update of anything on this host already
+	// tends to do) picks that up.
+	aggregatorPresent := companion.AggregatorColocated(ctx)
+	log.Printf("companion: aggregator colocated on this host: %v", aggregatorPresent)
+
 	report := func(result aggregator.ActionResult) {
 		// A fresh, short-lived context -- not the (possibly already
 		// canceled, if this action landed during shutdown) outer ctx --
@@ -59,7 +69,7 @@ func run() error {
 		}
 	}
 
-	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, func(action aggregator.Action) {
+	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, aggregatorPresent, func(action aggregator.Action) {
 		log.Printf("companion: received action %s (%s)", action.ID, action.Type)
 
 		// Live output for whatever command Apply is about to run, best-effort

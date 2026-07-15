@@ -359,6 +359,65 @@ func TestHandleCompanionStreamPushesAction(t *testing.T) {
 	}
 }
 
+// TestHandleCompanionStreamRecordsAggregatorPresentHeader covers the
+// wiring for the "hide Update aggregator on hosts that don't run it" fix:
+// a real companion connection carrying X-Aggregator-Present must update
+// the hub, but an agent-kind connection (which never runs the
+// aggregator-colocation check at all -- see AggregatorColocated) must not,
+// even if the header happens to be present.
+func TestHandleCompanionStreamRecordsAggregatorPresentHeader(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	connect := func(clientKind, aggregatorPresent string) *http.Response {
+		req, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Agent-ID", "a1")
+		req.Header.Set("Authorization", "Bearer tok")
+		req.Header.Set("X-Client-Kind", clientKind)
+		req.Header.Set("X-Aggregator-Present", aggregatorPresent)
+		resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	resp := connect("companion", "true")
+	defer resp.Body.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for !s.hub.Connected("a1") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.hub.AggregatorPresent("a1") {
+		t.Fatal("expected AggregatorPresent to be true after a companion connects with X-Aggregator-Present: true")
+	}
+
+	// Deliberately not closing resp's body here -- doing so would tear
+	// down the companion's own stream (its handler's r.Context() ends,
+	// running the deferred Disconnect), which would make the next
+	// connect attempt below succeed instead of correctly getting
+	// rejected as this test expects.
+
+	// An agent-kind connect attempt is rejected outright while a companion
+	// already holds the slot (see CompanionHub.Connect's own arbitration)
+	// -- confirm that rejected attempt didn't touch AggregatorPresent
+	// either, even though it carried the header too.
+	resp2 := connect("agent", "true")
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		t.Fatalf("got status %d, want 409 for an agent-kind connect while a companion is already connected", resp2.StatusCode)
+	}
+	if !s.hub.AggregatorPresent("a1") {
+		t.Fatal("expected AggregatorPresent to remain true -- a rejected connect attempt must not clear it")
+	}
+}
+
 func TestHandleCompanionOutputRequiresActionID(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
@@ -853,6 +912,7 @@ func TestHandleAdminPageHidesAgentCompanionButtonsWhenAggregatorItselfBehind(t *
 
 	res := s.hub.Connect("a1", KindCompanion, "v0.9.0")
 	defer s.hub.Disconnect("a1", res.Ch)
+	s.hub.SetAggregatorPresent("a1", true)
 
 	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
 	if strings.Contains(body, "postSelfUpdate('a1', 'agent'") {
@@ -863,6 +923,38 @@ func TestHandleAdminPageHidesAgentCompanionButtonsWhenAggregatorItselfBehind(t *
 	}
 	if !strings.Contains(body, "postSelfUpdate('a1', 'aggregator'") {
 		t.Fatalf("expected an Update aggregator button, got: %s", body)
+	}
+}
+
+// TestHandleAdminPageHidesUpdateAggregatorButtonWhenNotColocated is the
+// regression test for the companion piece of the same class of UX bug:
+// an update being available and a companion being connected used to be
+// the only two conditions gating the "Update aggregator" button, so it
+// showed up on every such row even when that host doesn't run the
+// aggregator at all -- clicking it there just fails immediately (see
+// SelfUpdate's DeployNone fallthrough). The button must not render
+// unless this host's own companion has actually reported the aggregator
+// as colocated (SetAggregatorPresent).
+func TestHandleAdminPageHidesUpdateAggregatorButtonWhenNotColocated(t *testing.T) {
+	withVersion(t, "v1.0.0")
+	s, reg := newTestServerWithLatestVersion(t, "", "v2.0.0")
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	rec := doJSON(t, s, http.MethodPost, "/report", checker.Status{Hostname: "web01", OK: true, AgentVersion: "v0.9.0"}, map[string]string{
+		"X-Agent-ID": "a1", "Authorization": "Bearer tok",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	res := s.hub.Connect("a1", KindCompanion, "v0.9.0")
+	defer s.hub.Disconnect("a1", res.Ch)
+	// Deliberately not calling SetAggregatorPresent -- default false,
+	// same as a companion binary that predates this signal entirely.
+
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if strings.Contains(body, "postSelfUpdate('a1', 'aggregator'") {
+		t.Fatalf("expected no Update aggregator button when this host's companion never reported the aggregator as colocated, got: %s", body)
 	}
 }
 

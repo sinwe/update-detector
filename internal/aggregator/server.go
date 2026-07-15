@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,6 +204,16 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.hub.Disconnect(rec.ID, result.Ch)
+	// Only meaningful for a real companion (see SetAggregatorPresent) --
+	// an agent-only connection has never run the aggregator-colocation
+	// check at all, so a missing/unparseable header here (including one
+	// from an older companion binary that predates this header entirely)
+	// defaults to false, same "hide rather than show incorrectly" posture
+	// as AggregatorPresent's own zero value.
+	if kind == KindCompanion {
+		present, _ := strconv.ParseBool(r.Header.Get("X-Aggregator-Present"))
+		s.hub.SetAggregatorPresent(rec.ID, present)
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

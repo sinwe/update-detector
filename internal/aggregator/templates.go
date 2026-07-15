@@ -46,6 +46,14 @@ type agentView struct {
 	CompanionVersion   string
 	RecentResults      []resultView
 
+	// AggregatorPresent is whether this row's own companion last reported
+	// detecting the aggregator itself running (natively or as a Docker
+	// container) on the same host -- gates the "Update aggregator" button
+	// so it doesn't show up on every host with a connected companion,
+	// only ones where clicking it wouldn't just fail immediately (see
+	// SelfUpdate's DeployNone fallthrough).
+	AggregatorPresent bool
+
 	// AgentUpdateAvailable/CompanionUpdateAvailable compare this row's own
 	// reported agent/companion version against adminPageData.LatestVersion
 	// -- false whenever LatestVersion is empty (no successful self-update
@@ -121,6 +129,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ConnectedVia:             string(kind),
 		CompanionVersion:         companionVersion,
 		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion) && !aggregatorBehind,
+		AggregatorPresent:        hub.AggregatorPresent(rec.ID),
 	}
 	if actionID, ok := hub.Pending(rec.ID); ok {
 		v.PendingActionID = actionID
@@ -274,8 +283,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
             {{if .AgentUpdateAvailable}}
             <button onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update this host's agent to {{$.LatestVersion}}">Update agent</button>
             {{end}}
-            {{if $.AggregatorUpdateAvailable}}
-            <button onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update the aggregator co-located with this host, if any, to {{$.LatestVersion}}">Update aggregator</button>
+            {{if and $.AggregatorUpdateAvailable .AggregatorPresent}}
+            <button onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update the aggregator co-located with this host to {{$.LatestVersion}}">Update aggregator</button>
             {{end}}
             {{if .CompanionUpdateAvailable}}
             <button onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update this host's companion to {{$.LatestVersion}}">Update companion</button>

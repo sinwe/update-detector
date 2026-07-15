@@ -81,6 +81,21 @@ func Detect(ctx context.Context, name string) (Detection, error) {
 	return Detection{Native: native, DockerContainerID: dockerID, DockerImage: dockerImage}, nil
 }
 
+// AggregatorColocated reports whether the aggregator itself is running
+// (natively or as a Docker container) on this same host -- used to tell
+// the aggregator, at connect time, whether it's worth offering an
+// "Update aggregator" button for this host at all (see
+// CompanionHub.SetAggregatorPresent). Best-effort: a detection error is
+// treated the same as "not colocated" rather than failing the connection
+// attempt over what's purely informational.
+func AggregatorColocated(ctx context.Context) bool {
+	detection, err := Detect(ctx, "update-aggregator")
+	if err != nil {
+		return false
+	}
+	return detection.Kind() != DeployNone
+}
+
 // nativeUnitPresent mirrors install.sh's own native_unit_present.
 func nativeUnitPresent(name string) bool {
 	_, err := os.Stat(fmt.Sprintf("%s/%s.service", systemdUnitDir, name))

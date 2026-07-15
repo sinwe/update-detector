@@ -122,16 +122,21 @@ type CompanionHub struct {
 	mu       sync.Mutex
 	streams  map[string]streamEntry
 	versions map[string]string // agentID -> last-reported companion version
-	pending  map[string]string // agentID -> in-flight action ID
-	results  map[string][]ActionResult
+	// aggregatorPresent is agentID -> whether that host's own companion
+	// last reported detecting the aggregator itself running there
+	// (natively or as a Docker container) -- see SetAggregatorPresent.
+	aggregatorPresent map[string]bool
+	pending           map[string]string // agentID -> in-flight action ID
+	results           map[string][]ActionResult
 }
 
 func NewCompanionHub() *CompanionHub {
 	return &CompanionHub{
-		streams:  map[string]streamEntry{},
-		versions: map[string]string{},
-		pending:  map[string]string{},
-		results:  map[string][]ActionResult{},
+		streams:           map[string]streamEntry{},
+		versions:          map[string]string{},
+		aggregatorPresent: map[string]bool{},
+		pending:           map[string]string{},
+		results:           map[string][]ActionResult{},
 	}
 }
 
@@ -195,6 +200,36 @@ func (h *CompanionHub) CompanionVersion(agentID string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.versions[agentID]
+}
+
+// SetAggregatorPresent records whether agentID's companion detected the
+// aggregator itself running (natively or as a Docker container) on the
+// same host, at connect time -- purely informational, used only so the
+// admin page can hide its "Update aggregator" button on hosts where
+// clicking it would just fail immediately (SelfUpdate's DeployNone
+// fallthrough -- see internal/companion/selfupdate.go). Deliberately a
+// separate call from Connect, not a parameter to it: this is optional,
+// best-effort information a companion attaches on top of an already-
+// successful connection, not part of the connection arbitration Connect
+// itself performs, and every existing Connect call site (tests included)
+// would otherwise need to grow a parameter that means nothing for a
+// KindAgent connection.
+func (h *CompanionHub) SetAggregatorPresent(agentID string, present bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.aggregatorPresent[agentID] = present
+}
+
+// AggregatorPresent returns the last-reported aggregator-colocated flag
+// for agentID, or false if never reported -- including if only the agent,
+// never a companion, has ever connected for this host. That default is
+// safe: the admin page only ever shows self-update buttons once a real
+// companion is connected in the first place, so "false" here just means
+// "hide the button," never "show a button that shouldn't be there."
+func (h *CompanionHub) AggregatorPresent(agentID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.aggregatorPresent[agentID]
 }
 
 // Kind returns the kind of the currently connected stream for agentID, if

@@ -108,6 +108,20 @@ paths:
           description: The companion's own build version, shown on the admin page. Older companions that predate this simply omit it.
           schema:
             type: string
+        - name: X-Aggregator-Present
+          in: header
+          required: false
+          description: >
+            Only meaningful when X-Client-Kind is "companion" -- whether
+            this companion detected the aggregator itself running
+            (natively or as a Docker container) on the same host. Gates
+            the admin page's "Update aggregator" button so it doesn't
+            appear on hosts where clicking it would just fail
+            immediately. Missing/unparseable defaults to false, same as
+            an older companion that predates this header entirely.
+          schema:
+            type: string
+            enum: ["true", "false"]
       responses:
         "200":
           description: text/event-stream of Action payloads
