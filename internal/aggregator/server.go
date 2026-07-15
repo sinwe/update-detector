@@ -684,16 +684,18 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 }
 
 // handleAdminAgentVersion reports id's currently-known agent/companion
-// versions, straight from the registry/hub -- polled by the admin page's
-// own JS after a self-update's action stream reports "done", instead of
-// blindly reloading. A companion's SelfUpdate call (see
-// internal/companion/selfupdate.go) returns as soon as the restart/`docker
-// compose up -d` command has been *issued*, not once the new process has
-// actually finished starting up and reported back in -- for a self-update
-// of "agent" or "companion" specifically, that report is the only thing
-// that ever updates what this endpoint returns, so a fixed short delay
-// before reloading routinely lands before it arrives, showing the old
-// version until a manual refresh (or several) finally lands after it.
+// versions and its last report time, straight from the registry/hub --
+// polled by the admin page's own JS after an action's live-output stream
+// reports "done", instead of blindly reloading. Both an apply's
+// out-of-band recheck and a self-update's restart/redeploy return long
+// before the *new* agent process has actually finished its own detection
+// cycle and reported back in -- for a self-update of "agent"/"companion"
+// specifically, AgentVersion/CompanionVersion only change once that
+// happens; for a plain package apply, the shrunk upgradable list only
+// shows up in that same report. A fixed short delay before reloading
+// routinely lands before either arrives, so the admin page polls this
+// until LastSeen actually advances (or, for self-update, until the
+// version actually matches) rather than guessing.
 func (s *Server) handleAdminAgentVersion(w http.ResponseWriter, _ *http.Request, id string) {
 	rec, ok := s.registry.Get(id)
 	if !ok {
@@ -704,9 +706,14 @@ func (s *Server) handleAdminAgentVersion(w http.ResponseWriter, _ *http.Request,
 	if rec.LastReport != nil {
 		agentVersion = rec.LastReport.AgentVersion
 	}
+	lastSeen := ""
+	if !rec.LastSeen.IsZero() {
+		lastSeen = rec.LastSeen.Format(time.RFC3339Nano)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"agent_version":     agentVersion,
 		"companion_version": s.hub.CompanionVersion(id),
+		"last_seen":         lastSeen,
 	})
 }
 

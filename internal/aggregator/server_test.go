@@ -1260,8 +1260,8 @@ func TestHandleAdminAgentVersionReflectsLastReportAndCompanionVersion(t *testing
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp["agent_version"] != "" || resp["companion_version"] != "" {
-		t.Fatalf("got %+v, want both empty before any report/connect", resp)
+	if resp["agent_version"] != "" || resp["companion_version"] != "" || resp["last_seen"] != "" {
+		t.Fatalf("got %+v, want all empty before any report/connect", resp)
 	}
 
 	if outcome, err := reg.Report("a1", "tok", checker.Status{AgentVersion: "v1.2.3"}); err != nil || outcome != ReportAccepted {
@@ -1282,6 +1282,45 @@ func TestHandleAdminAgentVersionReflectsLastReportAndCompanionVersion(t *testing
 	}
 	if resp["companion_version"] != "v1.2.0" {
 		t.Fatalf("got companion_version %q, want v1.2.0", resp["companion_version"])
+	}
+	if resp["last_seen"] == "" {
+		t.Fatalf("got empty last_seen, want it set after Report")
+	}
+}
+
+// TestHandleAdminAgentVersionLastSeenAdvancesOnEachReport covers the
+// signal watchReportUpdated (admin page JS) polls on after a plain apply:
+// last_seen must change on every fresh report, not just the first one,
+// so a baseline captured right before an apply reliably differs once the
+// resulting recheck's report actually lands.
+func TestHandleAdminAgentVersionLastSeenAdvancesOnEachReport(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	if outcome, err := reg.Report("a1", "tok", checker.Status{}); err != nil || outcome != ReportAccepted {
+		t.Fatalf("first Report: outcome=%v err=%v", outcome, err)
+	}
+	rec := doJSON(t, s, http.MethodGet, "/admin/agents/a1/version", nil, nil)
+	var first map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(time.Millisecond) // guards against a low-resolution clock reporting the exact same instant twice
+	if outcome, err := reg.Report("a1", "tok", checker.Status{}); err != nil || outcome != ReportAccepted {
+		t.Fatalf("second Report: outcome=%v err=%v", outcome, err)
+	}
+	rec = doJSON(t, s, http.MethodGet, "/admin/agents/a1/version", nil, nil)
+	var second map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+
+	if first["last_seen"] == "" || second["last_seen"] == "" {
+		t.Fatalf("got first=%q second=%q, want both non-empty", first["last_seen"], second["last_seen"])
+	}
+	if first["last_seen"] == second["last_seen"] {
+		t.Fatalf("got the same last_seen %q across two separate reports, want it to advance", first["last_seen"])
 	}
 }
 

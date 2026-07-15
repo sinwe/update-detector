@@ -413,15 +413,19 @@ paths:
 
   /admin/agents/{id}/version:
     get:
-      summary: Currently-known agent/companion versions for one host
+      summary: Currently-known agent/companion versions and last report time for one host
       description: >
         Straight from the registry/hub, not the admin page's own last
-        render -- polled by the admin page's JS after a self-update of
-        "agent" or "companion" reports done, since that "done" only means
-        the restart command was issued, not that the new process has
-        actually finished starting up and reported its new version in.
-        Polling this is how the page knows when it's actually safe to
-        reload instead of guessing a fixed delay.
+        render -- polled by the admin page's JS after any action's live-
+        output stream reports done, since "done" only means the companion's
+        command (apt-get, or a restart/redeploy for a self-update) was
+        issued, not that the resulting fresh report has actually landed
+        yet. For a self-update of "agent" or "companion", the page polls
+        until agent_version/companion_version actually match the target;
+        for a plain apply, it polls until last_seen advances past a
+        baseline captured before the action started. Polling this is how
+        the page knows when it's actually safe to reload instead of
+        guessing a fixed delay.
       operationId: getAgentVersion
       parameters:
         - name: id
@@ -431,7 +435,7 @@ paths:
             type: string
       responses:
         "200":
-          description: Current known versions (empty string if never reported)
+          description: Current known versions and last report time (empty string for any field never reported)
           content:
             application/json:
               schema:
@@ -440,6 +444,8 @@ paths:
                   agent_version:
                     type: string
                   companion_version:
+                    type: string
+                  last_seen:
                     type: string
         "404":
           description: Unknown agent id

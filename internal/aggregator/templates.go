@@ -360,13 +360,19 @@ const adminTemplateSrc = `<!DOCTYPE html>
       pane.style.display = 'block';
       pane.textContent = '';
 
+      // Captured now, before the action has had any realistic chance to
+      // produce a fresh report (the companion hasn't even started running
+      // apt-get yet) -- the baseline watchReportUpdated compares against
+      // once "done" fires, for the non-self-update case below.
+      const baselinePromise = selfUpdateExpect ? null : fetchAgentVersionInfo(id).then(d => d ? d.last_seen : '');
+
       const es = new EventSource('/admin/agents/' + id + '/output/stream');
       es.addEventListener('line', (e) => {
         const data = JSON.parse(e.data);
         pane.textContent += data.line + '\n';
         pane.scrollTop = pane.scrollHeight;
       });
-      es.addEventListener('done', () => {
+      es.addEventListener('done', async () => {
         es.close();
         if (selfUpdateExpect) {
           // "done" here only means the companion's restart/redeploy
@@ -379,14 +385,18 @@ const adminTemplateSrc = `<!DOCTYPE html>
             ' to report version ' + selfUpdateExpect.targetVersion + ' ---\n';
           watchComponentVersion(id, selfUpdateExpect, pane);
         } else {
-          // The rest of this row (package counts, recent-actions log) is
-          // only ever computed at page-render time -- it won't reflect
-          // this action's outcome until the page reloads, so do that
-          // automatically instead of leaving the operator to notice and
-          // refresh manually. The brief delay just lets "done" register
-          // visually first.
-          pane.textContent += '--- done -- reloading this page shortly ---\n';
-          setTimeout(() => location.reload(), 800);
+          // "done" here means the companion finished apt-get and (for
+          // anything but a plain recheck) triggered the agent's own
+          // out-of-band recheck -- but that recheck is itself another
+          // detection cycle plus a report round-trip to this aggregator,
+          // which routinely takes longer than any fixed short delay would
+          // assume. Without waiting for it, this row's upgradable-package
+          // list/counts (only ever computed at page-render time) reload
+          // showing the pre-apply numbers, exactly as if nothing happened,
+          // until a later manual refresh happens to land after the real
+          // report. Poll for that report specifically instead of guessing.
+          pane.textContent += '--- done -- waiting for the fresh report to land ---\n';
+          watchReportUpdated(id, await baselinePromise, pane);
         }
       });
       es.addEventListener('disconnected', () => {
@@ -395,34 +405,66 @@ const adminTemplateSrc = `<!DOCTYPE html>
       });
     }
 
-    // Polls GET /admin/agents/{id}/version (straight from the registry/hub,
-    // not the page's own stale render) until expect.component's reported
-    // version actually matches expect.targetVersion, then reloads. Same
-    // "poll instead of assume" pattern as watchAggregatorRestart. Gives up
-    // after maxAttempts and leaves a message instead of ever reloading onto
-    // what might still be a stale render.
+    // Best-effort fetch of GET /admin/agents/{id}/version -- straight from
+    // the registry/hub, not the page's own stale render. Returns null (not
+    // a throw) on any failure, so callers can just treat that as "try
+    // again next poll" instead of every call site handling its own catch.
+    async function fetchAgentVersionInfo(id) {
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/version', {cache: 'no-store'});
+        if (resp.ok) return await resp.json();
+      } catch (e) {
+        // Transient fetch failure -- treated the same as a non-OK
+        // response by every caller below: keep polling.
+      }
+      return null;
+    }
+
+    // Polls until expect.component's reported version actually matches
+    // expect.targetVersion, then reloads. Same "poll instead of assume"
+    // pattern as watchAggregatorRestart. Gives up after maxAttempts and
+    // leaves a message instead of ever reloading onto what might still be
+    // a stale render.
     function watchComponentVersion(id, expect, pane) {
       const field = expect.component === 'companion' ? 'companion_version' : 'agent_version';
       let attempts = 0;
       const maxAttempts = 60; // ~2 minutes at 2s each
       const poll = setInterval(async () => {
         attempts++;
-        try {
-          const resp = await fetch('/admin/agents/' + id + '/version', {cache: 'no-store'});
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data[field] === expect.targetVersion) {
-              clearInterval(poll);
-              location.reload();
-              return;
-            }
-          }
-        } catch (e) {
-          // Transient fetch failure -- keep polling rather than giving up.
+        const data = await fetchAgentVersionInfo(id);
+        if (data && data[field] === expect.targetVersion) {
+          clearInterval(poll);
+          location.reload();
+          return;
         }
         if (attempts >= maxAttempts) {
           clearInterval(poll);
           pane.textContent += '--- still on the old version after 2 minutes -- reload manually once it catches up ---\n';
+        }
+      }, 2000);
+    }
+
+    // Polls until this host's last-report time actually advances past
+    // baseline (captured just before the action started), then reloads --
+    // baseline, not a specific expected value, since a plain apply has no
+    // single "target" to compare against the way a self-update's version
+    // does; any strictly newer report reflects this action's outcome.
+    // Gives up after maxAttempts and leaves a message instead of ever
+    // reloading onto what might still be pre-apply data.
+    function watchReportUpdated(id, baseline, pane) {
+      let attempts = 0;
+      const maxAttempts = 60; // ~2 minutes at 2s each
+      const poll = setInterval(async () => {
+        attempts++;
+        const data = await fetchAgentVersionInfo(id);
+        if (data && data.last_seen && data.last_seen !== baseline) {
+          clearInterval(poll);
+          location.reload();
+          return;
+        }
+        if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          pane.textContent += '--- still showing pre-apply data after 2 minutes -- reload manually once the fresh report lands ---\n';
         }
       }, 2000);
     }
