@@ -415,7 +415,11 @@ for up to a full `CHECK_INTERVAL`.
 host — needs no secret (it can't change anything on the host, only make
 it report sooner), so use it any time the numbers look stale and you
 don't want to wait for the next `CHECK_INTERVAL`, without needing to
-apply a package first just to trigger a refresh.
+apply a package first just to trigger a refresh. It gets the same live
+view as apply/self-update (there's just little to show — a recheck runs
+no shell command, only triggers the agent's own detection cycle) and the
+same auto-reload once the fresh report actually lands, whether it's
+served by a companion or, per the next paragraph, the agent alone.
 
 **Force recheck works even without a companion installed.** The agent
 itself can hold the same aggregator connection the companion normally

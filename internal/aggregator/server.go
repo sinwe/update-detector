@@ -358,7 +358,12 @@ func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.outputHub.Begin(rec.ID, actionID)
+	// Begin already happened when the action was pushed (handleAdminApply
+	// et al.) -- uniformly, whether or not this stream ever actually
+	// arrives, so an agent-only recheck (never opens this endpoint at
+	// all) and an old companion that predates output streaming entirely
+	// both still resolve to a correct "done" via handleCompanionResult
+	// instead of a live pane that never closes.
 	defer s.outputHub.End(rec.ID, actionID, EventDisconnected)
 
 	scanner := bufio.NewScanner(r.Body)
@@ -584,6 +589,7 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.outputHub.Begin(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }
@@ -607,6 +613,7 @@ func (s *Server) handleAdminRecheck(w http.ResponseWriter, _ *http.Request, id s
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.outputHub.Begin(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }
@@ -690,6 +697,7 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.outputHub.Begin(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }

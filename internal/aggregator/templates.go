@@ -524,7 +524,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
           alert('recheck failed (' + resp.status + '): ' + await resp.text());
           return;
         }
-        alert('recheck triggered -- reload this page in a bit to see updated data');
+        const data = await resp.json();
+        openLiveOutput(id, data.action_id);
       } catch (e) {
         alert('recheck failed: ' + e);
       }

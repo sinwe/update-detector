@@ -456,6 +456,10 @@ func TestHandleCompanionOutputFansOutToAdminStream(t *testing.T) {
 	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionUpgrade, CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("push failed: %v", err)
 	}
+	// In production, Begin happens inside the admin handlers (handleAdminApply
+	// et al.) right after a successful Push -- this test calls hub.Push
+	// directly, bypassing those, so it must simulate that same step.
+	s.outputHub.Begin("a1", "act1")
 
 	httpSrv := httptest.NewServer(s.Handler())
 	defer httpSrv.Close()
@@ -517,6 +521,10 @@ func TestHandleCompanionOutputEndsAsDisconnectedWithoutPriorResult(t *testing.T)
 	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionUpgrade, CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("push failed: %v", err)
 	}
+	// In production, Begin happens inside the admin handlers (handleAdminApply
+	// et al.) right after a successful Push -- this test calls hub.Push
+	// directly, bypassing those, so it must simulate that same step.
+	s.outputHub.Begin("a1", "act1")
 
 	httpSrv := httptest.NewServer(s.Handler())
 	defer httpSrv.Close()
@@ -1110,6 +1118,51 @@ func TestHandleAdminRecheckNeedsNoSecret(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected a recheck action to be pushed to the connected channel")
+	}
+}
+
+// TestHandleAdminRecheckWithNoCompanionStillResolvesLiveViewAsDone is the
+// regression test for extending live output to Force Recheck: when no
+// companion is connected (a bare agent-only KindAgent stream), a recheck
+// action never opens POST /companion/output at all -- Begin must still
+// happen at push time (inside handleAdminRecheck itself) so a browser
+// subscriber's live view still receives "done" once the agent's own
+// result lands (via cmd/update-detector/main.go's own report call),
+// instead of waiting forever for an End that would otherwise never come.
+func TestHandleAdminRecheckWithNoCompanionStillResolvesLiveViewAsDone(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindAgent, "")
+	defer s.hub.Disconnect("a1", res.Ch)
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/recheck", nil, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+	var accepted struct {
+		ActionID string `json:"action_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, cancel := s.outputHub.Subscribe("a1")
+	defer cancel()
+
+	resultRec := doJSON(t, s, http.MethodPost, "/companion/result",
+		companionResultRequest{ActionID: accepted.ActionID, Success: true, Message: "recheck triggered"},
+		map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if resultRec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resultRec.Code)
+	}
+
+	select {
+	case ev := <-ch:
+		if ev.Kind != EventDone {
+			t.Fatalf("got %#v, want EventDone", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the done event -- Begin must happen at push time, not just inside handleCompanionOutput")
 	}
 }
 

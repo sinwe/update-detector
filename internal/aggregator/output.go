@@ -49,10 +49,18 @@ func NewOutputHub() *OutputHub {
 	}
 }
 
-// Begin marks actionID as agentID's currently-streaming action.
-// Unconditional: CompanionHub's own in-flight guard (Push's
-// ErrActionInFlight) already ensures at most one action is ever in flight
-// per agent, so there's never a second concurrent Begin to race against.
+// Begin marks actionID as agentID's currently-streaming action. Called
+// once an action is successfully pushed (handleAdminApply and friends),
+// not when a companion's output stream actually shows up -- some actions
+// never have one at all (a bare recheck served by an agent-only
+// connection never opens POST /companion/output; an old companion that
+// predates output streaming entirely never will either), and those must
+// still resolve to a correct "done" via End once their real result
+// arrives, rather than a live pane that waits forever for an End call
+// that never comes. Unconditional: CompanionHub's own in-flight guard
+// (Push's ErrActionInFlight) already ensures at most one action is ever
+// in flight per agent, so there's never a second concurrent Begin to
+// race against.
 func (h *OutputHub) Begin(agentID, actionID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
