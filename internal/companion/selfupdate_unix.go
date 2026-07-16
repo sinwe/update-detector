@@ -108,26 +108,3 @@ func readEnvFile(path string) map[string]string {
 	return values
 }
 
-// passThrough returns "KEY=value" env entries for each of keys present
-// (and non-empty) in values, unchanged.
-func passThrough(values map[string]string, keys ...string) []string {
-	var env []string
-	for _, k := range keys {
-		if v := values[k]; v != "" {
-			env = append(env, k+"="+v)
-		}
-	}
-	return env
-}
-
-// translate returns "newName=value" env entries, renaming each key in
-// rename (oldName -> newName) that's present and non-empty in values.
-func translate(values map[string]string, rename map[string]string) []string {
-	var env []string
-	for oldName, newName := range rename {
-		if v := values[oldName]; v != "" {
-			env = append(env, newName+"="+v)
-		}
-	}
-	return env
-}

@@ -117,6 +117,28 @@ jobs:
             docker rm "$cid" >/dev/null
           done
 
+          # windows/amd64 only -- no windows/arm64 release asset exists,
+          # and install.bat itself (see its own header comment) asserts
+          # amd64 before ever trying to resolve one. Detection-only for
+          # the agent (see README's Windows platform-support row) and
+          # experimental companion/self-update support (see
+          # docs/plugin-architecture-plan.md, Phase 3) -- built and
+          # published anyway so install.bat has something to fetch;
+          # neither has been verified against a real Windows host.
+          cid=$(docker create \
+            -e CGO_ENABLED=0 -e GOOS=windows -e GOARCH=amd64 \
+            golang:1.22-alpine \
+            sh -c "mkdir -p /out && cd /src \
+              && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-detector.exe ./cmd/update-detector \
+              && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-aggregator.exe ./cmd/update-aggregator \
+              && go build -ldflags \"-X update-detector/internal/version.Version=$TAG\" -o /out/update-detector-companion.exe ./cmd/update-detector-companion")
+          docker cp . "$cid:/src"
+          docker start -a "$cid"
+          docker cp "$cid:/out/update-detector.exe" "dist/update-detector-windows-amd64.exe"
+          docker cp "$cid:/out/update-aggregator.exe" "dist/update-aggregator-windows-amd64.exe"
+          docker cp "$cid:/out/update-detector-companion.exe" "dist/update-detector-companion-windows-amd64.exe"
+          docker rm "$cid" >/dev/null
+
       # A separate secret from REGISTRY_TOKEN on purpose: REGISTRY_TOKEN only
       # needs write:package/read:package for the image pushes above, while
       # creating a release and uploading assets needs repository read/write
@@ -173,4 +195,18 @@ jobs:
                 exit 1
               fi
             done
+
+            # windows/amd64, matching install.bat's own
+            # "$name-windows-amd64.exe" asset-name convention.
+            asset_name="$name-windows-amd64.exe"
+            file="dist/$asset_name"
+            http_status=$(curl -sS -o /tmp/asset.json -w "%{http_code}" -X POST \
+              -H "Authorization: token $FORGEJO_TOKEN" \
+              -F "attachment=@$file" \
+              "$API/releases/$release_id/assets?name=$asset_name")
+            if [ "$http_status" != "201" ]; then
+              echo "failed to upload asset $asset_name (http $http_status):" >&2
+              cat /tmp/asset.json >&2
+              exit 1
+            fi
           done

@@ -180,3 +180,31 @@ func dockerInspectLabel(ctx context.Context, containerID, label string) (string,
 	}
 	return strings.TrimSpace(out), nil
 }
+
+// passThrough returns "KEY=value" env entries for each of keys present
+// (and non-empty) in values, unchanged. Shared by both platforms'
+// existingConfigEnv: selfupdate_unix.go reads values from install.sh's
+// own env file, selfupdate_windows.go from install.bat's own Windows
+// Service registry Environment value -- the translation logic itself
+// doesn't care which.
+func passThrough(values map[string]string, keys ...string) []string {
+	var env []string
+	for _, k := range keys {
+		if v := values[k]; v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
+// translate returns "newName=value" env entries, renaming each key in
+// rename (oldName -> newName) that's present and non-empty in values.
+func translate(values map[string]string, rename map[string]string) []string {
+	var env []string
+	for oldName, newName := range rename {
+		if v := values[oldName]; v != "" {
+			env = append(env, newName+"="+v)
+		}
+	}
+	return env
+}

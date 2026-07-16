@@ -14,7 +14,7 @@ changes. Ships as a single Docker image, one container per host.
 | Plain Debian / Raspberry Pi OS (bare metal or VM) | ✅ supported now — see [OS flavors](#os-flavors) |
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
-| Actual Windows OS (Windows Update, winget) | 🧪 experimental — detection only, see [Limitations](#platform-limitations); no installer or apply/self-update support yet |
+| Actual Windows OS (Windows Update, winget) | 🧪 experimental — detection, `install.bat`, and companion apply/self-update all exist, see [Limitations](#platform-limitations); none of it verified against a real Windows host yet |
 | Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
 
 ## Installation
@@ -281,13 +281,26 @@ an experimental detection-only implementation (`internal/checker/windows`):
   part of this checker. No OS-upgrade detection at all in v1 (same
   posture as Debian) — `current_version`/`current_codename` are
   populated informationally from the registry only.
-- **Not yet supported**: there's no native Windows installer
-  (`install.ps1`), and no companion/apply/self-update path for Windows
-  at all yet — this is detection-only, wired up but with no supported
-  way to actually deploy it on a real Windows host today. Also untested
-  against a real Windows machine end-to-end; only fixture-based parsing
-  tests and a hosted CI runner (no `winget`/real registry state to
-  exercise) have exercised any of this so far.
+- **Installer**: `install.bat` (repo root, alongside `install.sh`) installs
+  the agent, aggregator, and/or companion as native Windows Services —
+  see [Triggering updates](#triggering-updates-companion) below. A `.bat`,
+  not a `.ps1`: `cmd.exe` runs it directly with no PowerShell
+  ExecutionPolicy to fight, which matters since the companion's own
+  self-update feature re-invokes it non-interactively with no operator
+  around to grant an exception. Config is stored in each service's own
+  registry `Environment` value (`REG_MULTI_SZ`), the native equivalent of
+  systemd's `EnvironmentFile=`.
+- **Known limitation, unresolved**: the companion Windows Service defaults
+  to running as `LocalSystem`, but `winget` is widely reported to not work
+  correctly when run as `SYSTEM` (its package-source state is normally
+  provisioned per-user, and `SYSTEM` has no such profile). If `winget
+  upgrade` fails from the companion service, try reconfiguring it to run
+  as a real administrator account instead: `sc config
+  update-detector-companion obj= ".\<user>" password= "<password>"`.
+- Also untested against a real Windows machine end-to-end, for either
+  detection or install/apply: only fixture-based parsing tests and a
+  hosted CI runner (no `winget`/real registry/real Windows Service state
+  to exercise) have exercised any of this so far.
 
 On WSL2 specifically, `docker` being on `PATH` doesn't necessarily mean
 there's a real engine running inside the distro at all — see
@@ -324,6 +337,21 @@ curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/inst
 (On WSL2, this same script detects that and offers a different, native
 install instead — see [WSL2](docs/wsl2.md).)
 
+**On actual Windows** (experimental, unverified against a real host — see
+[Limitations](#platform-limitations)): there's no Docker path at all, so
+`install.bat` always installs natively, and it can't be piped the way
+`install.sh` is — download it, then run it, from an elevated
+(Administrator) Command Prompt:
+
+```bat
+curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.bat -o install.bat
+install.bat
+```
+
+This prompts for which of the aggregator, the agent, and the companion to
+install (or set `INSTALL_COMPONENTS=agent,companion` etc. non-interactively),
+and installs each as a native Windows Service.
+
 This auto-discovers everything it needs from the running container: its
 bind-mounted state dir (for a one-time, in-memory-only token handoff over a
 Unix socket — see [How it works](#how-it-works)), its `AGGREGATOR_URL`, and
@@ -337,6 +365,9 @@ installed — the companion here, or (on WSL2) the agent/aggregator from
 ```sh
 curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh -s -- --uninstall
 ```
+
+On Windows, from an elevated Command Prompt, after downloading
+`install.bat` as above: `install.bat --uninstall`.
 
 (the `-s --` matters — a bare `sh --uninstall` would treat that as a
 script *filename* instead of an argument, and just fail). It prompts for
