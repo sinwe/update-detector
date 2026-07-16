@@ -60,27 +60,43 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 	}
 
 	var errs []string
+	var packages checker.PackageInfo
+	var havePackages bool
 
+	// Windows Update is this checker's primary signal (see
+	// windowsupdate.go's own doc comment) -- unlike winget below, a
+	// failure here is a genuine error worth surfacing.
+	if wuResult, err := checkWindowsUpdates(ctx); err != nil {
+		errs = append(errs, fmt.Sprintf("windows update: %v", err))
+	} else {
+		packages = mergePackageResult(packages, wuResult)
+		havePackages = true
+	}
+
+	// winget is optional and purely supplementary -- it covers
+	// separately-managed packages, the same relationship apt has to
+	// Ubuntu/Debian's own release upgrades, not the host's actual OS
+	// updates. winget being unavailable at all is therefore not a
+	// genuine error, most commonly simply because this process isn't
+	// running as the account winget.exe is registered for (see
+	// README.md). Any other winget failure (bad output, a real winget
+	// error, ...) is still worth surfacing.
 	if pkgResult, err := checkUpgradable(ctx); err != nil {
-		// winget being unavailable at all is not a genuine error --
-		// it's an optional, supplementary signal for this checker (see
-		// this package's own doc comment), most commonly unavailable
-		// simply because this process isn't running as the account
-		// winget.exe is registered for (see README.md). Any other
-		// winget failure (bad output, a real winget error, ...) is
-		// still worth surfacing.
 		if !errors.Is(err, ErrWingetNotFound) {
 			errs = append(errs, fmt.Sprintf("packages: %v", err))
 		}
-		if previous != nil {
-			status.Packages = previous.Packages
-		}
 	} else {
-		status.Packages = checker.PackageInfo{
-			UpgradableTotal:    pkgResult.Total,
-			UpgradableSecurity: pkgResult.Security, // always 0 -- winget has no security signal at all
-			Upgrades:           pkgResult.Upgrades,
-		}
+		packages = mergePackageResult(packages, pkgResult)
+		havePackages = true
+	}
+
+	// Only fall back to the previous cycle's value if *both* sources
+	// failed this cycle -- if just one did, this cycle's real (if
+	// partial) data is still better than pretending nothing changed.
+	if havePackages {
+		status.Packages = packages
+	} else if previous != nil {
+		status.Packages = previous.Packages
 	}
 
 	// checkRebootRequired has no failure mode worth reporting (see its

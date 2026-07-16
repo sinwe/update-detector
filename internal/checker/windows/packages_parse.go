@@ -1,11 +1,12 @@
-// Package windows implements checker.Checker for Windows hosts using
-// winget for package detection and the registry for reboot-pending and
-// OS version information (see windows.go, reboot.go -- both
-// //go:build windows). This file is deliberately untagged: it's pure
-// string processing with no OS-specific imports, which is what makes it
-// unit-testable via fixture text on any platform, not just Windows --
-// mirroring how internal/checker/debian's own dist-upgrade parsing is
-// separated from its exec call.
+// Package windows implements checker.Checker for Windows hosts using the
+// Windows Update Agent API as its primary signal, winget as an optional
+// supplementary one, and the registry for reboot-pending and OS version
+// information (see windowsupdate.go, packages.go, windows.go, reboot.go
+// -- all //go:build windows). This file is deliberately untagged: it's
+// pure string processing with no OS-specific imports, which is what
+// makes it unit-testable via fixture text on any platform, not just
+// Windows -- mirroring how internal/checker/debian's own dist-upgrade
+// parsing is separated from its exec call.
 package windows
 
 import (
@@ -16,13 +17,26 @@ import (
 	"update-detector/internal/checker"
 )
 
-// packageResult mirrors ubuntu/debian's own packageResult shape.
-// Security is always 0: winget has no signal at all equivalent to apt's
-// "-security" pocket, unlike Ubuntu/Debian.
+// packageResult mirrors ubuntu/debian's own packageResult shape. When it
+// comes from winget specifically (packages.go), Security is always 0:
+// winget has no signal at all equivalent to apt's "-security" pocket.
+// When it comes from Windows Update (windowsupdate.go), Security
+// reflects genuine MSRC severity ratings.
 type packageResult struct {
 	Total    int
 	Security int
 	Upgrades []checker.PackageUpgrade
+}
+
+// mergePackageResult combines src into dst -- used by windows.go's Check
+// to combine Windows Update's and winget's independently-succeeding
+// results into one PackageInfo, since either can fail (or simply not be
+// available) without the other.
+func mergePackageResult(dst checker.PackageInfo, src packageResult) checker.PackageInfo {
+	dst.UpgradableTotal += src.Total
+	dst.UpgradableSecurity += src.Security
+	dst.Upgrades = append(dst.Upgrades, src.Upgrades...)
+	return dst
 }
 
 // wingetColumns are the column names `winget upgrade` prints in its
