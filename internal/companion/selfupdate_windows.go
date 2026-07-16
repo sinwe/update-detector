@@ -31,8 +31,26 @@ var installBatPath = `C:\Program Files\update-detector\install.bat`
 // component is bundled into install.bat's own install step -- the
 // companion's own restart happens inside the script, so code after this
 // call may never run for Component == "companion".
+//
+// The exec.Cmd below is deliberately built from context.Background(),
+// never ctx: for a self-update of "companion" specifically, install.bat's
+// own `sc stop update-detector-companion` call (see its stop_if_running)
+// stops *this very process*, which is exactly what cancels ctx as part
+// of this service's own graceful-shutdown handling (see internal/winsvc
+// -- SCM's stop control triggers cancel() there). If install.bat were
+// still governed by that same ctx, exec.CommandContext would respond to
+// that cancellation by killing install.bat right then -- immediately
+// after it stopped the service and before it ever gets to replace the
+// binary or start it again, leaving the service stopped for good.
+// Confirmed live: this is exactly what "the companion never reconnects
+// after a self-update" turned out to be. Once a self-update has been
+// decided on, it must run to completion independent of whatever happens
+// to the process that launched it. ctx is still passed to runCapped
+// below for output-sink tapping (a plain context.Value lookup, entirely
+// unrelated to cancellation) -- only the exec.Cmd's own kill-on-cancel
+// behavior needs decoupling.
 func installNative(ctx context.Context, component, targetVersion string) error {
-	cmd := exec.CommandContext(ctx, "cmd", "/c", installBatPath)
+	cmd := exec.CommandContext(context.Background(), "cmd", "/c", installBatPath)
 	cmd.Env = append(append(os.Environ(), existingConfigEnv(component)...),
 		"INSTALL_COMPONENTS="+component,
 		"INSTALL_VERSION="+targetVersion,
