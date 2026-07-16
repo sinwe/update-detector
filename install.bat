@@ -199,6 +199,85 @@ if errorlevel 1 (
 )
 goto :eof
 
+:: configure_winget_account SERVICE -> optionally reconfigures SERVICE to
+:: run as a real user account instead of LocalSystem, so winget (a
+:: per-user App Execution Alias -- SYSTEM has no such registration, see
+:: README's platform-limitations section) actually works for it.
+::
+:: winget is OPTIONAL, not this checker's primary signal -- actual
+:: Windows Update detection (and the registry-based reboot-pending
+:: check) works fine under LocalSystem regardless, so this is always
+:: skippable, and skipped by default. Set WINGET_ACCOUNT/WINGET_PASSWORD
+:: for non-interactive use (e.g. from another install.bat run, or a
+:: script); otherwise prompts once per service.
+:configure_winget_account
+if defined WINGET_ACCOUNT (
+  set "wa_user=%WINGET_ACCOUNT%"
+  set "wa_pass=%WINGET_PASSWORD%"
+) else (
+  echo. >&2
+  echo install.bat: winget-based package detection/apply is OPTIONAL for %~1 -- >&2
+  echo   this checker's main signal is actual Windows Update, which already >&2
+  echo   works fine under the default LocalSystem account. Only say yes here >&2
+  echo   if you specifically also want winget-visible package upgrades. >&2
+  set "wa_enable="
+  set /p "wa_enable=Run %~1 as your own account so winget works too? [y/N]: "
+  if /i not "!wa_enable!"=="y" goto :eof
+  set "wa_user=%USERDOMAIN%\%USERNAME%"
+  set /p "wa_user=Account [!wa_user!]: "
+  for /f "delims=" %%P in ('powershell -NoProfile -Command "$p = Read-Host -AsSecureString 'Password for !wa_user!'; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p))"') do set "wa_pass=%%P"
+)
+if not defined wa_pass (
+  echo install.bat: no password given -- leaving %~1 on LocalSystem >&2
+  goto :eof
+)
+
+call :grant_logon_as_service "!wa_user!"
+echo install.bat: reconfiguring %~1 to run as !wa_user!...
+sc config "%~1" obj= "!wa_user!" password= "!wa_pass!"
+if errorlevel 1 (
+  echo install.bat: warning: could not reconfigure %~1's logon account -- see the error above, leaving it on LocalSystem >&2
+)
+set "wa_pass="
+goto :eof
+
+:: grant_logon_as_service ACCOUNT -> grants ACCOUNT the "Log on as a
+:: service" right via secedit (built in on every modern Windows, unlike
+:: the deprecated ntrights.exe) -- exports the current policy, appends
+:: ACCOUNT's SID to the SeServiceLogonRight line, reapplies just that
+:: one area. Best-effort: sc config above still runs either way; if this
+:: didn't actually take (or ACCOUNT already had the right, or something
+:: about this host's policy shape wasn't what this expected), `sc start`
+:: will surface Error 1069 ("logon failure") and README.md documents the
+:: manual secpol.msc fallback for that case.
+:grant_logon_as_service
+set "sid="
+for /f "delims=" %%S in ('powershell -NoProfile -Command "try { (New-Object System.Security.Principal.NTAccount('%~1')).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }"') do set "sid=%%S"
+if not defined sid (
+  echo install.bat: warning: could not resolve a SID for %~1 -- skipping automatic "Log on as a service" grant >&2
+  goto :eof
+)
+echo install.bat: granting "Log on as a service" to %~1...
+set "secinf=%TEMP%\update-detector-secpol.inf"
+set "secdb=%TEMP%\update-detector-secpol.sdb"
+secedit /export /cfg "%secinf%" /areas USER_RIGHTS >nul
+rem secedit's own INF files are UTF-16LE, not the system codepage --
+rem every read/write below must say so explicitly (findstr /u, Get-/
+rem Set-/Add-Content -Encoding Unicode), or the file ends up with mixed
+rem encodings that secedit /configure then fails to parse correctly.
+findstr /b /i /u /c:"SeServiceLogonRight" "%secinf%" >nul
+if errorlevel 1 (
+  powershell -NoProfile -Command "Add-Content -Encoding Unicode -Path '%secinf%' -Value 'SeServiceLogonRight = *%sid%'"
+) else (
+  powershell -NoProfile -Command "(Get-Content -Encoding Unicode '%secinf%') -replace '(?i)^SeServiceLogonRight\s*=\s*(.*)$', ('SeServiceLogonRight = $1,*' + '%sid%') | Set-Content -Encoding Unicode '%secinf%'"
+)
+secedit /configure /db "%secdb%" /cfg "%secinf%" /areas USER_RIGHTS >nul
+if errorlevel 1 (
+  echo install.bat: warning: secedit failed to apply the "Log on as a service" grant -- if the service fails to start with Error 1069, grant it manually via secpol.msc (see README.md) >&2
+)
+del /f /q "%secinf%" "%secdb%" >nul 2>&1
+goto :eof
+
 :: create_or_update_service NAME DISPLAYNAME BINPATH -> creates NAME if
 :: it doesn't exist yet, or reconfigures it in place if it does (so
 :: re-running this script to pick up a config or version change works,
@@ -343,6 +422,7 @@ if not defined CHECK_INTERVAL set "CHECK_INTERVAL=6h"
 call :create_or_update_service update-detector "update-detector agent" "%bin_path%"
 set "envval=LISTEN_ADDR=%LISTEN_ADDR%\0HOSTNAME_OVERRIDE=%HOSTNAME_OVERRIDE%\0CHECK_INTERVAL=%CHECK_INTERVAL%\0TELEGRAM_BOT_TOKEN=%TELEGRAM_BOT_TOKEN%\0TELEGRAM_CHAT_ID=%TELEGRAM_CHAT_ID%\0AGGREGATOR_URL=!resolved_aggregator_url!\0STATE_FILE=%data_dir%\state.json\0AGENT_IDENTITY_FILE=%data_dir%\agent-identity.json"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-detector" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
+call :configure_winget_account update-detector
 call :start_service update-detector
 
 echo install.bat: update-detector installed and started. Check: sc query update-detector
@@ -447,6 +527,7 @@ echo install.bat: aggregator=!agg_url! agent_status=!agent_status_url!
 call :create_or_update_service update-detector-companion "update-detector-companion" "%bin_path%"
 set "envval=COMPANION_SOCKET_PATH=\\.\pipe\update-detector\companion-token\0AGGREGATOR_URL=!agg_url!\0AGENT_STATUS_URL=!agent_status_url!"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-detector-companion" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
+call :configure_winget_account update-detector-companion
 call :start_service update-detector-companion
 
 call :cache_install_bat_for_companion

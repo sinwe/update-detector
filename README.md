@@ -267,15 +267,24 @@ new implementation, not a rewrite (see
 `docs/plugin-architecture-plan.md`). macOS is still planned; Windows has
 an experimental detection-only implementation (`internal/checker/windows`):
 
-- **Packages**: shells out to `winget upgrade`, parsing its table output
-  the same best-effort way the Debian checker parses `apt-get -s
-  dist-upgrade`'s text output. **No security/severity signal exists in
-  winget at all** (unlike apt's `-security` pocket) — every Windows
-  package upgrade reports `security: false`, and the security count is
-  always `0`. Winget's own table format has changed across App Installer
-  versions, and winget itself may be entirely absent on locked-down or
-  Server Windows machines; either shows up as a normal per-cycle error
-  (falls back to the last known value), not a crash.
+- **Packages (optional, not the primary signal)**: shells out to `winget
+  upgrade`, parsing its table output the same best-effort way the Debian
+  checker parses `apt-get -s dist-upgrade`'s text output. **No
+  security/severity signal exists in winget at all** (unlike apt's
+  `-security` pocket) — every Windows package upgrade reports
+  `security: false`, and the security count is always `0`. Winget's own
+  table format has changed across App Installer versions, and winget
+  itself may be entirely absent on locked-down or Server Windows
+  machines, or (see the account note below) simply not runnable from the
+  account the agent/companion happens to run as; any of that shows up as
+  a normal per-cycle error (falls back to the last known value), not a
+  crash. **Not yet implemented, planned**: detecting *actual* Windows
+  Update (OS-level updates, with real MSRC severity ratings) is the
+  intended primary signal for this checker — winget only ever covers
+  separately-managed packages, the same relationship apt has to
+  Ubuntu/Debian's own release upgrades. That work hasn't started yet;
+  today, winget plus the registry-based reboot check below is *all*
+  the actual detection this checker does.
 - **Reboot-required**: reads three well-known `HKLM` registry keys —
   no admin privilege or `winget`/other exec needed, the most reliable
   part of this checker. No OS-upgrade detection at all in v1 (same
@@ -290,28 +299,41 @@ an experimental detection-only implementation (`internal/checker/windows`):
   around to grant an exception. Config is stored in each service's own
   registry `Environment` value (`REG_MULTI_SZ`), the native equivalent of
   systemd's `EnvironmentFile=`.
-- **Known limitation, confirmed live**: every service `install.bat`
-  creates (agent included, not just the companion) defaults to running as
-  `LocalSystem`, but `winget.exe` is an App Execution Alias registered
-  per-*user* (it lives under that user's own
-  `AppData\Local\Microsoft\WindowsApps`, added to *that user's* `PATH`
-  only) — `SYSTEM` has no such registration at all, not even a PATH
-  problem to work around, so `exec.LookPath("winget")` fails outright
-  with "executable file not found in %PATH%" even though `winget` is
-  right there for the interactive user. This hits the agent's own
-  detection (`internal/checker/windows/packages.go`) just as much as the
-  companion's apply path. Fix: reconfigure the affected service(s) to run
-  as a real user account instead of `LocalSystem` --
-  `sc config update-detector obj= ".\<user>" password= "<password>"` (and
-  the same for `update-detector-companion` once that's installed too),
-  then `sc stop`/`sc start` it. If that fails with Error 1069 ("logon
-  failure"), the account first needs the "Log on as a service" right:
-  `secpol.msc` → Local Policies → User Rights Assignment → "Log on as a
-  service" → add that user.
-- Also untested against a real Windows machine end-to-end, for either
-  detection or install/apply: only fixture-based parsing tests and a
-  hosted CI runner (no `winget`/real registry/real Windows Service state
-  to exercise) have exercised any of this so far.
+- **winget account setup (optional), confirmed live**: every service
+  `install.bat` creates defaults to running as `LocalSystem`, under which
+  `winget` simply doesn't exist — `winget.exe` is an App Execution Alias
+  registered per-*user* (it lives under that user's own
+  `AppData\Local\Microsoft\WindowsApps`, on *that user's* `PATH` only),
+  and `SYSTEM` has no such registration at all, confirmed live as
+  `exec.LookPath("winget")` failing outright with "executable file not
+  found in %PATH%" even though `winget` works fine interactively. Since
+  winget is optional (see above — actual Windows Update detection, once
+  built, won't have this problem), `install.bat` only offers to fix this,
+  it never requires it: installing the agent or companion prompts
+  ("Run \<service\> as your own account so winget works too? [y/N]"), and
+  if you say yes, prompts for the account (defaults to the one running
+  install.bat) and a masked password, reconfigures the service
+  (`sc config ... obj= ... password= ...`), and attempts to grant that
+  account the "Log on as a service" right via `secedit` so it doesn't
+  need a manual policy-editor step. Set `WINGET_ACCOUNT`/`WINGET_PASSWORD`
+  to answer non-interactively. If the automatic rights grant doesn't
+  take and the service then fails to start with Error 1069 ("logon
+  failure"), grant it manually: `secpol.msc` → Local Policies → User
+  Rights Assignment → "Log on as a service" → add that account.
+- Also untested against a real Windows machine end-to-end for most of
+  this: only fixture-based parsing tests and a hosted CI runner (no
+  `winget`/real registry/real Windows Service state to exercise) have
+  exercised most of this so far. The Windows Service Control Protocol
+  fix and the winget account/PATH issue above were both found and fixed
+  from one real, live install — everything else here carries the same
+  unverified caveat until it gets the same live exercise.
+- **Roadmap, not started**: this checker's package-manager story is meant
+  to generalize past winget specifically — Scoop and Chocolatey as
+  alternative/additional Windows package sources, a Homebrew-based macOS
+  checker (see the macOS row above), and Docker image update detection
+  on Linux (tag/digest drift, a different kind of "update" than an OS
+  package manager reports) are all intended future checker plugins, none
+  of them started.
 
 On WSL2 specifically, `docker` being on `PATH` doesn't necessarily mean
 there's a real engine running inside the distro at all — see
