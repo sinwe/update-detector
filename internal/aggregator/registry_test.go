@@ -3,6 +3,7 @@ package aggregator
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"update-detector/internal/checker"
 )
@@ -142,6 +143,14 @@ func TestFindApprovedByHostnamePicksMostRecentlySeen(t *testing.T) {
 	if _, err := r.Report("agent-1", "token-agent-1", checker.Status{Packages: checker.PackageInfo{UpgradableTotal: 1}}); err != nil {
 		t.Fatal(err)
 	}
+	// FindApprovedByHostname breaks ties via LastSeen.After, strictly --
+	// two Report calls back-to-back with no delay can land on the exact
+	// same time.Now() value on a platform with coarse timer resolution
+	// (confirmed live: Windows' default tick, unlike Linux's much finer
+	// one, ties often enough to flip this test's own outcome). This
+	// test's actual intent is "the more recently reported one wins," not
+	// tie-breaking behavior on a collision, so force a real gap instead.
+	time.Sleep(50 * time.Millisecond)
 	if _, err := r.Report("agent-2", "token-agent-2", checker.Status{Packages: checker.PackageInfo{UpgradableTotal: 2}}); err != nil {
 		t.Fatal(err)
 	}
