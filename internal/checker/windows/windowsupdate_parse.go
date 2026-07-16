@@ -49,7 +49,7 @@ func parseWindowsUpdateJSON(raw []byte) (packageResult, error) {
 			result.Security++
 		}
 		result.Upgrades = append(result.Upgrades, checker.PackageUpgrade{
-			Name:             item.Title,
+			Name:             buildDisplayName(item.Title, item.KBArticleIDs),
 			CandidateVersion: kbVersionString(item.KBArticleIDs),
 			Security:         security,
 		})
@@ -70,4 +70,30 @@ func kbVersionString(ids []string) string {
 		kbs[i] = "KB" + id
 	}
 	return strings.Join(kbs, ", ")
+}
+
+// buildDisplayName appends every one of ids in its own "(KBnnnnnnn)"
+// marker, always, regardless of whether title already happens to
+// mention a KB number in its own text -- confirmed live, many real
+// Windows Update titles never do at all (e.g. "Visual Studio Client
+// Detector Utility", KB5001148, has no such text), and the companion's
+// own apply side (internal/companion/applier_windows_parse.go's
+// kbPattern) depends on this marker to recognize a requested package
+// name as Windows-Update-sourced rather than winget-sourced -- without
+// it, that name would silently misroute to winget instead and fail.
+// Each KB gets its own parenthesized marker (not one comma-joined pair
+// of parens) so a multi-KB update's every KB is still individually
+// regex-matchable there.
+func buildDisplayName(title string, ids []string) string {
+	if len(ids) == 0 {
+		return title
+	}
+	var b strings.Builder
+	b.WriteString(title)
+	for _, id := range ids {
+		b.WriteString(" (KB")
+		b.WriteString(id)
+		b.WriteString(")")
+	}
+	return b.String()
 }

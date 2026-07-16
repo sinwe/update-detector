@@ -35,8 +35,8 @@ func TestParseWindowsUpdateJSONSecurityAndFeatureUpdates(t *testing.T) {
 		t.Fatalf("got Security %d, want 1 -- only the Critical-severity update should count", got.Security)
 	}
 	want := []checker.PackageUpgrade{
-		{Name: "2024-07 Cumulative Update for Windows 11 (KB5040442)", CandidateVersion: "KB5040442", Security: true},
-		{Name: "2024-07 .NET Framework Update (KB5040498)", CandidateVersion: "KB5040498", Security: false},
+		{Name: "2024-07 Cumulative Update for Windows 11 (KB5040442) (KB5040442)", CandidateVersion: "KB5040442", Security: true},
+		{Name: "2024-07 .NET Framework Update (KB5040498) (KB5040498)", CandidateVersion: "KB5040498", Security: false},
 	}
 	if len(got.Upgrades) != len(want) {
 		t.Fatalf("got %d upgrades, want %d: %#v", len(got.Upgrades), len(want), got.Upgrades)
@@ -45,6 +45,29 @@ func TestParseWindowsUpdateJSONSecurityAndFeatureUpdates(t *testing.T) {
 		if got.Upgrades[i] != w {
 			t.Fatalf("upgrade %d: got %#v, want %#v", i, got.Upgrades[i], w)
 		}
+	}
+}
+
+// TestParseWindowsUpdateJSONTitleWithoutOwnKBMention is the regression
+// test for a real bug caught live: not every Windows Update title
+// mentions its own KB number in the title text at all (confirmed live:
+// "Visual Studio Client Detector Utility", KB5001148, has no such
+// text) -- Name must still always carry an appended "(KBnnnnnnn)"
+// marker regardless, since the companion's own apply side depends on
+// it to recognize this as Windows-Update-sourced rather than
+// winget-sourced (see internal/companion/applier_windows_parse.go).
+// Confirmed live: without this, exactly this kind of item silently
+// misrouted to winget at apply time and failed.
+func TestParseWindowsUpdateJSONTitleWithoutOwnKBMention(t *testing.T) {
+	raw := `[{"Title":"Visual Studio Client Detector Utility","KBArticleIDs":["5001148"],"IsMandatory":false,"MsrcSeverity":""}]`
+
+	got, err := parseWindowsUpdateJSON([]byte(raw))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "Visual Studio Client Detector Utility (KB5001148)"
+	if got.Upgrades[0].Name != want {
+		t.Fatalf("got Name %q, want %q", got.Upgrades[0].Name, want)
 	}
 }
 
@@ -61,8 +84,14 @@ func TestParseWindowsUpdateJSONMultipleKBsAndMissingKB(t *testing.T) {
 	if got.Upgrades[0].CandidateVersion != "KB1111111, KB2222222" {
 		t.Fatalf("got CandidateVersion %q, want both KB numbers joined", got.Upgrades[0].CandidateVersion)
 	}
+	if got.Upgrades[0].Name != "Multi-KB update (KB1111111) (KB2222222)" {
+		t.Fatalf("got Name %q, want each KB in its own marker", got.Upgrades[0].Name)
+	}
 	if got.Upgrades[1].CandidateVersion != "pending" {
 		t.Fatalf("got CandidateVersion %q, want \"pending\" for no KB at all", got.Upgrades[1].CandidateVersion)
+	}
+	if got.Upgrades[1].Name != "Driver update with no KB" {
+		t.Fatalf("got Name %q, want the title unchanged when there's no KB to append", got.Upgrades[1].Name)
 	}
 }
 

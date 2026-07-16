@@ -41,6 +41,29 @@ func TestSplitPackageNames(t *testing.T) {
 			wantKBs:         nil,
 			wantWingetNames: nil,
 		},
+		{
+			// Regression test for a real bug caught live: a Windows
+			// Update title that never mentions its own KB number in the
+			// prose text at all (confirmed live: "Visual Studio Client
+			// Detector Utility", KB5001148) -- windowsupdate_parse.go's
+			// buildDisplayName always appends the marker regardless, so
+			// this must still be recognized as a KB target here, not
+			// misrouted to winget.
+			name:            "KB update whose title never mentions its own KB",
+			input:           []string{"Visual Studio Client Detector Utility (KB5001148)"},
+			wantKBs:         []string{"5001148"},
+			wantWingetNames: nil,
+		},
+		{
+			// A single update tied to more than one KB gets one marker
+			// per KB (see buildDisplayName), not one comma-joined pair
+			// of parens -- every one of them must be extracted, not
+			// just the first.
+			name:            "update with multiple KB markers",
+			input:           []string{"Multi-KB update (KB1111111) (KB2222222)"},
+			wantKBs:         []string{"1111111", "2222222"},
+			wantWingetNames: nil,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
