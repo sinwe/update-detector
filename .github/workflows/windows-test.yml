@@ -1,0 +1,30 @@
+# Runs on GitHub specifically for its hosted windows-latest runner --
+# Forgejo (this repo's primary CI/release home, see .forgejo/workflows/)
+# has no Windows runner at all, only a single self-hosted amd64 Linux one.
+#
+# Deliberately just a test leg, not a second release pipeline: Forgejo's
+# own ci.yml already covers linux/amd64 (and, thanks to the //go:build
+# windows / //go:build !windows split from docs/plugin-architecture-plan.md,
+# automatically excludes anything windows-only from that build -- no
+# explicit package filtering needed on either side). This workflow is the
+# mirror image of that on windows-latest: go build/test here picks up the
+# windows-tagged files and excludes the !windows-tagged ones (ubuntu,
+# debian, ...) the same way, again with no explicit filtering required.
+name: Windows test
+
+on:
+  push:
+    branches: [worktree-checker-plugin-architecture, main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v
