@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -45,6 +46,8 @@ type Detection struct {
 // Detection.Ambiguous), not silently resolved and forgotten.
 func (d Detection) Kind() DeployKind {
 	switch {
+	case d.Native && runtime.GOOS == "windows":
+		return DeployWindowsService
 	case d.Native:
 		return DeployNative
 	case d.DockerContainerID != "":

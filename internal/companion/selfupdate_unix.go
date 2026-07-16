@@ -60,23 +60,24 @@ func existingConfigEnv(component string) []string {
 	switch component {
 	case "agent":
 		// Agent's own input names already match its env file's output
-		// names 1:1 (no prefix) -- only STATE_DIR needs deriving from
-		// the env file's STATE_FILE (which is STATE_DIR/<hostname>.json).
+		// names 1:1 (no prefix) -- only STATE_DIR needs deriving back
+		// from a file path, the same way install.sh's own
+		// uninstall_agent already does.
 		values := readEnvFile(filepath.Join(envFileDir, "update-detector"))
-		env := passThrough(values, "AGGREGATOR_URL", "CHECK_INTERVAL",
-			"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
-		if sf := values["STATE_FILE"]; sf != "" {
-			env = append(env, "STATE_DIR="+filepath.Dir(sf))
+		env := passThrough(values, "LISTEN_ADDR", "HOSTNAME_OVERRIDE", "CHECK_INTERVAL",
+			"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "AGGREGATOR_URL")
+		if dir := filepath.Dir(values["AGENT_IDENTITY_FILE"]); dir != "" && dir != "." && dir != "/" {
+			env = append(env, "STATE_DIR="+dir)
 		}
 		return env
 	case "aggregator":
 		values := readEnvFile(filepath.Join(envFileDir, "update-aggregator"))
-		env := passThrough(values, "ADMIN_APPLY_SHARED_SECRET",
-			"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
-		env = append(env, translate(values, map[string]string{
-			"LISTEN_ADDR":   "AGGREGATOR_LISTEN_ADDR",
-			"REGISTRY_FILE": "AGGREGATOR_REGISTRY_FILE",
-		})...)
+		env := translate(values, map[string]string{
+			"LISTEN_ADDR":        "AGGREGATOR_LISTEN_ADDR",
+			"TELEGRAM_BOT_TOKEN": "AGGREGATOR_TELEGRAM_BOT_TOKEN",
+			"TELEGRAM_CHAT_ID":   "AGGREGATOR_TELEGRAM_CHAT_ID",
+		})
+		env = append(env, passThrough(values, "ADMIN_APPLY_SHARED_SECRET")...)
 		if dir := filepath.Dir(values["REGISTRY_FILE"]); dir != "" && dir != "." && dir != "/" {
 			env = append(env, "AGGREGATOR_DATA_DIR="+dir)
 		}

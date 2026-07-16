@@ -2,8 +2,18 @@ package companion
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
+
+// ErrUpdateFailed indicates an Applier's own metadata-refresh prologue
+// (e.g. apt-get update) failed before any actual install/upgrade command
+// ran -- nothing on the host changed, so triggering a recheck afterward
+// would be pointless. An Applier without such a prologue step at all
+// (e.g. winget, which has no separate "refresh sources" command) simply
+// never returns this; execute.go's Apply only special-cases it, it's
+// never required.
+var ErrUpdateFailed = errors.New("companion: package manager update failed")
 
 // Applier abstracts the platform-specific package-apply operations so
 // that execute.go's Apply can dispatch through it without any

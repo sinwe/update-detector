@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,8 +92,13 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 
 	if err != nil {
 		// Still worth rechecking even on failure -- the package manager
-		// can partially apply changes before hitting an error.
-		triggerRecheck(ctx, agentStatusURL)
+		// can partially apply changes before hitting an error. Except
+		// when the failure is the Applier's own metadata-refresh
+		// prologue (e.g. apt-get update): nothing on the host changed in
+		// that case, so a recheck would be pointless.
+		if !errors.Is(err, ErrUpdateFailed) {
+			triggerRecheck(ctx, agentStatusURL)
+		}
 		return aggregator.ActionResult{
 			ActionID:    action.ID,
 			Message:     fmt.Sprintf("%s failed: %v\n%s", action.Type, err, output),

@@ -23,7 +23,7 @@ type aptApplier struct{}
 //	apt-get autoremove -y   (best-effort, never gates the result)
 func (a *aptApplier) Packages(ctx context.Context, names []string) (string, error) {
 	if updateOut, err := runCapped(ctx, aptCommand(ctx, "update")); err != nil {
-		return fmt.Sprintf("apt-get update failed: %v\n%s", err, updateOut), fmt.Errorf("apt-get update: %w", err)
+		return fmt.Sprintf("apt-get update failed: %v\n%s", err, updateOut), fmt.Errorf("%w: %v", ErrUpdateFailed, err)
 	}
 	args := append([]string{"install", "-y", "--only-upgrade"}, names...)
 	out, err := runCapped(ctx, aptCommand(ctx, args...))
@@ -40,7 +40,7 @@ func (a *aptApplier) Packages(ctx context.Context, names []string) (string, erro
 //	apt-get autoremove -y   (best-effort)
 func (a *aptApplier) Upgrade(ctx context.Context) (string, error) {
 	if updateOut, err := runCapped(ctx, aptCommand(ctx, "update")); err != nil {
-		return fmt.Sprintf("apt-get update failed: %v\n%s", err, updateOut), fmt.Errorf("apt-get update: %w", err)
+		return fmt.Sprintf("apt-get update failed: %v\n%s", err, updateOut), fmt.Errorf("%w: %v", ErrUpdateFailed, err)
 	}
 	out, err := runCapped(ctx, aptCommand(ctx, "upgrade", "-y"))
 	if err != nil {
@@ -56,7 +56,7 @@ func (a *aptApplier) Upgrade(ctx context.Context) (string, error) {
 //	apt-get autoremove -y   (best-effort)
 func (a *aptApplier) FullUpgrade(ctx context.Context) (string, error) {
 	if updateOut, err := runCapped(ctx, aptCommand(ctx, "update")); err != nil {
-		return fmt.Sprintf("apt-get update failed: %v\n%s", err, updateOut), fmt.Errorf("apt-get update: %w", err)
+		return fmt.Sprintf("apt-get update failed: %v\n%s", err, updateOut), fmt.Errorf("%w: %v", ErrUpdateFailed, err)
 	}
 	out, err := runCapped(ctx, aptCommand(ctx, "dist-upgrade", "-y"))
 	if err != nil {
