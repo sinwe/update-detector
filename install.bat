@@ -392,20 +392,23 @@ goto :eof
 :: at all, and even if there were, a container's own OS package state
 :: has nothing to do with the host's winget-visible package state).
 ::
-:: KNOWN LIMITATION, not yet resolved: this service defaults to running
-:: as LocalSystem (see create_or_update_service), but `winget` is widely
-:: reported to not work correctly when run as SYSTEM -- its package
-:: source/App Execution Alias state is normally provisioned per-user,
-:: and SYSTEM has no such profile. If `winget upgrade` fails from this
-:: service with something like a COM registration or "term not
-:: recognized" error, the workaround is to reconfigure this service to
-:: run as a real administrator account instead:
+:: KNOWN LIMITATION, confirmed live: this service defaults to running as
+:: LocalSystem (see create_or_update_service), but winget.exe is an App
+:: Execution Alias registered per-*user* (it lives under that user's own
+:: AppData\Local\Microsoft\WindowsApps, on *that user's* PATH only) --
+:: SYSTEM has no such registration at all, so `winget upgrade` fails
+:: outright with "executable file not found in %PATH%", confirmed on a
+:: real install (this hits update-detector's own detection just as much
+:: as this companion's apply path -- see README.md). Workaround:
+:: reconfigure this service (and update-detector, for the same reason)
+:: to run as a real user account instead of LocalSystem:
 ::
-::   sc config update-detector-companion obj= ".\<adminuser>" password= "<password>"
+::   sc config update-detector-companion obj= ".\<user>" password= "<password>"
+::   sc stop update-detector-companion & sc start update-detector-companion
 ::
-:: This hasn't been verified against a real Windows host (same
-:: unresolved gap already called out in README.md for the checker
-:: itself) -- flagging it here rather than silently hoping it works.
+:: If that fails with Error 1069 ("logon failure"), the account first
+:: needs the "Log on as a service" right: secpol.msc -> Local Policies ->
+:: User Rights Assignment -> "Log on as a service" -> add that user.
 :install_companion
 echo install.bat: installing update-detector-companion...
 call :stop_if_running update-detector-companion

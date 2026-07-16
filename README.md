@@ -290,13 +290,24 @@ an experimental detection-only implementation (`internal/checker/windows`):
   around to grant an exception. Config is stored in each service's own
   registry `Environment` value (`REG_MULTI_SZ`), the native equivalent of
   systemd's `EnvironmentFile=`.
-- **Known limitation, unresolved**: the companion Windows Service defaults
-  to running as `LocalSystem`, but `winget` is widely reported to not work
-  correctly when run as `SYSTEM` (its package-source state is normally
-  provisioned per-user, and `SYSTEM` has no such profile). If `winget
-  upgrade` fails from the companion service, try reconfiguring it to run
-  as a real administrator account instead: `sc config
-  update-detector-companion obj= ".\<user>" password= "<password>"`.
+- **Known limitation, confirmed live**: every service `install.bat`
+  creates (agent included, not just the companion) defaults to running as
+  `LocalSystem`, but `winget.exe` is an App Execution Alias registered
+  per-*user* (it lives under that user's own
+  `AppData\Local\Microsoft\WindowsApps`, added to *that user's* `PATH`
+  only) — `SYSTEM` has no such registration at all, not even a PATH
+  problem to work around, so `exec.LookPath("winget")` fails outright
+  with "executable file not found in %PATH%" even though `winget` is
+  right there for the interactive user. This hits the agent's own
+  detection (`internal/checker/windows/packages.go`) just as much as the
+  companion's apply path. Fix: reconfigure the affected service(s) to run
+  as a real user account instead of `LocalSystem` --
+  `sc config update-detector obj= ".\<user>" password= "<password>"` (and
+  the same for `update-detector-companion` once that's installed too),
+  then `sc stop`/`sc start` it. If that fails with Error 1069 ("logon
+  failure"), the account first needs the "Log on as a service" right:
+  `secpol.msc` → Local Policies → User Rights Assignment → "Log on as a
+  service" → add that user.
 - Also untested against a real Windows machine end-to-end, for either
   detection or install/apply: only fixture-based parsing tests and a
   hosted CI runner (no `winget`/real registry/real Windows Service state
