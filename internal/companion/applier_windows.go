@@ -162,16 +162,36 @@ foreach ($u in $result.Updates) { $targets.Add($u) | Out-Null }
 // with no fixed timeout on ctx (same as apt-get's own dist-upgrade,
 // which can also run for many minutes).
 //
+// Checks Microsoft.Update.SystemInfo's own RebootRequired first, before
+// even searching: Windows Update refuses to install anything further
+// while a reboot from a previously installed update is still pending --
+// confirmed live, this is exactly what caused a real install to fail
+// with ResultCode 4 (Failed) right after a clean ResultCode 2
+// (Succeeded) download, with no more specific reason surfaced at all.
+// Failing fast here with an explicit, actionable message beats letting
+// that COM call fail cryptically partway through.
+//
 // IUpdateDownloadResult/IInstallationResult.ResultCode uses the
 // OperationResultCode enum: 2 (orcSucceeded) and 3
 // (orcSucceededWithErrors) are both treated as success here -- a
 // multi-update batch partially succeeding is still real, useful
 // progress, the same "still worth reporting, not a hard failure"
 // posture install.sh's own apt-get autoremove step already takes.
-// 0/1/4/5 (NotStarted/InProgress/Failed/Aborted) are real failures.
+// 0/1/4/5 (NotStarted/InProgress/Failed/Aborted) are real failures --
+// on one of those, the aggregate HResult and each target's own
+// individual GetUpdateResult(i) (ResultCode + HResult) are also printed,
+// since the bare aggregate ResultCode alone (as confirmed live) gives no
+// indication of the actual underlying cause.
 func runWindowsUpdateInstall(ctx context.Context, selectTargets string) (string, error) {
 	script := `
 $ErrorActionPreference = 'Stop'
+
+$sysInfo = New-Object -ComObject Microsoft.Update.SystemInfo
+if ($sysInfo.RebootRequired) {
+  Write-Error 'a reboot is already pending from a previously installed update -- Windows Update refuses to install anything further until this host reboots; reboot it, then retry'
+  exit 1
+}
+
 $session = New-Object -ComObject Microsoft.Update.Session
 $searcher = $session.CreateUpdateSearcher()
 $result = $searcher.Search('IsInstalled=0 and IsHidden=0')
@@ -186,6 +206,7 @@ $downloader.Updates = $targets
 $downloadResult = $downloader.Download()
 Write-Output ("download result code: {0}" -f $downloadResult.ResultCode)
 if ($downloadResult.ResultCode -eq 4 -or $downloadResult.ResultCode -eq 5) {
+  Write-Output ("download HResult: 0x{0:X8}" -f $downloadResult.HResult)
   Write-Error ("download failed, result code {0}" -f $downloadResult.ResultCode)
   exit 1
 }
@@ -195,6 +216,11 @@ $installer.Updates = $targets
 $installResult = $installer.Install()
 Write-Output ("install result code: {0}, reboot required: {1}" -f $installResult.ResultCode, $installResult.RebootRequired)
 if ($installResult.ResultCode -eq 4 -or $installResult.ResultCode -eq 5) {
+  Write-Output ("install HResult: 0x{0:X8}" -f $installResult.HResult)
+  for ($i = 0; $i -lt $targets.Count; $i++) {
+    $ur = $installResult.GetUpdateResult($i)
+    Write-Output ("  [{0}] {1}: result={2} hresult=0x{3:X8}" -f $i, $targets.Item($i).Title, $ur.ResultCode, $ur.HResult)
+  }
   Write-Error ("install failed, result code {0}" -f $installResult.ResultCode)
   exit 1
 }
