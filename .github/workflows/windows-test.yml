@@ -6,10 +6,12 @@
 # own ci.yml already covers linux/amd64 (and, thanks to the //go:build
 # windows / //go:build !windows split from docs/plugin-architecture-plan.md,
 # automatically excludes anything windows-only from that build -- no
-# explicit package filtering needed on either side). This workflow is the
-# mirror image of that on windows-latest: go build/test here picks up the
-# windows-tagged files and excludes the !windows-tagged ones (ubuntu,
-# debian, ...) the same way, again with no explicit filtering required.
+# explicit package filtering needed there). go build/vet here are the
+# mirror image on windows-latest: they pick up the windows-tagged files
+# and exclude the !windows-tagged ones (ubuntu, debian, ...) the same
+# way, again with no explicit filtering required -- both passed clean on
+# the very first run. go test needs one explicit exclusion, though: see
+# the comment on that step below.
 name: Windows test
 
 on:
@@ -27,4 +29,17 @@ jobs:
           go-version: '1.22'
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./... -v
+      # internal/companion is deliberately excluded here: it's the
+      # Linux-native apply/self-update logic (apt-get, systemd, Unix
+      # sockets, fake-shell-script-on-PATH test fixtures) that Phase 3 of
+      # docs/plugin-architecture-plan.md hasn't touched yet -- Phase 1
+      # never claimed it works on Windows. Confirmed live: it's the only
+      # package that fails here; everything else (including
+      # internal/aggregator, internal/companiontoken, and the actual
+      # checker/config/hostflavor registry pieces Phase 1 delivered)
+      # passes cleanly. shell: bash forces Git Bash (present on
+      # windows-latest) so this $(...)/grep substitution works the same
+      # as it would in Forgejo's own ci.yml.
+      - name: Test
+        shell: bash
+        run: go test $(go list ./... | grep -v '/internal/companion$') -v
