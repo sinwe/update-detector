@@ -4,6 +4,7 @@ package windows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -61,7 +62,16 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 	var errs []string
 
 	if pkgResult, err := checkUpgradable(ctx); err != nil {
-		errs = append(errs, fmt.Sprintf("packages: %v", err))
+		// winget being unavailable at all is not a genuine error --
+		// it's an optional, supplementary signal for this checker (see
+		// this package's own doc comment), most commonly unavailable
+		// simply because this process isn't running as the account
+		// winget.exe is registered for (see README.md). Any other
+		// winget failure (bad output, a real winget error, ...) is
+		// still worth surfacing.
+		if !errors.Is(err, ErrWingetNotFound) {
+			errs = append(errs, fmt.Sprintf("packages: %v", err))
+		}
 		if previous != nil {
 			status.Packages = previous.Packages
 		}
