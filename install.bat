@@ -178,6 +178,27 @@ if !tries! LSS 30 goto stop_wait_loop
 echo install.bat: warning: %~1 did not stop within 30s, continuing anyway >&2
 goto :eof
 
+:: start_service NAME -> starts NAME, printing sc.exe's own error text
+:: (not swallowing it) if it fails to actually reach RUNNING -- most
+:: commonly Error 1053 ("The service did not respond to the start or
+:: control request in a timely fashion"), which means the installed
+:: .exe itself never called into the Windows Service Control Protocol
+:: at all (a build too old to have that support, or a build for the
+:: wrong OS/arch) -- not something re-running install.bat again can fix.
+:start_service
+sc start "%~1"
+if errorlevel 1 (
+  echo install.bat: warning: %~1 did not start -- see the error above. >&2
+  echo   Common cause: this build of %~1.exe predates Windows Service support. >&2
+  echo   Try re-downloading with INSTALL_VERSION=latest and re-running install.bat. >&2
+  goto :eof
+)
+sc query "%~1" | find "RUNNING" >nul
+if errorlevel 1 (
+  echo install.bat: warning: %~1 reports started but isn't RUNNING -- check: sc query %~1 >&2
+)
+goto :eof
+
 :: create_or_update_service NAME DISPLAYNAME BINPATH -> creates NAME if
 :: it doesn't exist yet, or reconfigures it in place if it does (so
 :: re-running this script to pick up a config or version change works,
@@ -322,7 +343,7 @@ if not defined CHECK_INTERVAL set "CHECK_INTERVAL=6h"
 call :create_or_update_service update-detector "update-detector agent" "%bin_path%"
 set "envval=LISTEN_ADDR=%LISTEN_ADDR%\0HOSTNAME_OVERRIDE=%HOSTNAME_OVERRIDE%\0CHECK_INTERVAL=%CHECK_INTERVAL%\0TELEGRAM_BOT_TOKEN=%TELEGRAM_BOT_TOKEN%\0TELEGRAM_CHAT_ID=%TELEGRAM_CHAT_ID%\0AGGREGATOR_URL=!resolved_aggregator_url!\0STATE_FILE=%data_dir%\state.json\0AGENT_IDENTITY_FILE=%data_dir%\agent-identity.json"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-detector" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
-sc start update-detector >nul 2>&1
+call :start_service update-detector
 
 echo install.bat: update-detector installed and started. Check: sc query update-detector
 goto :eof
@@ -347,7 +368,7 @@ if not defined AGGREGATOR_LISTEN_ADDR set "AGGREGATOR_LISTEN_ADDR=:9090"
 call :create_or_update_service update-aggregator "update-aggregator" "%bin_path%"
 set "envval=LISTEN_ADDR=%AGGREGATOR_LISTEN_ADDR%\0REGISTRY_FILE=%data_dir%\registry.json\0TELEGRAM_BOT_TOKEN=%AGGREGATOR_TELEGRAM_BOT_TOKEN%\0TELEGRAM_CHAT_ID=%AGGREGATOR_TELEGRAM_CHAT_ID%\0ADMIN_APPLY_SHARED_SECRET=%ADMIN_APPLY_SHARED_SECRET%"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-aggregator" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
-sc start update-aggregator >nul 2>&1
+call :start_service update-aggregator
 
 echo install.bat: update-aggregator installed and started. Check: sc query update-aggregator
 if defined ADMIN_APPLY_SHARED_SECRET (
@@ -423,7 +444,7 @@ echo install.bat: aggregator=!agg_url! agent_status=!agent_status_url!
 call :create_or_update_service update-detector-companion "update-detector-companion" "%bin_path%"
 set "envval=COMPANION_SOCKET_PATH=\\.\pipe\update-detector\companion-token\0AGGREGATOR_URL=!agg_url!\0AGENT_STATUS_URL=!agent_status_url!"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-detector-companion" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
-sc start update-detector-companion >nul 2>&1
+call :start_service update-detector-companion
 
 call :cache_install_bat_for_companion
 echo install.bat: done. Check status with: sc query update-detector-companion

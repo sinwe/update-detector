@@ -26,21 +26,28 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := start(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() error {
+// runInteractive runs the main loop until an OS interrupt/terminate
+// signal arrives -- correct as-is on every platform except when running
+// as a genuine Windows Service (see start_windows.go), which never
+// receives those signals from SCM at all.
+func runInteractive() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return run(ctx)
+}
+
+func run(ctx context.Context) error {
 	log.Printf("update-detector-companion %s", version.Version)
 
 	cfg := companionconfig.Load()
 	if cfg.AggregatorURL == "" {
 		return fmt.Errorf("AGGREGATOR_URL is required")
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	identity, err := companion.FetchIdentityWithRetry(ctx, cfg.SocketPath, time.Minute)
 	if err != nil {
