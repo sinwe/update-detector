@@ -2,8 +2,10 @@
 
 package main
 
-// No platform package to blank-import yet -- internal/checker/windows
-// doesn't exist until Phase 2 of docs/plugin-architecture-plan.md. A
-// windows build of this binary compiles fine as of Phase 1, but
-// checker.New("windows", ...) fails at runtime ("no checker registered")
-// until that package lands and this file blank-imports it.
+// Blank-imported solely for its init() side effect
+// (checker.Register("windows", ...)) -- main.go itself never names this
+// package, which is what lets it compile identically regardless of GOOS.
+// See docs/plugin-architecture-plan.md, Phase 2.
+import (
+	_ "update-detector/internal/checker/windows"
+)

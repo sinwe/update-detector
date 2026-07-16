@@ -14,7 +14,7 @@ changes. Ships as a single Docker image, one container per host.
 | Plain Debian / Raspberry Pi OS (bare metal or VM) | ✅ supported now — see [OS flavors](#os-flavors) |
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
-| Actual Windows OS (Windows Update, winget) | 🚧 planned — needs a native (non-container) agent, see [Limitations](#platform-limitations) |
+| Actual Windows OS (Windows Update, winget) | 🧪 experimental — detection only, see [Limitations](#platform-limitations); no installer or apply/self-update support yet |
 | Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
 
 ## Installation
@@ -262,8 +262,32 @@ Docker Desktop on macOS/Windows runs containers inside a hidden Linux VM, so
 this container has no visibility into the real macOS/Windows host — only
 into a WSL2 Ubuntu/Debian distro, if that's what you're running it in.
 Monitoring the actual Windows or macOS OS needs a native, non-container
-agent (planned) — the checker is designed as an interface so that's a new
-implementation, not a rewrite.
+agent — the checker is designed as an interface specifically so that's a
+new implementation, not a rewrite (see
+`docs/plugin-architecture-plan.md`). macOS is still planned; Windows has
+an experimental detection-only implementation (`internal/checker/windows`):
+
+- **Packages**: shells out to `winget upgrade`, parsing its table output
+  the same best-effort way the Debian checker parses `apt-get -s
+  dist-upgrade`'s text output. **No security/severity signal exists in
+  winget at all** (unlike apt's `-security` pocket) — every Windows
+  package upgrade reports `security: false`, and the security count is
+  always `0`. Winget's own table format has changed across App Installer
+  versions, and winget itself may be entirely absent on locked-down or
+  Server Windows machines; either shows up as a normal per-cycle error
+  (falls back to the last known value), not a crash.
+- **Reboot-required**: reads three well-known `HKLM` registry keys —
+  no admin privilege or `winget`/other exec needed, the most reliable
+  part of this checker. No OS-upgrade detection at all in v1 (same
+  posture as Debian) — `current_version`/`current_codename` are
+  populated informationally from the registry only.
+- **Not yet supported**: there's no native Windows installer
+  (`install.ps1`), and no companion/apply/self-update path for Windows
+  at all yet — this is detection-only, wired up but with no supported
+  way to actually deploy it on a real Windows host today. Also untested
+  against a real Windows machine end-to-end; only fixture-based parsing
+  tests and a hosted CI runner (no `winget`/real registry state to
+  exercise) have exercised any of this so far.
 
 On WSL2 specifically, `docker` being on `PATH` doesn't necessarily mean
 there's a real engine running inside the distro at all — see
