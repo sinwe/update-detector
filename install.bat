@@ -305,19 +305,29 @@ set "read_val="
 for /f "delims=" %%V in ('powershell -NoProfile -Command "$k='%~2='; try { $e = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\%~1' -Name Environment -ErrorAction Stop).Environment; $m = $e | Where-Object { $_.StartsWith($k) } | Select-Object -First 1; if ($m) { $m.Substring($k.Length) } } catch { }"') do set "read_val=%%V"
 goto :eof
 
-:: prompt_aggregator_url -> sets "resolved_aggregator_url" to
-:: %AGGREGATOR_URL% if already set, otherwise prompts for one
-:: interactively. Unlike install.sh, there's no /dev/tty trick needed
-:: here: this script can't be invoked via a stdin pipe the way `curl |
-:: sh` works on Linux, so a real console is always attached whenever a
-:: human runs this directly. AGGREGATOR_URL is mandatory for both the
-:: agent and the companion -- without one, neither has any purpose.
+:: prompt_aggregator_url [EXISTING] -> sets "resolved_aggregator_url" to
+:: %AGGREGATOR_URL% if already set (e.g. from install.bat's own
+:: self-update reinvocation), otherwise prompts for one interactively --
+:: pre-filled with EXISTING if the caller found one already configured
+:: (e.g. re-running this script by hand on an already-installed agent),
+:: so hitting Enter with no typed input keeps it unchanged: `set /p`
+:: leaves its target variable's existing value alone when given a blank
+:: response, which is exactly the mechanism this relies on. Unlike
+:: install.sh, there's no /dev/tty trick needed here: this script can't
+:: be invoked via a stdin pipe the way `curl | sh` works on Linux, so a
+:: real console is always attached whenever a human runs this directly.
+:: AGGREGATOR_URL is mandatory for both the agent and the companion --
+:: without one, neither has any purpose.
 :prompt_aggregator_url
 if defined AGGREGATOR_URL (
   set "resolved_aggregator_url=%AGGREGATOR_URL%"
   goto :eof
 )
-set "resolved_aggregator_url="
+set "resolved_aggregator_url=%~1"
+if defined resolved_aggregator_url (
+  set /p "resolved_aggregator_url=Aggregator URL [!resolved_aggregator_url!], Enter to keep: "
+  goto :eof
+)
 echo install.bat: no AGGREGATOR_URL could be found automatically. >&2
 echo   You only need one aggregator, reachable from this host -- it doesn't >&2
 echo   have to be on the same network as this host; anywhere reachable over >&2
@@ -410,14 +420,44 @@ if not exist "%data_dir%" mkdir "%data_dir%"
 if defined AGGREGATOR_URL (
   set "resolved_aggregator_url=%AGGREGATOR_URL%"
 ) else (
-  call :prompt_aggregator_url
+  call :read_service_var update-detector AGGREGATOR_URL
+  call :prompt_aggregator_url "%read_val%"
 )
 if not defined resolved_aggregator_url (
   echo install.bat: AGGREGATOR_URL is required -- set it and re-run. >&2
   exit /b 1
 )
+
+rem Every other field here is optional -- rather than silently resetting
+rem any of them to a hardcoded default on a plain re-run (e.g. to pick
+rem up a new version or a winget account change), fall back to this
+rem service's own already-configured value first, the same
+rem config-preservation self-update already gets via
+rem internal/companion/selfupdate_windows.go's existingConfigEnv, just
+rem reached here too since a manual re-run never goes through that Go
+rem code at all.
+if not defined LISTEN_ADDR (
+  call :read_service_var update-detector LISTEN_ADDR
+  set "LISTEN_ADDR=%read_val%"
+)
 if not defined LISTEN_ADDR set "LISTEN_ADDR=:8080"
+if not defined CHECK_INTERVAL (
+  call :read_service_var update-detector CHECK_INTERVAL
+  set "CHECK_INTERVAL=%read_val%"
+)
 if not defined CHECK_INTERVAL set "CHECK_INTERVAL=6h"
+if not defined HOSTNAME_OVERRIDE (
+  call :read_service_var update-detector HOSTNAME_OVERRIDE
+  set "HOSTNAME_OVERRIDE=%read_val%"
+)
+if not defined TELEGRAM_BOT_TOKEN (
+  call :read_service_var update-detector TELEGRAM_BOT_TOKEN
+  set "TELEGRAM_BOT_TOKEN=%read_val%"
+)
+if not defined TELEGRAM_CHAT_ID (
+  call :read_service_var update-detector TELEGRAM_CHAT_ID
+  set "TELEGRAM_CHAT_ID=%read_val%"
+)
 
 call :create_or_update_service update-detector "update-detector agent" "%bin_path%"
 set "envval=LISTEN_ADDR=%LISTEN_ADDR%\0HOSTNAME_OVERRIDE=%HOSTNAME_OVERRIDE%\0CHECK_INTERVAL=%CHECK_INTERVAL%\0TELEGRAM_BOT_TOKEN=%TELEGRAM_BOT_TOKEN%\0TELEGRAM_CHAT_ID=%TELEGRAM_CHAT_ID%\0AGGREGATOR_URL=!resolved_aggregator_url!\0STATE_FILE=%data_dir%\state.json\0AGENT_IDENTITY_FILE=%data_dir%\agent-identity.json"
@@ -443,7 +483,33 @@ rem plain LISTEN_ADDR/TELEGRAM_* above), specifically so installing both
 rem agent and aggregator in the same run can't accidentally share one
 rem secret/token meant for only one of them -- same reasoning, and same
 rem naming convention, as install.sh's own install_aggregator_native.
+rem
+rem Same re-run config-preservation reasoning as install_agent_native
+rem above -- critically including ADMIN_APPLY_SHARED_SECRET: losing that
+rem on a plain re-run would silently disable apply/self-update until
+rem it's set again, not just reset a cosmetic default. The registry
+rem itself stores these under their plain (unprefixed) names, since
+rem that's what update-aggregator's own config.Load actually reads --
+rem read_service_var is given that plain name, its result assigned to
+rem the prefixed *input* variable name below, mirroring
+rem existingConfigEnv's own translate() table on the Go side.
+if not defined AGGREGATOR_LISTEN_ADDR (
+  call :read_service_var update-aggregator LISTEN_ADDR
+  set "AGGREGATOR_LISTEN_ADDR=%read_val%"
+)
 if not defined AGGREGATOR_LISTEN_ADDR set "AGGREGATOR_LISTEN_ADDR=:9090"
+if not defined AGGREGATOR_TELEGRAM_BOT_TOKEN (
+  call :read_service_var update-aggregator TELEGRAM_BOT_TOKEN
+  set "AGGREGATOR_TELEGRAM_BOT_TOKEN=%read_val%"
+)
+if not defined AGGREGATOR_TELEGRAM_CHAT_ID (
+  call :read_service_var update-aggregator TELEGRAM_CHAT_ID
+  set "AGGREGATOR_TELEGRAM_CHAT_ID=%read_val%"
+)
+if not defined ADMIN_APPLY_SHARED_SECRET (
+  call :read_service_var update-aggregator ADMIN_APPLY_SHARED_SECRET
+  set "ADMIN_APPLY_SHARED_SECRET=%read_val%"
+)
 
 call :create_or_update_service update-aggregator "update-aggregator" "%bin_path%"
 set "envval=LISTEN_ADDR=%AGGREGATOR_LISTEN_ADDR%\0REGISTRY_FILE=%data_dir%\registry.json\0TELEGRAM_BOT_TOKEN=%AGGREGATOR_TELEGRAM_BOT_TOKEN%\0TELEGRAM_CHAT_ID=%AGGREGATOR_TELEGRAM_CHAT_ID%\0ADMIN_APPLY_SHARED_SECRET=%ADMIN_APPLY_SHARED_SECRET%"

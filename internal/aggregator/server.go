@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"bufio"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -19,9 +20,23 @@ import (
 )
 
 type Server struct {
-	registry  *Registry
-	hub       *CompanionHub
-	notifyMgr *notifier.Manager
+	// shutdownCtx is the process's own top-level lifetime context (see
+	// cmd/update-aggregator/main.go's run) -- deliberately not just
+	// relying on each request's own r.Context(), which is *not*
+	// cancelled by http.Server.Shutdown() alone (a well-known net/http
+	// gotcha: Shutdown waits for in-flight handlers to return on their
+	// own, it doesn't signal them to). Without this, every open
+	// /companion/stream connection (agent or companion) sits blocked in
+	// its select loop through Shutdown's own grace period and only
+	// actually gets closed once the old process calls os.Exit -- meaning
+	// a plain restart (e.g. self-update) leaves every connected
+	// agent/companion waiting several extra, unnecessary seconds before
+	// they even notice the disconnect and start reconnecting. Confirmed
+	// as a real (if bounded) slow-reconnect symptom in practice.
+	shutdownCtx context.Context
+	registry    *Registry
+	hub         *CompanionHub
+	notifyMgr   *notifier.Manager
 	// adminApplySecret gates POST /admin/agents/{id}/apply. Empty means the
 	// endpoint is disabled (501) -- this higher-stakes capability is
 	// opt-in, unlike the rest of /admin which trusts the network path.
@@ -36,8 +51,9 @@ type Server struct {
 	mux       *http.ServeMux
 }
 
-func NewServer(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
+func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
 	s := &Server{
+		shutdownCtx:      shutdownCtx,
 		registry:         registry,
 		hub:              hub,
 		notifyMgr:        notifyMgr,
@@ -234,6 +250,12 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-s.shutdownCtx.Done():
+			// See shutdownCtx's own doc comment: without this, this
+			// handler would sit blocked here through the entire process
+			// shutdown, needlessly delaying how soon the connected
+			// agent/companion notices and starts reconnecting.
+			return
 		case <-result.Superseded:
 			// A companion just connected and preempted this (necessarily
 			// agent-kind) stream -- one last distinguishing frame so the
@@ -408,6 +430,9 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.shutdownCtx.Done():
+			// See shutdownCtx's own doc comment on Server.
 			return
 		case <-heartbeat.C:
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {

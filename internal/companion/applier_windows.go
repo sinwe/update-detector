@@ -5,6 +5,7 @@ package companion
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -44,15 +45,36 @@ func (w *windowsApplier) Packages(ctx context.Context, names []string) (string, 
 
 	if len(wingetNames) > 0 {
 		out, wingetErr := (&wingetApplier{}).Packages(ctx, wingetNames)
-		combined.WriteString("\n")
+		if combined.Len() > 0 {
+			combined.WriteString("\n")
+		}
 		combined.WriteString(out)
-		if wingetErr != nil {
-			combined.WriteString(fmt.Sprintf("\nwinget (supplementary, non-fatal): %v", wingetErr))
-			// Only surface as this call's own error if there was no
-			// Windows Update work at all -- a KB-targeted install that
-			// already succeeded must not be reported as a failure just
-			// because an unrelated, optional winget item also failed.
-			if err == nil && len(kbs) == 0 {
+		switch {
+		case wingetErr == nil:
+			// nothing more to do
+		case len(kbs) > 0:
+			// Windows Update work was *also* requested alongside these
+			// winget-sourced names, and its own outcome is already
+			// reflected in err above -- report this failure as a note,
+			// not this call's own error, so a real Windows Update
+			// success isn't papered over as an overall failure just
+			// because an unrelated winget item also failed.
+			combined.WriteString(fmt.Sprintf("\n(winget-sourced item(s) also failed, see above: %v)", wingetErr))
+		default:
+			// Nothing but winget-sourced names were requested -- for
+			// *this* request, winget working is the whole story, so its
+			// failure genuinely is this call's own error, not something
+			// to swallow as "non-fatal" (that label only applies when
+			// winget is truly supplementary to other, successful work,
+			// which isn't the case here). Confirmed live: a request for
+			// a winget-sourced item on a companion that declined the
+			// winget account setup (see install.bat/README) fails with
+			// exactly this -- explained explicitly rather than left as
+			// a bare exec error, since "why is it even trying winget"
+			// is exactly what that looks like from the outside.
+			if errors.Is(wingetErr, exec.ErrNotFound) {
+				err = fmt.Errorf("%w -- this service isn't configured to run as an account winget works for; re-run install.bat and accept the winget account prompt for this service to fix", wingetErr)
+			} else {
 				err = wingetErr
 			}
 		}

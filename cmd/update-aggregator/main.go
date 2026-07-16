@@ -69,7 +69,7 @@ func run(ctx context.Context) error {
 
 	hub := aggregator.NewCompanionHub()
 	outputHub := aggregator.NewOutputHub()
-	srv := aggregator.NewServer(registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
+	srv := aggregator.NewServer(ctx, registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: srv.Handler(),

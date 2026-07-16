@@ -25,7 +25,7 @@ func newTestServer(t *testing.T) (*Server, *Registry) {
 func newTestServerWithSecret(t *testing.T, adminApplySecret string) (*Server, *Registry) {
 	reg := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
 	hub := NewCompanionHub()
-	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, nil, NewOutputHub()), reg
+	return NewServer(context.Background(), reg, hub, notifier.NewManager(), adminApplySecret, nil, NewOutputHub()), reg
 }
 
 // newTestServerWithLatestVersion is like newTestServerWithSecret, but
@@ -46,7 +46,7 @@ func newTestServerWithLatestVersion(t *testing.T, adminApplySecret, latestVersio
 
 	reg := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
 	hub := NewCompanionHub()
-	return NewServer(reg, hub, notifier.NewManager(), adminApplySecret, client, NewOutputHub()), reg
+	return NewServer(context.Background(), reg, hub, notifier.NewManager(), adminApplySecret, client, NewOutputHub()), reg
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
