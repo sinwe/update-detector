@@ -162,15 +162,24 @@ foreach ($u in $result.Updates) { $targets.Add($u) | Out-Null }
 // with no fixed timeout on ctx (same as apt-get's own dist-upgrade,
 // which can also run for many minutes).
 //
-// Checks the same three reboot-pending registry keys
-// internal/checker/windows/reboot.go's own checkRebootRequired already
-// reads first, before even searching: Windows Update refuses to install
-// anything further while a reboot from a previously installed update is
-// still pending -- confirmed live, this is exactly what caused a real
-// install to fail with ResultCode 4 (Failed) right after a clean
-// ResultCode 2 (Succeeded) download, with no more specific reason
-// surfaced at all. Failing fast here with an explicit, actionable
-// message beats letting that COM call fail cryptically partway through.
+// Checks two of the three reboot-pending registry keys
+// internal/checker/windows/reboot.go's own checkRebootRequired reads
+// first, before even searching -- deliberately only the two that are
+// actually specific to CBS/Windows Update servicing (RebootPending,
+// WindowsUpdate's own RebootRequired), not that function's third check
+// (Session Manager's PendingFileRenameOperations). That one is a
+// generic, OS-wide "something -- anything -- has a pending rename on
+// next boot" signal, useful for the checker's own informational
+// reboot_required status but confirmed live to be the wrong thing to
+// gate a Windows-Update-specific install on: a real host's
+// PendingFileRenameOperations was still tripped by an unrelated,
+// pre-existing Microsoft Store/Gaming Services entry
+// (gamingservicesproxy_11.dll) that had nothing to do with Windows
+// Update at all, and survived an actual reboot -- gating installs on it
+// would have blocked every future Windows Update install indefinitely,
+// for a condition that may never clear on its own. Using it here would
+// have been a worse regression than not checking at all.
+//
 // Deliberately plain registry reads, not Microsoft.Update.SystemInfo's
 // own COM RebootRequired property (the obvious, more "native" choice) --
 // confirmed live, instantiating that specific COM class fails outright
@@ -199,8 +208,6 @@ $ErrorActionPreference = 'Stop'
 $rebootPending = $false
 if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $rebootPending = $true }
 if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $rebootPending = $true }
-$pfro = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
-if ($pfro -and $pfro.Count -gt 0) { $rebootPending = $true }
 if ($rebootPending) {
   Write-Error 'a reboot is already pending from a previously installed update -- Windows Update refuses to install anything further until this host reboots; reboot it, then retry'
   exit 1
