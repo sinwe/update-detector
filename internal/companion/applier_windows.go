@@ -162,14 +162,24 @@ foreach ($u in $result.Updates) { $targets.Add($u) | Out-Null }
 // with no fixed timeout on ctx (same as apt-get's own dist-upgrade,
 // which can also run for many minutes).
 //
-// Checks Microsoft.Update.SystemInfo's own RebootRequired first, before
-// even searching: Windows Update refuses to install anything further
-// while a reboot from a previously installed update is still pending --
-// confirmed live, this is exactly what caused a real install to fail
-// with ResultCode 4 (Failed) right after a clean ResultCode 2
-// (Succeeded) download, with no more specific reason surfaced at all.
-// Failing fast here with an explicit, actionable message beats letting
-// that COM call fail cryptically partway through.
+// Checks the same three reboot-pending registry keys
+// internal/checker/windows/reboot.go's own checkRebootRequired already
+// reads first, before even searching: Windows Update refuses to install
+// anything further while a reboot from a previously installed update is
+// still pending -- confirmed live, this is exactly what caused a real
+// install to fail with ResultCode 4 (Failed) right after a clean
+// ResultCode 2 (Succeeded) download, with no more specific reason
+// surfaced at all. Failing fast here with an explicit, actionable
+// message beats letting that COM call fail cryptically partway through.
+// Deliberately plain registry reads, not Microsoft.Update.SystemInfo's
+// own COM RebootRequired property (the obvious, more "native" choice) --
+// confirmed live, instantiating that specific COM class fails outright
+// with E_ACCESSDENIED for a non-elevated caller, unlike
+// Microsoft.Update.Session (used below, already proven working from
+// this same companion) or these registry keys (already proven working
+// from the checker's own detection side) -- reusing what's already known
+// to work beats trusting an untested COM object's own access
+// requirements.
 //
 // IUpdateDownloadResult/IInstallationResult.ResultCode uses the
 // OperationResultCode enum: 2 (orcSucceeded) and 3
@@ -186,8 +196,12 @@ func runWindowsUpdateInstall(ctx context.Context, selectTargets string) (string,
 	script := `
 $ErrorActionPreference = 'Stop'
 
-$sysInfo = New-Object -ComObject Microsoft.Update.SystemInfo
-if ($sysInfo.RebootRequired) {
+$rebootPending = $false
+if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $rebootPending = $true }
+if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $rebootPending = $true }
+$pfro = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
+if ($pfro -and $pfro.Count -gt 0) { $rebootPending = $true }
+if ($rebootPending) {
   Write-Error 'a reboot is already pending from a previously installed update -- Windows Update refuses to install anything further until this host reboots; reboot it, then retry'
   exit 1
 }
