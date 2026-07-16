@@ -3,7 +3,6 @@ package companion
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -68,28 +67,22 @@ func (d Detection) Ambiguous() bool {
 // is running natively (a systemd unit file on Linux, a Windows Service on
 // Windows) and/or as a Docker container (running or stopped) on this host.
 // Both checks always run, even if the first already answers the question, so
-// an ambiguous state is never hidden from the caller.
-func Detect(ctx context.Context, name string) (Detection, error) {
+// an ambiguous state is never hidden from the caller. No error return: both
+// dockerContainerFor and nativeUnitPresent already degrade gracefully to
+// "not found" on any failure of their own (see dockerContainerFor's own
+// doc comment) rather than ever failing this call outright.
+func Detect(ctx context.Context, name string) Detection {
 	native := nativeUnitPresent(name)
-	dockerID, dockerImage, err := dockerContainerFor(ctx, name)
-	if err != nil {
-		return Detection{}, err
-	}
-	return Detection{Native: native, DockerContainerID: dockerID, DockerImage: dockerImage}, nil
+	dockerID, dockerImage := dockerContainerFor(ctx, name)
+	return Detection{Native: native, DockerContainerID: dockerID, DockerImage: dockerImage}
 }
 
 // AggregatorColocated reports whether the aggregator itself is running
 // (natively or as a Docker container) on this same host -- used to tell
 // the companion whether to skip or include the aggregator component in
-// a self-update sweep. Best-effort: errors are silently treated as
-// "not present" rather than propagated, since this is informational only
-// and failing to self-update an absent aggregator is harmless.
+// a self-update sweep.
 func AggregatorColocated(ctx context.Context) bool {
-	detection, err := Detect(ctx, "update-aggregator")
-	if err != nil {
-		return false
-	}
-	return detection.Kind() != DeployNone
+	return Detect(ctx, "update-aggregator").Kind() != DeployNone
 }
 
 // dockerContainerFor mirrors install.sh's own docker_container_for:
@@ -97,8 +90,23 @@ func AggregatorColocated(ctx context.Context) bool {
 // whose image matches name, anchored the same way install.sh's own awk
 // pattern is (so "update-detector" can't match an
 // "update-detector-companion" image either direction), returning both its
-// ID and its exact image reference. Returns "", "", nil if docker isn't
-// on PATH at all, or if nothing matches.
+// ID and its exact image reference. Returns "", "" if docker isn't on
+// PATH at all, or if running it fails for any reason (not just absence,
+// and not returned as an error at all -- see below) -- confirmed live: a
+// Windows host with Docker Desktop installed (for unrelated reasons) but
+// not actually running produced "docker ps: exit status 1" here, which
+// used to propagate all the way up as SelfUpdate's own hard failure
+// ("detecting how agent is deployed: ...") even though the agent was
+// plainly installed natively and nativeUnitPresent (checked alongside
+// this, see Detect) would have given a perfectly good, sufficient answer
+// on its own. Docker being unreliable or misconfigured must never block
+// a native-only host's own self-update from working at all -- same
+// "graceful degradation, not a hard failure" posture every other
+// exec-based check in this codebase already takes (winget, apt-get,
+// ...), which is also why this has no error return at all: every
+// failure mode here already degrades to "no container found", so an
+// error return would only ever be dead code a caller could never
+// actually receive.
 //
 // Deliberately not "docker ps --format {{.Image}}": that field silently
 // falls back to printing a bare image ID once the tag a container was
@@ -112,27 +120,27 @@ func AggregatorColocated(ctx context.Context) bool {
 // actually created with and never silently changes, so it's used
 // instead -- one extra call, but a single "docker inspect id1 id2 ..."
 // across every candidate rather than one call per container.
-func dockerContainerFor(ctx context.Context, name string) (id, image string, err error) {
+func dockerContainerFor(ctx context.Context, name string) (id, image string) {
 	if _, lookErr := exec.LookPath("docker"); lookErr != nil {
-		return "", "", nil
+		return "", ""
 	}
 
 	psCmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}}")
 	var psOut bytes.Buffer
 	psCmd.Stdout = &psOut
 	if runErr := psCmd.Run(); runErr != nil {
-		return "", "", fmt.Errorf("deploykind: docker ps: %w", runErr)
+		return "", ""
 	}
 	ids := strings.Fields(psOut.String())
 	if len(ids) == 0 {
-		return "", "", nil
+		return "", ""
 	}
 
 	inspectCmd := exec.CommandContext(ctx, "docker", append([]string{"inspect", "--format", "{{.Config.Image}}"}, ids...)...)
 	var inspectOut bytes.Buffer
 	inspectCmd.Stdout = &inspectOut
 	if runErr := inspectCmd.Run(); runErr != nil {
-		return "", "", fmt.Errorf("deploykind: docker inspect: %w", runErr)
+		return "", ""
 	}
 	images := strings.Split(strings.TrimRight(inspectOut.String(), "\n"), "\n")
 
@@ -142,8 +150,8 @@ func dockerContainerFor(ctx context.Context, name string) (id, image string, err
 			break
 		}
 		if containerImage != "" && pattern.MatchString(containerImage) {
-			return ids[i], containerImage, nil
+			return ids[i], containerImage
 		}
 	}
-	return "", "", nil
+	return "", ""
 }

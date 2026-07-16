@@ -66,10 +66,7 @@ func SelfUpdate(ctx context.Context, action aggregator.Action) aggregator.Action
 		return fail("%v", err)
 	}
 
-	detection, err := Detect(ctx, unitName)
-	if err != nil {
-		return fail("detecting how %s is deployed: %v", action.Component, err)
-	}
+	detection := Detect(ctx, unitName)
 
 	switch detection.Kind() {
 	case DeployNative, DeployWindowsService:

@@ -49,10 +49,7 @@ func TestNativeUnitPresent(t *testing.T) {
 
 func TestDockerContainerForNoDockerOnPath(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // guarantees no "docker" binary anywhere on PATH
-	id, image, err := dockerContainerFor(context.Background(), "update-detector")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	id, image := dockerContainerFor(context.Background(), "update-detector")
 	if id != "" || image != "" {
 		t.Fatalf("got id %q image %q, want both empty when docker isn't on PATH", id, image)
 	}
@@ -73,10 +70,7 @@ case "$1" in
     ;;
 esac
 `)
-	id, image, err := dockerContainerFor(context.Background(), "update-detector")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	id, image := dockerContainerFor(context.Background(), "update-detector")
 	if id != "bbb222" {
 		t.Fatalf("got id %q, want bbb222 -- must not match the -companion image for a bare \"update-detector\" pattern", id)
 	}
@@ -99,10 +93,7 @@ case "$1" in
     ;;
 esac
 `)
-	id, image, err := dockerContainerFor(context.Background(), "update-detector")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	id, image := dockerContainerFor(context.Background(), "update-detector")
 	if id != "" || image != "" {
 		t.Fatalf("got id %q image %q, want both empty for no matching image", id, image)
 	}
@@ -157,18 +148,12 @@ case "$1" in
 esac
 `)
 
-	d, err := Detect(context.Background(), "update-detector")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	d := Detect(context.Background(), "update-detector")
 	if !d.Native || d.DockerContainerID != "" {
 		t.Fatalf("got %#v, want native-only for update-detector", d)
 	}
 
-	d, err = Detect(context.Background(), "update-aggregator")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	d = Detect(context.Background(), "update-aggregator")
 	if d.Native || d.DockerContainerID != "aaa111" {
 		t.Fatalf("got %#v, want docker-only (id=aaa111) for update-aggregator", d)
 	}
@@ -202,10 +187,7 @@ case "$1" in
     ;;
 esac
 `)
-	id, image, err := dockerContainerFor(context.Background(), "update-detector")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	id, image := dockerContainerFor(context.Background(), "update-detector")
 	if id != "aaa111" {
 		t.Fatalf("got id %q, want aaa111", id)
 	}
@@ -214,10 +196,22 @@ esac
 	}
 }
 
-func TestDockerContainerForPropagatesRealError(t *testing.T) {
+// TestDockerContainerForDegradesGracefullyOnRealError is the regression
+// test for a real bug caught live: a Windows host with Docker Desktop
+// installed (for unrelated reasons) but not actually running produced
+// "docker ps: exit status 1", which used to propagate all the way up as
+// SelfUpdate's own hard failure -- even though the agent was plainly
+// installed natively and nativeUnitPresent alone would have answered
+// Detect's question just fine. docker exiting non-zero for any reason
+// must degrade to "no container found", not fail this call at all (see
+// dockerContainerFor's own doc comment) -- this replaces a previous
+// version of this test that asserted the opposite, now-corrected
+// behavior.
+func TestDockerContainerForDegradesGracefullyOnRealError(t *testing.T) {
 	writeFakeDocker(t, `exit 1`)
-	if _, _, err := dockerContainerFor(context.Background(), "update-detector"); err == nil {
-		t.Fatal("expected an error when docker itself exits non-zero")
+	id, image := dockerContainerFor(context.Background(), "update-detector")
+	if id != "" || image != "" {
+		t.Fatalf("got id %q image %q, want both empty when docker itself exits non-zero", id, image)
 	}
 }
 
