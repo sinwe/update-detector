@@ -23,6 +23,12 @@ type windowsUpdateItem struct {
 	// real severity signal winget has no equivalent of at all (see
 	// packages.go's own doc comment).
 	MsrcSeverity string `json:"MsrcSeverity"`
+	// UpdateID is this update's own stable GUID (Identity.UpdateID) --
+	// always present, unlike KBArticleIDs, which some real updates
+	// (confirmed live: certain driver updates) carry none of at all.
+	// buildDisplayName falls back to this so every update stays
+	// individually targetable for apply, even one with no KB.
+	UpdateID string `json:"UpdateID"`
 }
 
 // parseWindowsUpdateJSON parses windowsupdate.go's PowerShell script
@@ -49,7 +55,7 @@ func parseWindowsUpdateJSON(raw []byte) (packageResult, error) {
 			result.Security++
 		}
 		result.Upgrades = append(result.Upgrades, checker.PackageUpgrade{
-			Name:             buildDisplayName(item.Title, item.KBArticleIDs),
+			Name:             buildDisplayName(item.Title, item.KBArticleIDs, item.UpdateID),
 			CandidateVersion: kbVersionString(item.KBArticleIDs),
 			Security:         security,
 		})
@@ -84,9 +90,20 @@ func kbVersionString(ids []string) string {
 // Each KB gets its own parenthesized marker (not one comma-joined pair
 // of parens) so a multi-KB update's every KB is still individually
 // regex-matchable there.
-func buildDisplayName(title string, ids []string) string {
+//
+// When ids is empty (confirmed live: some driver updates have no KB at
+// all), falls back to appending updateID in a "{guid}" marker instead --
+// a different bracket shape than the KB marker, deliberately, so the two
+// stay unambiguous to parse back apart (see
+// internal/companion/applier_windows_parse.go's updateIDPattern).
+// UpdateID is always present regardless of whether a KB is, so this
+// still keeps every update individually targetable for apply.
+func buildDisplayName(title string, ids []string, updateID string) string {
 	if len(ids) == 0 {
-		return title
+		if updateID == "" {
+			return title
+		}
+		return title + " {" + updateID + "}"
 	}
 	var b strings.Builder
 	b.WriteString(title)

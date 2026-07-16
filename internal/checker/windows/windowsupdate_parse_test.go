@@ -91,7 +91,31 @@ func TestParseWindowsUpdateJSONMultipleKBsAndMissingKB(t *testing.T) {
 		t.Fatalf("got CandidateVersion %q, want \"pending\" for no KB at all", got.Upgrades[1].CandidateVersion)
 	}
 	if got.Upgrades[1].Name != "Driver update with no KB" {
-		t.Fatalf("got Name %q, want the title unchanged when there's no KB to append", got.Upgrades[1].Name)
+		t.Fatalf("got Name %q, want the title unchanged when there's no KB and no UpdateID either to append", got.Upgrades[1].Name)
+	}
+}
+
+// TestParseWindowsUpdateJSONNoKBFallsBackToUpdateID is the regression
+// test for a real bug caught live: some Windows Update items (driver
+// updates, confirmed live: "Microsoft Corporation AudioProcessingObject
+// Driver Update") have no KB at all, only a stable Identity.UpdateID --
+// Name must fall back to a "{guid}" marker in that case so the item
+// stays individually targetable for apply (see
+// internal/companion/applier_windows_parse.go's updateIDPattern),
+// instead of falling through unmarked and misrouting to winget.
+func TestParseWindowsUpdateJSONNoKBFallsBackToUpdateID(t *testing.T) {
+	raw := `[{"Title":"Microsoft Corporation AudioProcessingObject Driver Update (1.0.4.7057)","KBArticleIDs":[],"IsMandatory":false,"MsrcSeverity":"","UpdateID":"12345678-90ab-cdef-1234-567890abcdef"}]`
+
+	got, err := parseWindowsUpdateJSON([]byte(raw))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "Microsoft Corporation AudioProcessingObject Driver Update (1.0.4.7057) {12345678-90ab-cdef-1234-567890abcdef}"
+	if got.Upgrades[0].Name != want {
+		t.Fatalf("got Name %q, want %q", got.Upgrades[0].Name, want)
+	}
+	if got.Upgrades[0].CandidateVersion != "pending" {
+		t.Fatalf("got CandidateVersion %q, want \"pending\" -- CandidateVersion's own display text is unaffected by the UpdateID fallback", got.Upgrades[0].CandidateVersion)
 	}
 }
 

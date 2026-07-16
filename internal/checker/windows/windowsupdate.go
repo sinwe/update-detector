@@ -43,6 +43,7 @@ foreach ($u in $result.Updates) {
     KBArticleIDs = @($u.KBArticleIDs)
     IsMandatory  = [bool]$u.IsMandatory
     MsrcSeverity = [string]$u.MsrcSeverity
+    UpdateID     = $u.Identity.UpdateID.ToString()
   }
 }
 ConvertTo-Json -InputObject $updates -Compress

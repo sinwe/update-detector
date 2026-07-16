@@ -26,21 +26,23 @@ func init() {
 type windowsApplier struct{}
 
 // Packages installs each requested name: names carrying a "(KBnnnnnnn)"
-// marker (see splitPackageNames) are installed via the Windows Update
-// Agent API's own download-then-install flow (installWindowsUpdatesByKB,
-// the same COM interface windowsupdate.go's detection side already
-// uses); everything else is delegated to wingetApplier (`winget upgrade
-// --id <name>`), since a winget-sourced name never carries that marker.
+// or "{updateid-guid}" marker (see splitPackageNames) are installed via
+// the Windows Update Agent API's own download-then-install flow
+// (installWindowsUpdates, the same COM interface windowsupdate.go's
+// detection side already uses); everything else is delegated to
+// wingetApplier (`winget upgrade --id <name>`), the only other package
+// source this checker currently knows about, since a winget-sourced name
+// never carries either marker.
 func (w *windowsApplier) Packages(ctx context.Context, names []string) (string, error) {
-	kbs, wingetNames := splitPackageNames(names)
+	kbs, updateIDs, wingetNames := splitPackageNames(names)
 
 	var combined strings.Builder
 	var err error
 
-	if len(kbs) > 0 {
-		out, kbErr := installWindowsUpdatesByKB(ctx, kbs)
+	if len(kbs) > 0 || len(updateIDs) > 0 {
+		out, wuErr := installWindowsUpdates(ctx, kbs, updateIDs)
 		combined.WriteString(out)
-		err = kbErr
+		err = wuErr
 	}
 
 	if len(wingetNames) > 0 {
@@ -52,26 +54,27 @@ func (w *windowsApplier) Packages(ctx context.Context, names []string) (string, 
 		switch {
 		case wingetErr == nil:
 			// nothing more to do
-		case len(kbs) > 0:
+		case err == nil && (len(kbs) > 0 || len(updateIDs) > 0):
 			// Windows Update work was *also* requested alongside these
-			// winget-sourced names, and its own outcome is already
-			// reflected in err above -- report this failure as a note,
-			// not this call's own error, so a real Windows Update
-			// success isn't papered over as an overall failure just
-			// because an unrelated winget item also failed.
+			// winget-sourced names, and it succeeded -- report this
+			// failure as a note, not this call's own error, so a real
+			// Windows Update success isn't papered over as an overall
+			// failure just because an unrelated winget item also failed.
 			combined.WriteString(fmt.Sprintf("\n(winget-sourced item(s) also failed, see above: %v)", wingetErr))
 		default:
-			// Nothing but winget-sourced names were requested -- for
-			// *this* request, winget working is the whole story, so its
-			// failure genuinely is this call's own error, not something
-			// to swallow as "non-fatal" (that label only applies when
-			// winget is truly supplementary to other, successful work,
-			// which isn't the case here). Confirmed live: a request for
-			// a winget-sourced item on a companion that declined the
-			// winget account setup (see install.bat/README) fails with
-			// exactly this -- explained explicitly rather than left as
-			// a bare exec error, since "why is it even trying winget"
-			// is exactly what that looks like from the outside.
+			// Nothing but winget-sourced names were requested (or the
+			// Windows Update work requested alongside them also
+			// failed) -- for *this* request, winget working is the
+			// whole story, so its failure genuinely is this call's own
+			// error, not something to swallow as "non-fatal" (that
+			// label only applies when winget is truly supplementary to
+			// other, successful work, which isn't the case here).
+			// Confirmed live: a request for a winget-sourced item on a
+			// companion that declined the winget account setup (see
+			// install.bat/README) fails with exactly this -- explained
+			// explicitly rather than left as a bare exec error, since
+			// "why is it even trying winget" is exactly what that looks
+			// like from the outside.
 			if errors.Is(wingetErr, exec.ErrNotFound) {
 				err = fmt.Errorf("%w -- this service isn't configured to run as an account winget works for; re-run install.bat and accept the winget account prompt for this service to fix", wingetErr)
 			} else {
@@ -104,23 +107,40 @@ func (w *windowsApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return w.Upgrade(ctx)
 }
 
-// installWindowsUpdatesByKB downloads and installs only the updates
-// whose own KBArticleIDs intersect kbs.
-func installWindowsUpdatesByKB(ctx context.Context, kbs []string) (string, error) {
-	quoted := make([]string, len(kbs))
-	for i, kb := range kbs {
-		quoted[i] = "'" + kb + "'"
-	}
-	selectTargets := fmt.Sprintf(`
+// installWindowsUpdates downloads and installs only the updates whose
+// own KBArticleIDs intersect kbs, or whose own Identity.UpdateID is in
+// updateIDs (used for the rare update with no KB at all -- see
+// splitPackageNames). Either slice may be empty; at least one is not.
+func installWindowsUpdates(ctx context.Context, kbs, updateIDs []string) (string, error) {
+	var b strings.Builder
+	b.WriteString("$targets = New-Object -ComObject Microsoft.Update.UpdateColl\n")
+	if len(kbs) > 0 {
+		quoted := make([]string, len(kbs))
+		for i, kb := range kbs {
+			quoted[i] = "'" + kb + "'"
+		}
+		fmt.Fprintf(&b, `
 $kbFilter = @(%s)
-$targets = New-Object -ComObject Microsoft.Update.UpdateColl
 foreach ($u in $result.Updates) {
   foreach ($kb in $u.KBArticleIDs) {
     if ($kbFilter -contains $kb) { $targets.Add($u) | Out-Null; break }
   }
 }
 `, strings.Join(quoted, ","))
-	return runWindowsUpdateInstall(ctx, selectTargets)
+	}
+	if len(updateIDs) > 0 {
+		quoted := make([]string, len(updateIDs))
+		for i, id := range updateIDs {
+			quoted[i] = "'" + id + "'"
+		}
+		fmt.Fprintf(&b, `
+$idFilter = @(%s)
+foreach ($u in $result.Updates) {
+  if ($idFilter -contains $u.Identity.UpdateID.ToString()) { $targets.Add($u) | Out-Null }
+}
+`, strings.Join(quoted, ","))
+	}
+	return runWindowsUpdateInstall(ctx, b.String())
 }
 
 // installAllPendingWindowsUpdates downloads and installs every update
