@@ -35,14 +35,19 @@ type agentView struct {
 	// anything to connect to, or report on, before that.
 	//
 	// AnyStreamConnected is true whether the connected stream is the
-	// companion or the agent itself (see ClientKind) -- gates the
-	// "connected"/Force-recheck display, since recheck works either way.
-	// CompanionConnected is strictly kind==companion -- gates apply-only
-	// controls, since only a real companion can run apt-get. ConnectedVia
-	// is "agent"/"companion"/"" (not connected), for the on-page label.
+	// companion or the agent itself (see ClientKind) -- shown in the
+	// Agent column, gating Force-recheck's display, since recheck works
+	// over either kind of stream (a connected companion also relays it
+	// to the agent locally -- see execute.go's own triggerRecheck).
+	// CompanionConnected is strictly kind==companion -- shown in the
+	// separate Companion column, gating apply-only controls, since only
+	// a real companion can run apt-get/winget. These used to render
+	// together in one column with a "(via agent)" qualifier on
+	// "connected" to disambiguate which kind was live; kept apart now so
+	// the Agent column's own connectivity is never displayed as if it
+	// were the companion's.
 	AnyStreamConnected bool
 	CompanionConnected bool
-	ConnectedVia       string
 	CompanionVersion   string
 	RecentResults      []resultView
 
@@ -126,7 +131,6 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		Hostname:                 rec.Hostname,
 		AnyStreamConnected:       connected,
 		CompanionConnected:       connected && kind == KindCompanion,
-		ConnectedVia:             string(kind),
 		CompanionVersion:         companionVersion,
 		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion) && !aggregatorBehind,
 		AggregatorPresent:        hub.AggregatorPresent(rec.ID),
@@ -236,7 +240,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
 
   <h2>Approved ({{len .Approved}})</h2>
   <table>
-    <tr><th>Hostname</th><th>Agent ID</th><th>Last seen</th><th>Last report</th><th>Companion</th><th>Actions</th></tr>
+    <tr><th>Hostname</th><th>Agent ID</th><th>Last seen</th><th>Last report</th><th>Agent</th><th>Companion</th><th>Actions</th></tr>
     {{range .Approved}}
     <tr>
       <td>{{.Hostname}}</td>
@@ -263,38 +267,42 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <span class="muted">no report yet</span>
         {{end}}
       </td>
-      <td class="apply-section">
+      <td>
         {{if .AnyStreamConnected}}
-          <span class="ok">connected{{if eq .ConnectedVia "agent"}} (via agent){{end}}</span>{{if .CompanionVersion}} <span class="muted">{{.CompanionVersion}}</span>{{end}}<br>
-          {{if .CompanionConnected}}
-            {{if .Upgrades}}
-            <details>
-              <summary>apply packages</summary>
-              <form onsubmit="return applyPackages(event, '{{.ID}}')">
-                {{range .Upgrades}}
-                <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{.Name}}</label><br>
-                {{end}}
-                <button type="submit">Apply selected</button>
-              </form>
-            </details>
-            {{end}}
-            <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
-            <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
-            {{if .AgentUpdateAvailable}}
-            <button onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update this host's agent to {{$.LatestVersion}}">Update agent</button>
-            {{end}}
-            {{if and $.AggregatorUpdateAvailable .AggregatorPresent}}
-            <button onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update the aggregator co-located with this host to {{$.LatestVersion}}">Update aggregator</button>
-            {{end}}
-            {{if .CompanionUpdateAvailable}}
-            <button onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update this host's companion to {{$.LatestVersion}}">Update companion</button>
-            {{end}}
-          {{else}}
-            <span class="muted">install companion to enable apply</span><br>
-          {{end}}
-          <button onclick="forceRecheck('{{.ID}}')" title="Re-scan this host now instead of waiting for the next CHECK_INTERVAL">Force recheck</button>
+          <span class="ok">connected</span>
         {{else}}
           <span class="muted">not connected</span>
+        {{end}}
+        <br>
+        <button onclick="forceRecheck('{{.ID}}')" title="Re-scan this host now instead of waiting for the next CHECK_INTERVAL">Force recheck</button>
+      </td>
+      <td class="apply-section">
+        {{if .CompanionConnected}}
+          <span class="ok">connected</span>{{if .CompanionVersion}} <span class="muted">{{.CompanionVersion}}</span>{{end}}<br>
+          {{if .Upgrades}}
+          <details>
+            <summary>apply packages</summary>
+            <form onsubmit="return applyPackages(event, '{{.ID}}')">
+              {{range .Upgrades}}
+              <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{.Name}}</label><br>
+              {{end}}
+              <button type="submit">Apply selected</button>
+            </form>
+          </details>
+          {{end}}
+          <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
+          <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
+          {{if .AgentUpdateAvailable}}
+          <button onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update this host's agent to {{$.LatestVersion}}">Update agent</button>
+          {{end}}
+          {{if and $.AggregatorUpdateAvailable .AggregatorPresent}}
+          <button onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update the aggregator co-located with this host to {{$.LatestVersion}}">Update aggregator</button>
+          {{end}}
+          {{if .CompanionUpdateAvailable}}
+          <button onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update this host's companion to {{$.LatestVersion}}">Update companion</button>
+          {{end}}
+        {{else}}
+          <span class="muted">install companion to enable apply</span>
         {{end}}
         <pre id="output-{{.ID}}" class="output-pane" data-agent-id="{{.ID}}"{{if .PendingActionID}} data-pending-action-id="{{.PendingActionID}}"{{end}}></pre>
         {{if .RecentResults}}
@@ -313,7 +321,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </td>
     </tr>
     {{else}}
-    <tr><td colspan="6" class="muted">none</td></tr>
+    <tr><td colspan="7" class="muted">none</td></tr>
     {{end}}
   </table>
 
