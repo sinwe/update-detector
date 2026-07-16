@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -26,9 +25,9 @@ const outputTruncateLimit = 4000
 // command execution. Never reboots, even if the upgrade sets
 // reboot_required.
 func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action) aggregator.ActionResult {
-	// Recheck never touches apt-get or the pending-packages list at all --
-	// it just asks the agent to refresh itself sooner, so it skips
-	// straight to that rather than going through local validation.
+	// Recheck never touches the package manager or the pending-packages
+	// list at all -- it just asks the agent to refresh itself sooner, so
+	// it skips straight to that rather than going through local validation.
 	if action.Type == aggregator.ActionRecheck {
 		triggerRecheck(ctx, agentStatusURL)
 		return aggregator.ActionResult{
@@ -39,11 +38,20 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		}
 	}
 
-	// Self-update replaces a binary and restarts a systemd unit or
-	// Docker container -- none of that is apt-get, and none of the
-	// pending-packages validation below applies to it either.
+	// Self-update replaces a binary and restarts a service -- none of
+	// that involves the package manager, and none of the pending-packages
+	// validation below applies to it either.
 	if action.Type == aggregator.ActionSelfUpdate {
 		return SelfUpdate(ctx, action)
+	}
+
+	applier, err := applierFor()
+	if err != nil {
+		return aggregator.ActionResult{
+			ActionID:    action.ID,
+			Message:     err.Error(),
+			CompletedAt: time.Now(),
+		}
 	}
 
 	status, err := fetchLocalStatus(ctx, agentStatusURL)
@@ -65,32 +73,14 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		}
 	}
 
-	// The companion runs directly against the host's own apt state, which
-	// is separate from the containerized agent's own package-list cache
-	// (see README "How it works" -- the agent never writes to the host, so
-	// it maintains its own cache instead). Without refreshing the host's
-	// lists here first, apt-get can see an older candidate than what the
-	// agent detected and silently no-op ("already the newest version")
-	// even though a real upgrade is pending -- confirmed live: base-files
-	// showed 13.8+deb13u5 -> 13.8+deb13u6 pending, but the host's stale
-	// apt cache still thought 13.8+deb13u5 was current.
-	if updateOut, updateErr := runCapped(ctx, aptCommand(ctx, "update")); updateErr != nil {
-		return aggregator.ActionResult{
-			ActionID:    action.ID,
-			Message:     fmt.Sprintf("apt-get update failed: %v\n%s", updateErr, updateOut),
-			CompletedAt: time.Now(),
-		}
-	}
-
-	var cmd *exec.Cmd
+	var output string
 	switch action.Type {
 	case aggregator.ActionPackages:
-		args := append([]string{"install", "-y", "--only-upgrade"}, action.Packages...)
-		cmd = aptCommand(ctx, args...)
+		output, err = applier.Packages(ctx, action.Packages)
 	case aggregator.ActionUpgrade:
-		cmd = aptCommand(ctx, "upgrade", "-y")
+		output, err = applier.Upgrade(ctx)
 	case aggregator.ActionFullUpgrade:
-		cmd = aptCommand(ctx, "dist-upgrade", "-y")
+		output, err = applier.FullUpgrade(ctx)
 	default:
 		return aggregator.ActionResult{
 			ActionID:    action.ID,
@@ -99,23 +89,15 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 		}
 	}
 
-	output, err := runCapped(ctx, cmd)
 	if err != nil {
-		// Still worth rechecking even on failure -- apt-get can partially
-		// apply changes before hitting an error on a later package.
+		// Still worth rechecking even on failure -- the package manager
+		// can partially apply changes before hitting an error.
 		triggerRecheck(ctx, agentStatusURL)
 		return aggregator.ActionResult{
 			ActionID:    action.ID,
 			Message:     fmt.Sprintf("%s failed: %v\n%s", action.Type, err, output),
 			CompletedAt: time.Now(),
 		}
-	}
-
-	// Best-effort cleanup that never gates the primary result -- an
-	// upgrade/dist-upgrade can leave packages autoremove would clear.
-	msg := fmt.Sprintf("%s succeeded\n%s", action.Type, output)
-	if autoOut, autoErr := runCapped(ctx, aptCommand(ctx, "autoremove", "-y")); autoErr != nil {
-		msg += fmt.Sprintf("\napt-get autoremove failed: %v\n%s", autoErr, autoOut)
 	}
 
 	// Best-effort, non-fatal: makes the agent's own /status (and its next
@@ -127,7 +109,7 @@ func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action)
 	return aggregator.ActionResult{
 		ActionID:    action.ID,
 		Success:     true,
-		Message:     msg,
+		Message:     fmt.Sprintf("%s succeeded\n%s", action.Type, output),
 		CompletedAt: time.Now(),
 	}
 }
@@ -148,12 +130,6 @@ func triggerRecheck(ctx context.Context, agentStatusURL string) {
 		return
 	}
 	_ = resp.Body.Close()
-}
-
-func aptCommand(ctx context.Context, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "apt-get", args...)
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-	return cmd
 }
 
 // runCapped runs cmd, capturing combined stdout+stderr into the returned

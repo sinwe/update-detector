@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -16,14 +15,10 @@ type DeployKind int
 
 const (
 	DeployNone DeployKind = iota
-	DeployNative
+	DeployNative          // systemd unit (Linux)
 	DeployDocker
+	DeployWindowsService // Windows Service (via sc.exe / service manager)
 )
-
-// systemdUnitDir is where install.sh always writes a native unit -- a
-// var, not a const, purely so tests can point it at a temp dir instead
-// of the real /etc/systemd/system.
-var systemdUnitDir = "/etc/systemd/system"
 
 // Detection is the result of checking whether name is running natively,
 // as a Docker container, both (an ambiguous state -- mirrors
@@ -67,11 +62,10 @@ func (d Detection) Ambiguous() bool {
 }
 
 // Detect checks whether name (e.g. "update-detector", "update-aggregator")
-// is running natively (a systemd unit file exists, regardless of
-// enabled/active state) and/or as a Docker container (running or
-// stopped) on this host. Both checks always run, even if the first
-// already answers the question, so an ambiguous state is never hidden
-// from the caller.
+// is running natively (a systemd unit file on Linux, a Windows Service on
+// Windows) and/or as a Docker container (running or stopped) on this host.
+// Both checks always run, even if the first already answers the question, so
+// an ambiguous state is never hidden from the caller.
 func Detect(ctx context.Context, name string) (Detection, error) {
 	native := nativeUnitPresent(name)
 	dockerID, dockerImage, err := dockerContainerFor(ctx, name)
@@ -83,23 +77,16 @@ func Detect(ctx context.Context, name string) (Detection, error) {
 
 // AggregatorColocated reports whether the aggregator itself is running
 // (natively or as a Docker container) on this same host -- used to tell
-// the aggregator, at connect time, whether it's worth offering an
-// "Update aggregator" button for this host at all (see
-// CompanionHub.SetAggregatorPresent). Best-effort: a detection error is
-// treated the same as "not colocated" rather than failing the connection
-// attempt over what's purely informational.
+// the companion whether to skip or include the aggregator component in
+// a self-update sweep. Best-effort: errors are silently treated as
+// "not present" rather than propagated, since this is informational only
+// and failing to self-update an absent aggregator is harmless.
 func AggregatorColocated(ctx context.Context) bool {
 	detection, err := Detect(ctx, "update-aggregator")
 	if err != nil {
 		return false
 	}
 	return detection.Kind() != DeployNone
-}
-
-// nativeUnitPresent mirrors install.sh's own native_unit_present.
-func nativeUnitPresent(name string) bool {
-	_, err := os.Stat(fmt.Sprintf("%s/%s.service", systemdUnitDir, name))
-	return err == nil
 }
 
 // dockerContainerFor mirrors install.sh's own docker_container_for:

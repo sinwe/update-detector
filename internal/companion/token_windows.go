@@ -1,9 +1,12 @@
+//go:build windows
+
 // Package companion implements the host-native process that receives
 // upgrade-trigger Actions from the aggregator over SSE and applies them via
-// apt-get, after independently validating each one against this host's own
+// the platform's package manager (apt-get on Linux, winget on Windows),
+// after independently validating each one against this host's own
 // last-known pending upgrades. It never runs inside Docker -- unlike
-// update-detector and update-aggregator, it needs real root on the host to
-// install packages.
+// update-detector and update-aggregator, it needs real administrator
+// privileges on the host to install packages.
 package companion
 
 import (
@@ -15,30 +18,31 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Microsoft/go-winio"
 	"update-detector/internal/aggregatorclient"
 )
 
-// FetchIdentity retrieves the local agent's identity over its Unix-socket
+// FetchIdentity retrieves the local agent's identity over its named-pipe
 // token endpoint (see internal/companiontoken). The companion never
 // persists this itself -- callers should hold it only in memory and
 // re-fetch on every restart.
-func FetchIdentity(ctx context.Context, socketPath string) (aggregatorclient.Identity, error) {
+func FetchIdentity(ctx context.Context, pipePath string) (aggregatorclient.Identity, error) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", socketPath)
+				return winio.DialPipeContext(ctx, pipePath)
 			},
 		},
 		Timeout: 5 * time.Second,
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/companion/token", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://pipe/companion/token", nil)
 	if err != nil {
 		return aggregatorclient.Identity{}, fmt.Errorf("companion: building token request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return aggregatorclient.Identity{}, fmt.Errorf("companion: fetching token from %s: %w", socketPath, err)
+		return aggregatorclient.Identity{}, fmt.Errorf("companion: fetching token from %s: %w", pipePath, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -54,11 +58,11 @@ func FetchIdentity(ctx context.Context, socketPath string) (aggregatorclient.Ide
 
 // FetchIdentityWithRetry retries FetchIdentity with exponential backoff
 // (capped at maxBackoff) until it succeeds or ctx is done -- the agent's
-// container may not be up yet when the companion's systemd unit starts.
-func FetchIdentityWithRetry(ctx context.Context, socketPath string, maxBackoff time.Duration) (aggregatorclient.Identity, error) {
+// container may not be up yet when the companion's Windows Service starts.
+func FetchIdentityWithRetry(ctx context.Context, pipePath string, maxBackoff time.Duration) (aggregatorclient.Identity, error) {
 	backoff := time.Second
 	for {
-		identity, err := FetchIdentity(ctx, socketPath)
+		identity, err := FetchIdentity(ctx, pipePath)
 		if err == nil {
 			return identity, nil
 		}

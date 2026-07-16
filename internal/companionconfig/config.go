@@ -9,8 +9,9 @@ import (
 
 type Config struct {
 	// SocketPath is where the companion fetches this host's agent identity
-	// (see internal/companiontoken). Must match COMPANION_SOCKET_PATH /
-	// STATE_DIR on the agent side.
+	// (see internal/companiontoken). On Linux this is a Unix socket path;
+	// on Windows it is a named pipe path (\\.\pipe\...). Must match
+	// COMPANION_SOCKET_PATH / STATE_DIR on the agent side.
 	SocketPath string
 
 	// AggregatorURL is required -- there is no local-only mode for the
@@ -25,7 +26,7 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		SocketPath:     getEnv("COMPANION_SOCKET_PATH", "/var/lib/update-detector/companion.sock"),
+		SocketPath:     getEnv("COMPANION_SOCKET_PATH", defaultSocketPath),
 		AggregatorURL:  strings.TrimSuffix(os.Getenv("AGGREGATOR_URL"), "/"),
 		AgentStatusURL: getEnv("AGENT_STATUS_URL", "http://localhost:8080/status"),
 	}
