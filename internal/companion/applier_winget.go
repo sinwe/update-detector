@@ -9,10 +9,12 @@ import (
 	"strings"
 )
 
-func init() {
-	registerApplier(&wingetApplier{})
-}
-
+// wingetApplier is not independently registered -- windowsApplier (see
+// applier_windows.go) is the sole registered Applier for this platform,
+// delegating to this type for names it doesn't recognize as a Windows
+// Update KB (see kbPattern), the same optional/supplementary role
+// winget already has on the detection side (see
+// internal/checker/windows/windows.go's own Check).
 type wingetApplier struct{}
 
 // Packages upgrades each named package individually via:

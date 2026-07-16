@@ -280,6 +280,23 @@ an experimental detection-only implementation (`internal/checker/windows`):
   `LocalSystem` without the account workaround winget needs below, since
   the Windows Update service is system-level, not tied to a specific
   user's own package registration.
+- **Apply, via the companion (⚠️ unverified, actually modifies the
+  system)**: `internal/companion/applier_windows.go` extends the same
+  Windows Update Agent API to *install* updates, not just detect them —
+  a checked "Apply selected" item whose name carries a `(KBnnnnnnn)`
+  marker (every Windows Update title does) is downloaded and installed
+  via `IUpdateDownloader.Download()`/`IUpdateInstaller.Install()`;
+  anything else falls back to winget (`winget upgrade --id <name>`), the
+  same optional/supplementary role it already has for detection. "Upgrade
+  all"/"Full upgrade all" install every currently pending Windows Update
+  (no dist-upgrade/upgrade distinction, same real semantic gap winget's
+  own `FullUpgrade` already has). **This is the least-tested code path
+  in this entire Windows implementation** — every other piece here is
+  read-only detection; this one actually installs updates and can
+  require a reboot to take effect. Tested only via fixture tests of the
+  KB-vs-winget name-splitting logic, never against a real Windows Update
+  install. If you try this, start with a single low-stakes update via
+  "Apply selected," not "Upgrade all," and watch the live output pane.
 - **Packages via winget (optional, supplementary)**: shells out to
   `winget upgrade`, parsing its table output the same best-effort way the
   Debian checker parses `apt-get -s dist-upgrade`'s text output. Covers
