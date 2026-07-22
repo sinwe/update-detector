@@ -145,7 +145,10 @@ func triggerRecheck(ctx context.Context, agentStatusURL string) {
 // identical either way. cmd.Stdout and cmd.Stderr are always set to the
 // exact same writer value (whichever one that is), preserving os/exec's
 // single-writer-at-a-time guarantee that lineTee itself relies on.
-func runCapped(ctx context.Context, cmd *exec.Cmd) (string, error) {
+// runCappedImpl is the real implementation used by default. Tests may
+// replace the package-level runCapped variable with a mock to capture and
+// validate executed commands without actually running them.
+func runCappedImpl(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	var buf bytes.Buffer
 	var w io.Writer = &buf
 	var tee *lineTee
@@ -165,6 +168,11 @@ func runCapped(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	}
 	return out, err
 }
+
+// runCapped is a package-level variable referencing the implementation used to
+// execute commands. Tests may override this variable to intercept command
+// execution for verification.
+var runCapped = runCappedImpl
 
 func missingFromPending(requested []string, status checker.Status) []string {
 	pending := map[string]bool{}
