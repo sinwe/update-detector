@@ -59,6 +59,11 @@ type agentView struct {
 	// SelfUpdate's DeployNone fallthrough).
 	AggregatorPresent bool
 
+	// AgentPresent is whether this row's own companion last reported
+	// detecting agent running (natively or as a Docker container)
+	// on this same host.
+	AgentPresent bool
+
 	// AgentUpdateAvailable/CompanionUpdateAvailable compare this row's own
 	// reported agent/companion version against adminPageData.LatestVersion
 	// -- false whenever LatestVersion is empty (no successful self-update
@@ -134,6 +139,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		CompanionVersion:         companionVersion,
 		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion) && !aggregatorBehind,
 		AggregatorPresent:        hub.AggregatorPresent(rec.ID),
+		AgentPresent:             hub.AgentPresent(rec.ID),
 	}
 	if actionID, ok := hub.Pending(rec.ID); ok {
 		v.PendingActionID = actionID

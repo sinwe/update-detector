@@ -126,7 +126,11 @@ type CompanionHub struct {
 	// last reported detecting the aggregator itself running there
 	// (natively or as a Docker container) -- see SetAggregatorPresent.
 	aggregatorPresent map[string]bool
-	pending           map[string]string // agentID -> in-flight action ID
+	// agentPresent is agentID -> whether that host's own companion
+	// last reported detecting agent running there (natively or as a
+	// Docker container) -- see SetAgentPresent.
+	agentPresent map[string]bool
+	pending      map[string]string // agentID -> in-flight action ID
 	results           map[string][]ActionResult
 }
 
@@ -135,6 +139,7 @@ func NewCompanionHub() *CompanionHub {
 		streams:           map[string]streamEntry{},
 		versions:          map[string]string{},
 		aggregatorPresent: map[string]bool{},
+		agentPresent:      map[string]bool{},
 		pending:           map[string]string{},
 		results:           map[string][]ActionResult{},
 	}
@@ -230,6 +235,24 @@ func (h *CompanionHub) AggregatorPresent(agentID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.aggregatorPresent[agentID]
+}
+
+// SetAgentPresent records whether agentID's companion detected
+// agent running (natively or as a Docker container) on the
+// same host, at connect time -- purely informational metadata
+// about the host's deployment shape.
+func (h *CompanionHub) SetAgentPresent(agentID string, present bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.agentPresent[agentID] = present
+}
+
+// AgentPresent returns last-reported agent-colocated flag
+// for agentID, or false if never reported.
+func (h *CompanionHub) AgentPresent(agentID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.agentPresent[agentID]
 }
 
 // Kind returns the kind of the currently connected stream for agentID, if

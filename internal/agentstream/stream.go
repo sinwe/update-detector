@@ -53,10 +53,10 @@ var errSuperseded = errors.New("superseded by a higher-priority connection")
 // up front (e.g. via companion.AggregatorColocated), not per reconnect
 // attempt, since it shells out to systemctl/docker and this host's
 // deploy shape essentially never changes within one process's lifetime.
-func Run(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent bool, onAction func(aggregator.Action)) {
+func Run(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent, agentPresent bool, onAction func(aggregator.Action)) {
 	backoff := time.Second
 	for ctx.Err() == nil {
-		err := runOnce(ctx, aggregatorURL, identity, kind, aggregatorPresent, onAction)
+		err := runOnce(ctx, aggregatorURL, identity, kind, aggregatorPresent, agentPresent, onAction)
 		if err != nil && ctx.Err() != nil {
 			return
 		}
@@ -101,7 +101,7 @@ func nextRetryDelay(err error, backoff time.Duration) (wait, nextBackoff time.Du
 	}
 }
 
-func runOnce(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent bool, onAction func(aggregator.Action)) error {
+func runOnce(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent, agentPresent bool, onAction func(aggregator.Action)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, aggregatorURL+"/companion/stream", nil)
 	if err != nil {
 		return fmt.Errorf("building stream request: %w", err)
@@ -114,6 +114,7 @@ func runOnce(ctx context.Context, aggregatorURL string, identity aggregatorclien
 	// (see CompanionHub.SetAggregatorPresent) -- sent unconditionally
 	// anyway since it's harmless for the agent's own connection too.
 	req.Header.Set("X-Aggregator-Present", strconv.FormatBool(aggregatorPresent))
+	req.Header.Set("X-Agent-Present", strconv.FormatBool(agentPresent))
 
 	// Deliberately no client Timeout: this response is a long-lived SSE
 	// stream by design. ctx governs cancellation instead.

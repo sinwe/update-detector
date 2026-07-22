@@ -153,7 +153,7 @@ func run(ctx context.Context) error {
 		// aggregatorPresent is meaningless for a plain agent connection
 		// (only a companion ever runs the aggregator-colocation check --
 		// see CompanionHub.SetAggregatorPresent), so always false here.
-		go agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindAgent, false, onAction)
+		go agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindAgent, false, false, onAction)
 	}
 
 	if aggClient != nil {

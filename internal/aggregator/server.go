@@ -229,6 +229,8 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	if kind == KindCompanion {
 		present, _ := strconv.ParseBool(r.Header.Get("X-Aggregator-Present"))
 		s.hub.SetAggregatorPresent(rec.ID, present)
+		agentPresent, _ := strconv.ParseBool(r.Header.Get("X-Agent-Present"))
+		s.hub.SetAgentPresent(rec.ID, agentPresent)
 	}
 
 	flusher, ok := w.(http.Flusher)

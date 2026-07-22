@@ -1,0 +1,311 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="BackgroundAgentGlobalSettings">
+    <option name="selectedModelId" value="auto" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="d2878b47-ad46-4bb2-80ad-0aedfcfd17eb" name="Changes" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_/Volumes/MacData/winarto/Projects/update-detector/.claude/worktrees/docker-image-update" value="3GdKm2y7pqbxS1OBj3ijs5haYNs" />
+    </persistenceIdMap>
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="159" />
+  </component>
+  <component name="GOROOT" url="file://$USER_HOME$/.go/sdk/go1.22.12" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;sinwe&quot;
+  }
+}</component>
+  <component name="GitToolBoxStore">
+    <option name="recentBranches">
+      <RecentBranches>
+        <option name="branchesForRepo">
+          <list>
+            <RecentBranchesForRepo>
+              <option name="branches">
+                <list>
+                  <RecentBranch>
+                    <option name="branchName" value="docker-image-update-clean" />
+                    <option name="lastUsedInstant" value="1784690411" />
+                  </RecentBranch>
+                  <RecentBranch>
+                    <option name="branchName" value="docker-image-update" />
+                    <option name="lastUsedInstant" value="1784690410" />
+                  </RecentBranch>
+                </list>
+              </option>
+              <option name="repositoryRootUrl" value="file://$PROJECT_DIR$" />
+            </RecentBranchesForRepo>
+          </list>
+        </option>
+      </RecentBranches>
+    </option>
+  </component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/sinwe/update-detector.git&quot;,
+    &quot;accountId&quot;: &quot;03a30edc-9dd7-447f-a5f7-e622614e208d&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.7869747555605815" />
+      <entry key="MS500" value="4.621773176518142" />
+      <entry key="S2" value="7.193451028640926" />
+      <entry key="S5" value="11.204311312297289" />
+      <entry key="S10" value="14.667569132481074" />
+      <entry key="S30" value="18.420627364108412" />
+      <entry key="S60" value="19.63766587917148" />
+      <entry key="M2" value="20.299346944087056" />
+      <entry key="M5" value="20.714878550611097" />
+      <entry key="M10" value="20.85661330203995" />
+      <entry key="M15" value="20.904224114398033" />
+      <entry key="M30" value="20.952019377065255" />
+      <entry key="H1" value="20.975986461407956" />
+      <entry key="H2" value="20.98798741676718" />
+      <entry key="H4" value="20.993992254003732" />
+      <entry key="D1" value="20.99899850692735" />
+      <entry key="W1" value="20.99985692461133" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="1.582370932517406" />
+      <entry key="MS500" value="4.53304180484798" />
+      <entry key="S2" value="7.1569046879914815" />
+      <entry key="S5" value="11.174145370101558" />
+      <entry key="S10" value="14.644380916179998" />
+      <entry key="S30" value="18.40954577557411" />
+      <entry key="S60" value="19.631535600732448" />
+      <entry key="M2" value="20.296116972881137" />
+      <entry key="M5" value="20.713544506029585" />
+      <entry key="M10" value="20.855939050317037" />
+      <entry key="M15" value="20.9037729899548" />
+      <entry key="M30" value="20.951792998963235" />
+      <entry key="H1" value="20.975873067588928" />
+      <entry key="H2" value="20.98793066856555" />
+      <entry key="H4" value="20.99396386706735" />
+      <entry key="D1" value="20.9989937739875" />
+      <entry key="W1" value="20.999856248433368" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3GdKm2y7pqbxS1OBj3ijs5haYNs" />
+  <component name="ProjectSessionTemplates">
+    <option name="panelTemplate">
+      <template>
+        <option name="modeId" value="Agent" />
+        <option name="model">
+          <model>
+            <option name="modelType" value="builtin_id" />
+            <option name="modelValue" value="auto" />
+          </model>
+        </option>
+        <option name="targetType" value="BACKGROUND" />
+        <option name="worktreeMode" value="WORKSPACE" />
+      </template>
+    </option>
+  </component>
+  <component name="ProjectViewState">
+    <option name="autoscrollFromSource" value="true" />
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "CidrDebugProfileConversion": "true",
+    "Go Test.TestApplyTapsOutputToAttachedSink in update-detector/internal/companion.executor": "Run",
+    "Go Test.TestApplyWithoutSinkUnchangedFromBefore in update-detector/internal/companion.executor": "Run",
+    "Go Test.TestFetchRegistryDigest_ManifestListSelectsLocalArch in update-detector/internal/checker/docker.executor": "Run",
+    "Go Test.go test update-detector/internal/companion.executor": "Run",
+    "Go Test.go test update-detector/internal/httpserver.executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.GoOptimizationToolWindowEnableInLayout.v333333": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.readMode.enableVisualFormatting": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "SearchEverywhere.PersistedScope.ClassSearchEverywhereContributor": "Project Files",
+    "cidr.known.project.marker": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "configurable..is.expanded": "true",
+    "copilot.chat.legacySessionMetadata.migrated": "true",
+    "git-widget-placeholder": "docker-image-update",
+    "kotlin-language-version-configured": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "project.structure.last.edited": "Project",
+    "project.structure.proportion": "0.15",
+    "project.structure.side.proportion": "0.2",
+    "run.configurations.included.in.services": "true",
+    "settings.editor.selected.configurable": "preferences.pluginManager"
+  }
+}]]></component>
+  <component name="RunManager" selected="Go Test.TestApplyWithoutSinkUnchangedFromBefore in update-detector/internal/companion">
+    <configuration name="go build update-aggregator/" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/cmd/update-aggregator" />
+      <directory value="$PROJECT_DIR$" />
+      <auto_managed_config_id value="$PROJECT_DIR$/cmd/update-aggregator" />
+      <method v="2" />
+    </configuration>
+    <configuration name="go build update-detector-companion/" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/cmd/update-detector-companion" />
+      <directory value="$PROJECT_DIR$" />
+      <auto_managed_config_id value="$PROJECT_DIR$/cmd/update-detector-companion" />
+      <method v="2" />
+    </configuration>
+    <configuration name="go build update-detector/" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/cmd/update-detector" />
+      <directory value="$PROJECT_DIR$" />
+      <auto_managed_config_id value="$PROJECT_DIR$/cmd/update-detector" />
+      <method v="2" />
+    </configuration>
+    <configuration name="TestApplyTapsOutputToAttachedSink in update-detector/internal/companion" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$/internal/companion" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/internal/companion" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestApplyTapsOutputToAttachedSink\E$" />
+      <method v="2" />
+    </configuration>
+    <configuration name="TestApplyWithoutSinkUnchangedFromBefore in update-detector/internal/companion" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$/internal/companion" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/internal/companion" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestApplyWithoutSinkUnchangedFromBefore\E$" />
+      <method v="2" />
+    </configuration>
+    <configuration name="TestFetchRegistryDigest_ManifestListSelectsLocalArch in update-detector/internal/checker/docker" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$/internal/checker/docker" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/internal/checker/docker" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestFetchRegistryDigest_ManifestListSelectsLocalArch\E$" />
+      <method v="2" />
+    </configuration>
+    <configuration name="go test update-detector/internal/companion" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$/internal/companion" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/internal/companion" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <method v="2" />
+    </configuration>
+    <configuration name="go test update-detector/internal/httpserver" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="docker-image-update" />
+      <working_directory value="$PROJECT_DIR$/internal/httpserver" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="update-detector/internal/httpserver" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Go Test.TestApplyWithoutSinkUnchangedFromBefore in update-detector/internal/companion" />
+        <item itemvalue="Go Test.TestApplyTapsOutputToAttachedSink in update-detector/internal/companion" />
+        <item itemvalue="Go Test.go test update-detector/internal/companion" />
+        <item itemvalue="Go Test.go test update-detector/internal/httpserver" />
+        <item itemvalue="Go Test.TestFetchRegistryDigest_ManifestListSelectsLocalArch in update-detector/internal/checker/docker" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-63390994e64e-intellij.indexing.shared.core-IU-262.8665.258" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="d2878b47-ad46-4bb2-80ad-0aedfcfd17eb" name="Changes" comment="" />
+      <created>1784296161774</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1784296161774</updated>
+      <workItem from="1784296291960" duration="8330000" />
+      <workItem from="1784372112475" duration="19319000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="XSLT-Support.FileAssociations.UIState">
+    <expand />
+    <select />
+  </component>
+</project>

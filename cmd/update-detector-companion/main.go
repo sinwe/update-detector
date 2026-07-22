@@ -64,6 +64,8 @@ func run(ctx context.Context) error {
 	// tends to do) picks that up.
 	aggregatorPresent := companion.AggregatorColocated(ctx)
 	log.Printf("companion: aggregator colocated on this host: %v", aggregatorPresent)
+	agentPresent := companion.AgentColocated(ctx)
+	log.Printf("companion: agent colocated on this host: %v", agentPresent)
 
 	report := func(result aggregator.ActionResult) {
 		// A fresh, short-lived context -- not the (possibly already
@@ -76,7 +78,7 @@ func run(ctx context.Context) error {
 		}
 	}
 
-	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, aggregatorPresent, func(action aggregator.Action) {
+	agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindCompanion, aggregatorPresent, agentPresent, func(action aggregator.Action) {
 		log.Printf("companion: received action %s (%s)", action.ID, action.Type)
 
 		// Live output for whatever command Apply is about to run, best-effort

@@ -41,7 +41,7 @@ func TestRunInvokesOnAction(t *testing.T) {
 	defer cancel()
 
 	received := make(chan aggregator.Action, 1)
-	go Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "agent-1", Token: "tok"}, aggregator.KindCompanion, false, func(a aggregator.Action) {
+	go Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "agent-1", Token: "tok"}, aggregator.KindCompanion, false, false, func(a aggregator.Action) {
 		received <- a
 	})
 
@@ -64,7 +64,7 @@ func TestRunStopsOnContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, func(aggregator.Action) {})
+		Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(aggregator.Action) {})
 		close(done)
 	}()
 
@@ -90,7 +90,7 @@ func TestRunOnceSendsRequestedKind(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, func(aggregator.Action) {}); err != nil {
+	if err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(aggregator.Action) {}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotKind != "agent" {
@@ -107,7 +107,7 @@ func TestRunOnce409YieldsErrSuperseded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, func(aggregator.Action) {})
+	err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(aggregator.Action) {})
 	if !errors.Is(err, errSuperseded) {
 		t.Fatalf("got err %v, want errSuperseded for a 409 response", err)
 	}
@@ -127,7 +127,7 @@ func TestRunOnceSupersededFrameYieldsErrSuperseded(t *testing.T) {
 	defer cancel()
 
 	var calledOnAction bool
-	err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, func(aggregator.Action) {
+	err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(aggregator.Action) {
 		calledOnAction = true
 	})
 	if !errors.Is(err, errSuperseded) {
@@ -160,7 +160,7 @@ func TestRunOnceEventLineResetsOnBlankLine(t *testing.T) {
 	defer cancel()
 
 	var got aggregator.Action
-	err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, func(a aggregator.Action) {
+	err := runOnce(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(a aggregator.Action) {
 		got = a
 	})
 	if err != nil {
