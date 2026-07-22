@@ -119,14 +119,14 @@ func run(ctx context.Context) error {
 				ActionID: action.ID, Success: true,
 				Message: "update installing, restarting shortly", CompletedAt: time.Now(),
 			})
-			if result := companion.Apply(actionCtx, cfg.AgentStatusURL, action); !result.Success && ctx.Err() == nil {
+			if result := companion.Apply(actionCtx, cfg.AgentStatusURL, cfg.AggregatorURL, identity, action); !result.Success && ctx.Err() == nil {
 				log.Printf("companion: self-update of companion failed before restarting: %s", result.Message)
 				report(result)
 			}
 			return
 		}
 
-		result := companion.Apply(actionCtx, cfg.AgentStatusURL, action)
+		result := companion.Apply(actionCtx, cfg.AgentStatusURL, cfg.AggregatorURL, identity, action)
 		if result.Success {
 			log.Printf("companion: action %s succeeded", action.ID)
 		} else {

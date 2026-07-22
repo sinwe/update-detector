@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"update-detector/internal/aggregator"
+	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
 )
 
@@ -25,7 +26,7 @@ const outputTruncateLimit = 4000
 // this host already, independently, considers pending, never arbitrary
 // command execution. Never reboots, even if the upgrade sets
 // reboot_required.
-func Apply(ctx context.Context, agentStatusURL string, action aggregator.Action) aggregator.ActionResult {
+func Apply(ctx context.Context, agentStatusURL, aggregatorURL string, identity aggregatorclient.Identity, action aggregator.Action) aggregator.ActionResult {
 	// Recheck never touches the package manager or the pending-packages
 	// list at all -- it just asks the agent to refresh itself sooner, so
 	// it skips straight to that rather than going through local validation.
@@ -201,6 +202,33 @@ func fetchLocalStatus(ctx context.Context, agentStatusURL string) (checker.Statu
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return checker.Status{}, fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	var status checker.Status
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return checker.Status{}, err
+	}
+	return status, nil
+}
+
+// fetchAggregatorStatus fetches the companion's own agent's merged status
+// from the aggregator. This lets any action handler access the full
+// merged view (packages from agent + any supplementary data from companion)
+// rather than just the agent's local /status.
+func fetchAggregatorStatus(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity) (checker.Status, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, aggregatorURL+"/companion/status", nil)
+	if err != nil {
+		return checker.Status{}, err
+	}
+	req.Header.Set("X-Agent-ID", identity.AgentID)
+	req.Header.Set("Authorization", "Bearer "+identity.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return checker.Status{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return checker.Status{}, fmt.Errorf("unexpected status %s: %s", resp.Status, body)
 	}
 	var status checker.Status
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {

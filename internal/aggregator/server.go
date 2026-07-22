@@ -69,6 +69,7 @@ func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHu
 	s.mux.HandleFunc("/companion/stream", s.handleCompanionStream)
 	s.mux.HandleFunc("/companion/result", s.handleCompanionResult)
 	s.mux.HandleFunc("/companion/output", s.handleCompanionOutput)
+	s.mux.HandleFunc("/companion/status", s.handleCompanionStatus)
 	s.mux.HandleFunc("/admin", s.handleAdmin)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
@@ -404,6 +405,26 @@ func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
+// handleCompanionStatus returns the companion's own agent's merged status
+// from the aggregator. This lets the companion access the full merged view
+// (packages from agent + any supplementary data) rather than just the
+// agent's local /status.
+func (s *Server) handleCompanionStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rec, ok := s.authenticateCompanion(w, r)
+	if !ok {
+		return
+	}
+	if rec.LastReport == nil {
+		http.Error(w, "no report yet", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec.LastReport)
 }
 
 // handleAdminOutputStream is the SSE endpoint a browser holds open to

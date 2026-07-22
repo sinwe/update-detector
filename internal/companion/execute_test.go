@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"update-detector/internal/aggregator"
+	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
 )
 
@@ -74,7 +75,7 @@ func TestApplyPackagesSucceedsWhenPending(t *testing.T) {
 	})
 
 	action := aggregator.Action{ID: "act1", Type: aggregator.ActionPackages, Packages: []string{"curl"}}
-	result := Apply(context.Background(), srv.URL, action)
+	result := Apply(context.Background(), srv.URL, "", aggregatorclient.Identity{}, action)
 
 	if !result.Success {
 		t.Fatalf("expected success, got %#v", result)
@@ -101,7 +102,7 @@ func TestApplyPackagesRejectsWhenNotPending(t *testing.T) {
 	})
 
 	action := aggregator.Action{ID: "act1", Type: aggregator.ActionPackages, Packages: []string{"curl"}}
-	result := Apply(context.Background(), srv.URL, action)
+	result := Apply(context.Background(), srv.URL, "", aggregatorclient.Identity{}, action)
 
 	if result.Success {
 		t.Fatalf("expected rejection, got success: %#v", result)
@@ -118,7 +119,7 @@ func TestApplyUpgradeDoesNotRequirePendingList(t *testing.T) {
 	writeFakeAptGet(t, `exit 0`)
 	srv := statusServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	result := Apply(context.Background(), srv.URL, "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	if !result.Success {
 		t.Fatalf("expected success, got %#v", result)
 	}
@@ -130,7 +131,7 @@ func TestApplyReportsAptGetFailure(t *testing.T) {
 	writeFakeAptGet(t, `if [ "$1" = "update" ]; then exit 0; fi; echo "boom" >&2; exit 1`)
 	srv := statusServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL, aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
+	result := Apply(context.Background(), srv.URL, "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
 	if result.Success {
 		t.Fatal("expected failure")
 	}
@@ -151,7 +152,7 @@ exit 0
 `, callLog))
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	result := Apply(context.Background(), srv.URL+"/status", "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	if result.Success {
 		t.Fatal("expected failure when apt-get update fails")
 	}
@@ -170,7 +171,7 @@ func TestApplySuccessTriggersRecheck(t *testing.T) {
 	writeFakeAptGet(t, `exit 0`)
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	result := Apply(context.Background(), srv.URL+"/status", "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	if !result.Success {
 		t.Fatalf("expected success, got %#v", result)
 	}
@@ -187,7 +188,7 @@ func TestApplyFailureStillTriggersRecheck(t *testing.T) {
 	writeFakeAptGet(t, `if [ "$1" = "update" ]; then exit 0; fi; echo boom >&2; exit 1`)
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
+	result := Apply(context.Background(), srv.URL+"/status", "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionFullUpgrade})
 	if result.Success {
 		t.Fatal("expected failure")
 	}
@@ -202,7 +203,7 @@ func TestApplyRecheckSkipsAptAndTriggersRecheck(t *testing.T) {
 	// result.Success would be false, catching the bug implicitly.
 	srv, recheckCalled := recheckTrackingServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{ID: "act1", Type: aggregator.ActionRecheck})
+	result := Apply(context.Background(), srv.URL+"/status", "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionRecheck})
 	if !result.Success {
 		t.Fatalf("expected success, got %#v", result)
 	}
@@ -219,7 +220,7 @@ func TestApplySelfUpdateSkipsAptAndLocalValidation(t *testing.T) {
 	writeFakeInstallSh(t, filepath.Join(t.TempDir(), "calls.log"), 0)
 	srv, _ := recheckTrackingServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{
+	result := Apply(context.Background(), srv.URL+"/status", "", aggregatorclient.Identity{}, aggregator.Action{
 		ID: "act1", Type: aggregator.ActionSelfUpdate, Component: "companion", TargetVersion: "v0.11.0",
 	})
 	if !result.Success {
@@ -232,7 +233,7 @@ func TestApplyRejectionDoesNotTriggerRecheck(t *testing.T) {
 		Packages: checker.PackageInfo{Upgrades: []checker.PackageUpgrade{{Name: "vim"}}},
 	})
 
-	result := Apply(context.Background(), srv.URL+"/status", aggregator.Action{
+	result := Apply(context.Background(), srv.URL+"/status", "", aggregatorclient.Identity{}, aggregator.Action{
 		ID: "act1", Type: aggregator.ActionPackages, Packages: []string{"curl"},
 	})
 	if result.Success {
@@ -251,7 +252,7 @@ func TestApplyFailsWhenLocalStatusUnreachable(t *testing.T) {
 	addr := l.Addr().String()
 	l.Close()
 
-	result := Apply(context.Background(), "http://"+addr, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	result := Apply(context.Background(), "http://"+addr, "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	if result.Success {
 		t.Fatal("expected failure when the local agent is unreachable")
 	}
