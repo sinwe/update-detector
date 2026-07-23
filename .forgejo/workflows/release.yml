@@ -46,31 +46,22 @@ jobs:
           username: winarto
           password: ${{ secrets.REGISTRY_TOKEN }}
 
-      - name: Build, push, and combine multi-arch images
-        env:
-          DOCKER_CLI_EXPERIMENTAL: enabled
+      - name: Build and push multi-arch images
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
-
+          
           build_and_push() {
             local image="$1" dockerfile="$2"
-            for arch in amd64 arm64; do
-              docker buildx build \
-                --platform "linux/$arch" \
-                --file "$dockerfile" \
-                --build-arg "VERSION=$TAG" \
-                --tag "forgejo.winar.to/winarto/$image:$TAG-$arch" \
-                --push .
-            done
-            for tag in "$TAG" latest; do
-              docker manifest create "forgejo.winar.to/winarto/$image:$tag" \
-                "forgejo.winar.to/winarto/$image:$TAG-amd64" \
-                "forgejo.winar.to/winarto/$image:$TAG-arm64"
-              docker manifest push "forgejo.winar.to/winarto/$image:$tag"
-            done
+            docker buildx build \
+              --platform "linux/amd64,linux/arm64" \
+              --file "$dockerfile" \
+              --build-arg "VERSION=$TAG" \
+              --tag "forgejo.winar.to/winarto/$image:$TAG" \
+              --tag "forgejo.winar.to/winarto/$image:latest" \
+              --push .
           }
-
+          
           build_and_push update-detector ./Dockerfile
           build_and_push update-aggregator ./Dockerfile.aggregator
 
