@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -101,27 +102,43 @@ func run(ctx context.Context) error {
 			cancelStream()
 		}()
 
-		// Updating the companion itself restarts this very process, via
-		// install.sh's own systemctl restart -- report *before* running
-		// it, since code after that restart call may never run at all.
+		// Companion self-update has fundamentally different behavior
+		// on Linux vs Windows:
 		//
-		// If Apply below returns having failed, that's only a *real*
-		// failure to correct the record with if ctx is still alive --
-		// once systemd's restart reaches this process (SIGTERM, via the
-		// same ctx everything here is built on), the in-flight
-		// install.sh child gets killed too, and Apply surfaces that as
-		// an ordinary-looking failure ("signal: terminated") even though
-		// the swap+restart it triggered actually succeeded. Confirmed
-		// live: without this check, that spurious failure overwrote the
-		// correct optimistic success report every time.
+		// Linux: install.sh restarts this process (systemctl restart).
+		// The companion process dies, but install.sh survives (Linux
+		// inode semantics let the running process keep its open fd even
+		// after the binary is renamed). So we must report optimistically
+		// *before* calling Apply, since code after it may never run.
+		//
+		// Windows: the companion stages the new binary to .exe.new
+		// and returns a Staged result (no restart). The agent (a
+		// separate Windows Service on the same host) will later be
+		// told to stop the companion, swap the binary, and restart it.
+		// The result is reported normally.
+		//
+		// If Apply returns having failed on Linux, that's only a
+		// *real* failure to correct the record with if ctx is still
+		// alive -- once systemd's restart reaches this process
+		// (SIGTERM, via the same ctx), the in-flight install.sh child
+		// gets killed too, and Apply surfaces that as an ordinary-
+		// looking failure ("signal: terminated") even though the
+		// swap+restart actually succeeded. Confirmed live: without
+		// this check, that spurious failure overwrote the correct
+		// optimistic success report every time.
 		if action.Type == aggregator.ActionSelfUpdate && action.Component == "companion" {
-			report(aggregator.ActionResult{
-				ActionID: action.ID, Success: true,
-				Message: "update installing, restarting shortly", CompletedAt: time.Now(),
-			})
-			if result := companion.Apply(actionCtx, cfg.AgentStatusURL, cfg.AggregatorURL, identity, action); !result.Success && ctx.Err() == nil {
-				log.Printf("companion: self-update of companion failed before restarting: %s", result.Message)
+			if runtime.GOOS == "windows" {
+				result := companion.Apply(actionCtx, cfg.AgentStatusURL, cfg.AggregatorURL, identity, action)
 				report(result)
+			} else {
+				report(aggregator.ActionResult{
+					ActionID: action.ID, Success: true,
+					Message: "update installing, restarting shortly", CompletedAt: time.Now(),
+				})
+				if result := companion.Apply(actionCtx, cfg.AgentStatusURL, cfg.AggregatorURL, identity, action); !result.Success && ctx.Err() == nil {
+					log.Printf("companion: self-update of companion failed before restarting: %s", result.Message)
+					report(result)
+				}
 			}
 			return
 		}

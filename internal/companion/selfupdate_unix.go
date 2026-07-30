@@ -9,7 +9,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"update-detector/internal/aggregator"
 )
+
+// companionSelfUpdate on Linux runs install.sh directly -- the companion
+// process survives the rename (inode semantics), so install.sh can stop
+// the companion, replace the binary, and restart it without killing
+// install.sh itself.
+func companionSelfUpdate(ctx context.Context, action aggregator.Action) aggregator.ActionResult {
+	fail := func(format string, args ...any) aggregator.ActionResult {
+		return aggregator.ActionResult{ActionID: action.ID, Message: fmt.Sprintf(format, args...), CompletedAt: time.Now()}
+	}
+	succeed := func(msg string) aggregator.ActionResult {
+		return aggregator.ActionResult{ActionID: action.ID, Success: true, Message: msg, CompletedAt: time.Now()}
+	}
+	if err := installNative(ctx, "companion", action.TargetVersion); err != nil {
+		return fail("%v", err)
+	}
+	return succeed("update installed, restarting")
+}
 
 // installShPath is where a cached copy of install.sh lives, refreshed
 // whenever the companion itself updates (see cmd/update-detector-companion's

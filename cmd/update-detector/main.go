@@ -17,6 +17,7 @@ import (
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
+	"update-detector/internal/companion"
 	"update-detector/internal/companiontoken"
 	"update-detector/internal/config"
 	"update-detector/internal/hostflavor"
@@ -139,16 +140,24 @@ func run(ctx context.Context) error {
 		// ActionRecheck. Handled in-process, unlike the companion's own
 		// loopback HTTP call, since the agent already is that process.
 		onAction := func(action aggregator.Action) {
-			if action.Type != aggregator.ActionRecheck {
+			switch action.Type {
+			case aggregator.ActionRecheck:
+				srv.TriggerRecheck()
+				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if err := aggClient.ReportActionResult(resultCtx, action.ID, true, "recheck triggered"); err != nil {
+					log.Printf("aggregator: reporting recheck result for %s: %v", action.ID, err)
+				}
+				cancel()
+			case aggregator.ActionCompleteCompanionSwap:
+				result := companion.CompleteCompanionSwap(ctx, action)
+				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if err := aggClient.ReportActionResult(resultCtx, action.ID, result.Success, result.Message); err != nil {
+					log.Printf("aggregator: reporting companion swap result for %s: %v", action.ID, err)
+				}
+				cancel()
+			default:
 				log.Printf("aggregator: ignoring unexpected action type %q on agent stream", action.Type)
-				return
 			}
-			srv.TriggerRecheck()
-			resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			if err := aggClient.ReportActionResult(resultCtx, action.ID, true, "recheck triggered"); err != nil {
-				log.Printf("aggregator: reporting recheck result for %s: %v", action.ID, err)
-			}
-			cancel()
 		}
 		// aggregatorPresent is meaningless for a plain agent connection
 		// (only a companion ever runs the aggregator-colocation check --

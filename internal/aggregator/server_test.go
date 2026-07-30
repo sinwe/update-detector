@@ -398,23 +398,18 @@ func TestHandleCompanionStreamRecordsAggregatorPresentHeader(t *testing.T) {
 		t.Fatal("expected AggregatorPresent to be true after a companion connects with X-Aggregator-Present: true")
 	}
 
-	// Deliberately not closing resp's body here -- doing so would tear
-	// down the companion's own stream (its handler's r.Context() ends,
-	// running the deferred Disconnect), which would make the next
-	// connect attempt below succeed instead of correctly getting
-	// rejected as this test expects.
-
-	// An agent-kind connect attempt is rejected outright while a companion
-	// already holds the slot (see CompanionHub.Connect's own arbitration)
-	// -- confirm that rejected attempt didn't touch AggregatorPresent
-	// either, even though it carried the header too.
+	// An agent-kind connect is now accepted alongside the companion
+	// (routed to agentStreams) so the agent can receive agent-only
+	// actions like ActionCompleteCompanionSwap. Confirm that this
+	// agent connection did not touch AggregatorPresent, even though
+	// it carried the header too -- only companion connections set it.
 	resp2 := connect("agent", "true")
 	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusConflict {
-		t.Fatalf("got status %d, want 409 for an agent-kind connect while a companion is already connected", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200 for an agent-kind connect alongside a companion", resp2.StatusCode)
 	}
 	if !s.hub.AggregatorPresent("a1") {
-		t.Fatal("expected AggregatorPresent to remain true -- a rejected connect attempt must not clear it")
+		t.Fatal("expected AggregatorPresent to remain true -- an agent-kind connect must not clear it")
 	}
 }
 
@@ -640,27 +635,30 @@ func TestHandleCompanionStreamMissingKindHeaderDefaultsToCompanion(t *testing.T)
 	}
 }
 
-// TestHandleCompanionStreamAgentRejectedWhileCompanionConnected covers the
+// TestHandleCompanionStreamAgentAcceptedAlongsideCompanion covers the
 // "existing=companion, new=agent" arbitration rule end-to-end over real
-// HTTP: the agent must get an immediate 409, never an SSE upgrade, and the
-// companion's own connection must be completely unaffected.
-func TestHandleCompanionStreamAgentRejectedWhileCompanionConnected(t *testing.T) {
+// HTTP: the agent is now accepted alongside the companion (routed to
+// agentStreams) so it can receive agent-only actions like
+// ActionCompleteCompanionSwap. The companion's own connection must be
+// completely unaffected.
+func TestHandleCompanionStreamAgentAcceptedAlongsideCompanion(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
 
 	httpSrv := httptest.NewServer(s.Handler())
 	defer httpSrv.Close()
 
-	req, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	// Connect the companion first.
+	compReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("X-Agent-ID", "a1")
-	req.Header.Set("Authorization", "Bearer tok")
-	req.Header.Set("X-Client-Kind", "companion")
+	compReq.Header.Set("X-Agent-ID", "a1")
+	compReq.Header.Set("Authorization", "Bearer tok")
+	compReq.Header.Set("X-Client-Kind", "companion")
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	companionResp, err := client.Do(req)
+	companionResp, err := client.Do(compReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,15 +672,38 @@ func TestHandleCompanionStreamAgentRejectedWhileCompanionConnected(t *testing.T)
 		t.Fatal("companion never showed as connected")
 	}
 
-	rec := doJSON(t, s, http.MethodGet, "/companion/stream", nil, map[string]string{
-		"X-Agent-ID": "a1", "Authorization": "Bearer tok", "X-Client-Kind": "agent",
-	})
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("got status %d, want 409 for an agent connecting while a companion already holds the slot", rec.Code)
+	// Connect the agent alongside the companion -- must be accepted
+	// (200), not rejected (409). Use a real HTTP client with a timeout
+	// since this is an SSE endpoint that stays open.
+	agentReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentReq.Header.Set("X-Agent-ID", "a1")
+	agentReq.Header.Set("Authorization", "Bearer tok")
+	agentReq.Header.Set("X-Client-Kind", "agent")
+
+	agentResp, err := client.Do(agentReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentResp.Body.Close()
+
+	if agentResp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200 for an agent connecting alongside a companion", agentResp.StatusCode)
 	}
 
+	// The companion's main stream must be untouched.
 	if kind, ok := s.hub.Kind("a1"); !ok || kind != KindCompanion {
 		t.Fatalf("got kind=%q ok=%v, want the existing companion connection untouched", kind, ok)
+	}
+
+	// The agent stream should be in agentStreams.
+	s.hub.mu.Lock()
+	_, agentStreamExists := s.hub.agentStreams["a1"]
+	s.hub.mu.Unlock()
+	if !agentStreamExists {
+		t.Fatal("expected agent stream to be in agentStreams")
 	}
 }
 
@@ -1495,5 +1516,101 @@ func TestHandleAdminApplyRejectsWhenActionInFlight(t *testing.T) {
 	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/apply", applyRequest{Type: ActionUpgrade}, headers)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("got status %d, body %s for the third apply after the first resolved", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleCompanionResultStagedAutoPushesSwapAction verifies that when a
+// companion reports a Staged result (e.g. companion self-update on Windows
+// where the companion downloaded .exe.new but can't swap its own running
+// binary), the aggregator auto-pushes ActionCompleteCompanionSwap to the
+// agent stream on the same host.
+func TestHandleCompanionResultStagedAutoPushesSwapAction(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	// Connect an agent stream (not a companion) so we can see actions
+	// pushed to the agent.
+	agentRes := s.hub.Connect("a1", KindAgent, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", agentRes.Ch)
+
+	// Report a staged result from the companion.
+	rec := doJSON(t, s, http.MethodPost, "/companion/result", companionResultRequest{
+		ActionID: "act1",
+		Success:  true,
+		Message:  "companion update staged to .exe.new",
+		Staged:   true,
+	}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// The aggregator should have auto-pushed an ActionCompleteCompanionSwap
+	// to the agent stream.
+	select {
+	case action := <-agentRes.Ch:
+		if action.Type != ActionCompleteCompanionSwap {
+			t.Fatalf("expected ActionCompleteCompanionSwap, got %q", action.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ActionCompleteCompanionSwap to be pushed to agent")
+	}
+}
+
+// TestHandleCompanionResultNonStagedDoesNotPushSwapAction verifies that
+// a normal (non-staged) result does NOT trigger an auto-push of
+// ActionCompleteCompanionSwap.
+func TestHandleCompanionResultNonStagedDoesNotPushSwapAction(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	agentRes := s.hub.Connect("a1", KindAgent, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", agentRes.Ch)
+
+	// Report a normal (non-staged) result.
+	rec := doJSON(t, s, http.MethodPost, "/companion/result", companionResultRequest{
+		ActionID: "act1",
+		Success:  true,
+		Message:  "upgraded curl",
+	}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// No ActionCompleteCompanionSwap should be pushed.
+	select {
+	case action := <-agentRes.Ch:
+		t.Fatalf("unexpected action pushed to agent: %q", action.Type)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: no action pushed.
+	}
+}
+
+// TestHandleCompanionResultStagedFailedDoesNotPushSwapAction verifies that
+// a staged but failed result does NOT trigger an auto-push — only
+// successful staged results should.
+func TestHandleCompanionResultStagedFailedDoesNotPushSwapAction(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	agentRes := s.hub.Connect("a1", KindAgent, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", agentRes.Ch)
+
+	// Report a staged but failed result.
+	rec := doJSON(t, s, http.MethodPost, "/companion/result", companionResultRequest{
+		ActionID: "act1",
+		Success:  false,
+		Message:  "download failed",
+		Staged:   true,
+	}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// No ActionCompleteCompanionSwap should be pushed for a failed result.
+	select {
+	case action := <-agentRes.Ch:
+		t.Fatalf("unexpected action pushed to agent: %q", action.Type)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: no action pushed.
 	}
 }

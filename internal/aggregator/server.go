@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -288,6 +289,7 @@ type companionResultRequest struct {
 	ActionID string `json:"action_id"`
 	Success  bool   `json:"success"`
 	Message  string `json:"message,omitempty"`
+	Staged   bool   `json:"staged,omitempty"`
 }
 
 // handleCompanionResult records the outcome of a previously pushed Action
@@ -318,8 +320,26 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		Success:     req.Success,
 		Message:     req.Message,
 		CompletedAt: time.Now(),
+		Staged:      req.Staged,
 	})
 	s.outputHub.End(rec.ID, req.ActionID, EventDone)
+
+	// When the companion reports a staged self-update (downloaded .exe.new
+	// but can't swap because stopping itself would kill the process),
+	// auto-push ActionCompleteCompanionSwap to the agent on the same host
+	// so it can stop the companion, swap the binary, and restart it.
+	if req.Staged && req.Success {
+		swapAction := Action{
+			ID:        newActionID(),
+			Type:      ActionCompleteCompanionSwap,
+			CreatedAt: time.Now(),
+		}
+		if err := s.hub.Push(rec.ID, swapAction); err != nil {
+			log.Printf("handleCompanionResult: failed to push ActionCompleteCompanionSwap for %s: %v", rec.ID, err)
+		} else {
+			s.outputHub.Begin(rec.ID, swapAction.ID)
+		}
+	}
 
 	if s.notifyMgr != nil {
 		outcome := "failed"
