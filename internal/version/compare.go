@@ -6,48 +6,77 @@ import (
 	"strings"
 )
 
+// stage represents the pre-release stage within a version.
+// Higher values are closer to release. A "release" (no suffix) is
+// stageRelease, the highest.
+type stage int
+
+const (
+	stageInvalid stage = iota
+	stageAlpha        // -alphaN
+	stageBeta         // -betaN
+	stageRC           // -rcN
+	stageRelease      // no suffix
+)
+
 // parsed is this repo's own tag shape: vMAJOR.MINOR.PATCH, optionally
-// suffixed with -rcN. Not general semver -- there's no need to handle
-// anything outside what .forgejo/workflows/release.yml actually tags.
+// suffixed with -alphaN, -betaN, or -rcN. Not general semver -- there's
+// no need to handle anything outside what .forgejo/workflows/release.yml
+// actually tags.
 type parsed struct {
 	major, minor, patch int
-	rc                  int // 0 means a real release (no -rc suffix)
+	stage               stage
+	pre                 int // pre-release number within the stage (1, 2, ...); 0 for release
 }
 
 func parseTag(v string) (parsed, error) {
 	orig := v
 	v = strings.TrimPrefix(v, "v")
 
-	rc := 0
-	if idx := strings.Index(v, "-rc"); idx != -1 {
-		n, err := strconv.Atoi(v[idx+3:])
-		if err != nil || n <= 0 {
-			return parsed{}, fmt.Errorf("version: invalid -rc suffix in %q", orig)
+	s := stageRelease
+	pre := 0
+
+	for _, suffix := range []struct {
+		prefix string
+		stg    stage
+	}{
+		{"-alpha", stageAlpha},
+		{"-beta", stageBeta},
+		{"-rc", stageRC},
+	} {
+		if idx := strings.Index(v, suffix.prefix); idx != -1 {
+			n, err := strconv.Atoi(v[idx+len(suffix.prefix):])
+			if err != nil || n <= 0 {
+				return parsed{}, fmt.Errorf("version: invalid %s suffix in %q", suffix.prefix, orig)
+			}
+			s = suffix.stg
+			pre = n
+			v = v[:idx]
+			break
 		}
-		rc = n
-		v = v[:idx]
 	}
 
 	parts := strings.Split(v, ".")
 	if len(parts) != 3 {
-		return parsed{}, fmt.Errorf("version: %q is not of the form vMAJOR.MINOR.PATCH[-rcN]", orig)
+		return parsed{}, fmt.Errorf("version: %q is not of the form vMAJOR.MINOR.PATCH[-alphaN|-betaN|-rcN]", orig)
 	}
 	nums := make([]int, 3)
 	for i, p := range parts {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 0 {
-			return parsed{}, fmt.Errorf("version: %q is not of the form vMAJOR.MINOR.PATCH[-rcN]", orig)
+			return parsed{}, fmt.Errorf("version: %q is not of the form vMAJOR.MINOR.PATCH[-alphaN|-betaN|-rcN]", orig)
 		}
 		nums[i] = n
 	}
-	return parsed{major: nums[0], minor: nums[1], patch: nums[2], rc: rc}, nil
+	return parsed{major: nums[0], minor: nums[1], patch: nums[2], stage: s, pre: pre}, nil
 }
 
 // Compare returns -1, 0, or 1 as a is less than, equal to, or greater
-// than b, using this repo's own vMAJOR.MINOR.PATCH[-rcN] tag convention
-// -- numeric, never lexicographic (v0.9.0 must sort below v0.10.0). A
-// -rcN suffix always orders before the same MAJOR.MINOR.PATCH's real
-// release; between two -rcN of the same version, the higher N is newer.
+// than b, using this repo's own vMAJOR.MINOR.PATCH[-alphaN|-betaN|-rcN]
+// tag convention -- numeric, never lexicographic (v0.9.0 must sort below
+// v0.10.0). Pre-release stages order alpha < beta < rc < release; within
+// the same stage, higher N is newer. A pre-release always orders before
+// the same MAJOR.MINOR.PATCH's real release.
 // Returns an error, rather than a guess, for anything that doesn't parse
 // as this convention (e.g. the "dev" placeholder default) -- callers
 // making a trust decision (see the aggregator's self-update
@@ -72,27 +101,41 @@ func Compare(a, b string) (int, error) {
 	if c := cmpInt(pa.patch, pb.patch); c != 0 {
 		return c, nil
 	}
-	return cmpInt(rcOrder(pa.rc), rcOrder(pb.rc)), nil
+	if c := cmpInt(int(pa.stage), int(pb.stage)); c != 0 {
+		return c, nil
+	}
+	return cmpInt(pa.pre, pb.pre), nil
 }
 
-// IsPreRelease reports whether v has a -rcN suffix. Returns false (not
-// an error) for anything unparseable -- this is only ever used as a
-// filter over tags already known to come from this repo's own releases
-// list, where a parse failure would be a bug in the caller, not
-// something to propagate as "not a pre-release."
+// IsPreRelease reports whether v has a -alphaN, -betaN, or -rcN suffix.
+// Returns false (not an error) for anything unparseable -- this is only
+// ever used as a filter over tags already known to come from this repo's
+// own releases list, where a parse failure would be a bug in the caller,
+// not something to propagate as "not a pre-release."
 func IsPreRelease(v string) bool {
 	p, err := parseTag(v)
-	return err == nil && p.rc > 0
+	return err == nil && p.stage != stageRelease
 }
 
-// rcOrder maps a -rcN suffix (0 meaning "no suffix, a real release") to
-// a value where higher always means newer -- a real release must sort
-// after every -rcN of the same MAJOR.MINOR.PATCH.
-func rcOrder(rc int) int {
-	if rc == 0 {
-		return 1 << 30
+// Stage returns the pre-release stage of v as a string ("alpha", "beta",
+// "rc", or "release"), or an error if v doesn't parse.
+func Stage(v string) (string, error) {
+	p, err := parseTag(v)
+	if err != nil {
+		return "", err
 	}
-	return rc
+	switch p.stage {
+	case stageAlpha:
+		return "alpha", nil
+	case stageBeta:
+		return "beta", nil
+	case stageRC:
+		return "rc", nil
+	case stageRelease:
+		return "release", nil
+	default:
+		return "", fmt.Errorf("version: unknown stage in %q", v)
+	}
 }
 
 func cmpInt(a, b int) int {
