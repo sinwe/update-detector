@@ -29,11 +29,21 @@ const (
 	// packages/upgrade/full-upgrade genuinely run different apt-get
 	// subcommands.
 	ActionSelfUpdate ActionType = "self-update"
+	// ActionCompleteCompanionSwap is pushed to the agent when the companion
+	// has staged a new version of itself (downloaded to .exe.new) and
+	// needs the agent to stop the companion service, swap the binary,
+	// and restart it. Windows-only: on Linux, the companion can run
+	// install.sh directly since stopping the companion doesn't kill the
+	// install.sh child (inode semantics let the running process survive
+	// the rename). On Windows, stopping the companion service kills the
+	// companion process, which kills install.bat as a child process,
+	// so the swap never completes.
+	ActionCompleteCompanionSwap ActionType = "complete-companion-swap"
 )
 
 func (t ActionType) valid() bool {
 	switch t {
-	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck, ActionSelfUpdate:
+	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck, ActionSelfUpdate, ActionCompleteCompanionSwap:
 		return true
 	default:
 		return false
@@ -45,7 +55,12 @@ func (t ActionType) valid() bool {
 // else pushed at an agent-kind stream (see ClientKind) can never be
 // carried out and must be rejected before it's even sent.
 func (t ActionType) requiresCompanion() bool {
-	return t != ActionRecheck
+	switch t {
+	case ActionRecheck, ActionCompleteCompanionSwap:
+		return false
+	default:
+		return true
+	}
 }
 
 // ClientKind distinguishes which local process holds the stream for a
@@ -93,6 +108,13 @@ type ActionResult struct {
 	Success     bool      `json:"success"`
 	Message     string    `json:"message,omitempty"`
 	CompletedAt time.Time `json:"completed_at"`
+	// Staged is true when the companion has downloaded a new version of
+	// itself to .exe.new but cannot complete the swap because stopping
+	// the companion service would kill this process (Windows). The
+	// aggregator should auto-push an ActionCompleteCompanionSwap to
+	// the agent on the same host so it can stop the companion, swap the
+	// binary, and restart it.
+	Staged bool `json:"staged,omitempty"`
 }
 
 const actionLogLimit = 20
@@ -118,23 +140,40 @@ type streamEntry struct {
 // is persisted to disk (unlike Registry) -- a client just reconnects and
 // its "connected" state rebuilds itself, and losing the result log across
 // a restart is an acceptable trade-off for not needing a database.
+//
+// Additionally, the hub tracks agent-kind streams separately in
+// agentStreams, so that even when a companion preempts the main stream
+// slot, the agent stream remains available for actions that must be
+// handled by the agent (e.g. ActionCompleteCompanionSwap on Windows,
+// where the companion cannot swap its own running .exe).
 type CompanionHub struct {
 	mu       sync.Mutex
 	streams  map[string]streamEntry
+	// agentStreams holds agent-kind streams that persist even when a
+	// companion preempts the main streams slot. This allows the
+	// aggregator to push agent-only actions (like
+	// ActionCompleteCompanionSwap) directly to the agent.
+	agentStreams map[string]streamEntry
 	versions map[string]string // agentID -> last-reported companion version
 	// aggregatorPresent is agentID -> whether that host's own companion
 	// last reported detecting the aggregator itself running there
 	// (natively or as a Docker container) -- see SetAggregatorPresent.
 	aggregatorPresent map[string]bool
-	pending           map[string]string // agentID -> in-flight action ID
+	// agentPresent is agentID -> whether that host's own companion
+	// last reported detecting agent running there (natively or as a
+	// Docker container) -- see SetAgentPresent.
+	agentPresent map[string]bool
+	pending      map[string]string // agentID -> in-flight action ID
 	results           map[string][]ActionResult
 }
 
 func NewCompanionHub() *CompanionHub {
 	return &CompanionHub{
 		streams:           map[string]streamEntry{},
+		agentStreams:      map[string]streamEntry{},
 		versions:          map[string]string{},
 		aggregatorPresent: map[string]bool{},
+		agentPresent:      map[string]bool{},
 		pending:           map[string]string{},
 		results:           map[string][]ActionResult{},
 	}
@@ -176,7 +215,20 @@ func (h *CompanionHub) Connect(agentID string, kind ClientKind, companionVersion
 
 	existing, hasExisting := h.streams[agentID]
 	if hasExisting && existing.kind == KindCompanion && kind == KindAgent {
-		return ConnectResult{Accepted: false}
+		// Companion holds the main slot; agent stream goes to agentStreams
+		// instead so agent-only actions (like ActionCompleteCompanionSwap)
+		// can still be pushed to it.
+		agentEntry := streamEntry{
+			ch:         make(chan Action, 4),
+			kind:       KindAgent,
+			superseded: make(chan struct{}),
+		}
+		// Close any previous agent stream for this ID
+		if prev, ok := h.agentStreams[agentID]; ok {
+			close(prev.superseded)
+		}
+		h.agentStreams[agentID] = agentEntry
+		return ConnectResult{Accepted: true, Ch: agentEntry.ch, Superseded: agentEntry.superseded}
 	}
 
 	entry := streamEntry{
@@ -188,6 +240,13 @@ func (h *CompanionHub) Connect(agentID string, kind ClientKind, companionVersion
 		close(existing.superseded)
 	}
 	h.streams[agentID] = entry
+	if kind == KindAgent {
+		// Also track in agentStreams for agent-only action routing
+		if prev, ok := h.agentStreams[agentID]; ok {
+			close(prev.superseded)
+		}
+		h.agentStreams[agentID] = entry
+	}
 	if kind == KindCompanion {
 		h.versions[agentID] = companionVersion
 	}
@@ -232,6 +291,24 @@ func (h *CompanionHub) AggregatorPresent(agentID string) bool {
 	return h.aggregatorPresent[agentID]
 }
 
+// SetAgentPresent records whether agentID's companion detected
+// agent running (natively or as a Docker container) on the
+// same host, at connect time -- purely informational metadata
+// about the host's deployment shape.
+func (h *CompanionHub) SetAgentPresent(agentID string, present bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.agentPresent[agentID] = present
+}
+
+// AgentPresent returns last-reported agent-colocated flag
+// for agentID, or false if never reported.
+func (h *CompanionHub) AgentPresent(agentID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.agentPresent[agentID]
+}
+
 // Kind returns the kind of the currently connected stream for agentID, if
 // any.
 func (h *CompanionHub) Kind(agentID string) (ClientKind, bool) {
@@ -256,6 +333,9 @@ func (h *CompanionHub) Disconnect(agentID string, ch chan Action) {
 		delete(h.streams, agentID)
 		delete(h.pending, agentID)
 	}
+	if cur, ok := h.agentStreams[agentID]; ok && cur.ch == ch {
+		delete(h.agentStreams, agentID)
+	}
 }
 
 func (h *CompanionHub) Connected(agentID string) bool {
@@ -276,6 +356,23 @@ func (h *CompanionHub) Connected(agentID string) bool {
 func (h *CompanionHub) Push(agentID string, action Action) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Agent-only actions (like ActionCompleteCompanionSwap) are routed
+	// to the agent stream, even if a companion holds the main slot.
+	// If no agent stream exists, fall through to the main stream
+	// (companion can handle it too, e.g. ActionRecheck on a host
+	// where only the companion is connected).
+	if !action.Type.requiresCompanion() {
+		if agentEntry, ok := h.agentStreams[agentID]; ok {
+			select {
+			case agentEntry.ch <- action:
+				return nil
+			default:
+				return errors.New("agent stream busy, action dropped")
+			}
+		}
+		// No dedicated agent stream -- fall through to the main stream.
+	}
 
 	entry, ok := h.streams[agentID]
 	if !ok {

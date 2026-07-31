@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,6 +70,7 @@ func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHu
 	s.mux.HandleFunc("/companion/stream", s.handleCompanionStream)
 	s.mux.HandleFunc("/companion/result", s.handleCompanionResult)
 	s.mux.HandleFunc("/companion/output", s.handleCompanionOutput)
+	s.mux.HandleFunc("/companion/status", s.handleCompanionStatus)
 	s.mux.HandleFunc("/admin", s.handleAdmin)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
@@ -229,6 +231,8 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	if kind == KindCompanion {
 		present, _ := strconv.ParseBool(r.Header.Get("X-Aggregator-Present"))
 		s.hub.SetAggregatorPresent(rec.ID, present)
+		agentPresent, _ := strconv.ParseBool(r.Header.Get("X-Agent-Present"))
+		s.hub.SetAgentPresent(rec.ID, agentPresent)
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -285,6 +289,7 @@ type companionResultRequest struct {
 	ActionID string `json:"action_id"`
 	Success  bool   `json:"success"`
 	Message  string `json:"message,omitempty"`
+	Staged   bool   `json:"staged,omitempty"`
 }
 
 // handleCompanionResult records the outcome of a previously pushed Action
@@ -315,8 +320,26 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		Success:     req.Success,
 		Message:     req.Message,
 		CompletedAt: time.Now(),
+		Staged:      req.Staged,
 	})
 	s.outputHub.End(rec.ID, req.ActionID, EventDone)
+
+	// When the companion reports a staged self-update (downloaded .exe.new
+	// but can't swap because stopping itself would kill the process),
+	// auto-push ActionCompleteCompanionSwap to the agent on the same host
+	// so it can stop the companion, swap the binary, and restart it.
+	if req.Staged && req.Success {
+		swapAction := Action{
+			ID:        newActionID(),
+			Type:      ActionCompleteCompanionSwap,
+			CreatedAt: time.Now(),
+		}
+		if err := s.hub.Push(rec.ID, swapAction); err != nil {
+			log.Printf("handleCompanionResult: failed to push ActionCompleteCompanionSwap for %s: %v", rec.ID, err)
+		} else {
+			s.outputHub.Begin(rec.ID, swapAction.ID)
+		}
+	}
 
 	if s.notifyMgr != nil {
 		outcome := "failed"
@@ -402,6 +425,26 @@ func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
+// handleCompanionStatus returns the companion's own agent's merged status
+// from the aggregator. This lets the companion access the full merged view
+// (packages from agent + any supplementary data) rather than just the
+// agent's local /status.
+func (s *Server) handleCompanionStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rec, ok := s.authenticateCompanion(w, r)
+	if !ok {
+		return
+	}
+	if rec.LastReport == nil {
+		http.Error(w, "no report yet", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec.LastReport)
 }
 
 // handleAdminOutputStream is the SSE endpoint a browser holds open to

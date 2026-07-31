@@ -212,7 +212,7 @@ func TestCompanionHubAgentConnectsFirstThenCompanionPreempts(t *testing.T) {
 	}
 }
 
-func TestCompanionHubCompanionConnectedRejectsAgent(t *testing.T) {
+func TestCompanionHubCompanionConnectedAcceptsAgentInAgentStreams(t *testing.T) {
 	h := NewCompanionHub()
 
 	companionRes := h.Connect("a1", KindCompanion, "v1.0.0")
@@ -221,18 +221,26 @@ func TestCompanionHubCompanionConnectedRejectsAgent(t *testing.T) {
 	}
 
 	agentRes := h.Connect("a1", KindAgent, "")
-	if agentRes.Accepted {
-		t.Fatal("expected agent Connect to be rejected while a companion already holds the slot")
+	if !agentRes.Accepted {
+		t.Fatal("expected agent Connect to be accepted alongside a companion (routed to agentStreams)")
 	}
 
 	// The existing companion stream must be completely untouched.
 	select {
 	case <-companionRes.Superseded:
-		t.Fatal("companion's stream must not be superseded by a rejected agent connect attempt")
+		t.Fatal("companion's stream must not be superseded by an agent connect")
 	default:
 	}
 	if kind, ok := h.Kind("a1"); !ok || kind != KindCompanion {
 		t.Fatalf("got kind=%q ok=%v, want KindCompanion unchanged", kind, ok)
+	}
+
+	// The agent stream should be in agentStreams.
+	h.mu.Lock()
+	_, ok := h.agentStreams["a1"]
+	h.mu.Unlock()
+	if !ok {
+		t.Fatal("expected agent stream to be in agentStreams")
 	}
 }
 

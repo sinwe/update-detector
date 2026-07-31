@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"update-detector/internal/aggregator"
+	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
 )
 
@@ -23,7 +24,7 @@ exit 0
 
 	sink := NewOutputSink(10)
 	ctx := WithOutputSink(context.Background(), sink)
-	result := Apply(ctx, srv.URL, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	result := Apply(ctx, srv.URL, "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	sink.Close()
 	if !result.Success {
 		t.Fatalf("expected success, got %#v", result)
@@ -46,7 +47,7 @@ func TestApplyWithoutSinkUnchangedFromBefore(t *testing.T) {
 	writeFakeAptGet(t, `if [ "$1" = "update" ]; then exit 0; fi; echo "hello"; exit 0`)
 	srv := statusServer(t, checker.Status{})
 
-	result := Apply(context.Background(), srv.URL, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+	result := Apply(context.Background(), srv.URL, "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	if !result.Success || !strings.Contains(result.Message, "hello") {
 		t.Fatalf("got %#v, want success mentioning the command's own output", result)
 	}
@@ -71,7 +72,7 @@ exit 0
 
 	resultCh := make(chan aggregator.ActionResult, 1)
 	go func() {
-		resultCh <- Apply(ctx, srv.URL, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
+		resultCh <- Apply(ctx, srv.URL, "", aggregatorclient.Identity{}, aggregator.Action{ID: "act1", Type: aggregator.ActionUpgrade})
 	}()
 
 	select {

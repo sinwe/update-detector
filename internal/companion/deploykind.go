@@ -155,3 +155,10 @@ func dockerContainerFor(ctx context.Context, name string) (id, image string) {
 	}
 	return "", ""
 }
+
+// AgentColocated reports whether agent is running (natively or as a
+// Docker container) on this same host -- used to tell aggregator about
+// the host's deployment shape.
+func AgentColocated(ctx context.Context) bool {
+	return Detect(ctx, "update-detector").Kind() != DeployNone
+}

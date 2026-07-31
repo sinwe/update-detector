@@ -80,3 +80,16 @@ func sinkFromContext(ctx context.Context) *OutputSink {
 	sink, _ := ctx.Value(sinkKey{}).(*OutputSink)
 	return sink
 }
+
+// emitFromContext returns a function that pushes a formatted progress line
+// to the OutputSink in ctx (if any), or a no-op if none. Convenience for
+// action handlers that want to emit progress without nil-checking.
+func emitFromContext(ctx context.Context) func(string, ...any) {
+	sink := sinkFromContext(ctx)
+	if sink == nil {
+		return func(string, ...any) {}
+	}
+	return func(format string, args ...any) {
+		sink.push(fmt.Sprintf(format, args...))
+	}
+}

@@ -4,13 +4,31 @@ package companion
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	"update-detector/internal/aggregator"
 
 	"golang.org/x/sys/windows/registry"
 )
+
+// companionExePath is where the companion binary lives on Windows.
+// A var, not a const, so tests can override it.
+var companionExePath = `C:\Program Files\update-detector\update-detector-companion.exe`
+
+// companionSelfUpdate on Windows stages the new binary to .exe.new
+// and returns a Staged result, because the companion cannot stop itself
+// (stopping the service kills this process, which kills install.bat).
+// The aggregator will auto-push ActionCompleteCompanionSwap to the agent.
+func companionSelfUpdate(ctx context.Context, action aggregator.Action) aggregator.ActionResult {
+	return stageCompanionUpdate(ctx, action)
+}
 
 // installBatPath is where a cached copy of install.bat lives on Windows,
 // refreshed whenever the companion itself updates. Shelling out to it
@@ -26,11 +44,123 @@ import (
 // operator present to grant an exception if that bites.
 var installBatPath = `C:\Program Files\update-detector\install.bat`
 
+// stageCompanionUpdate downloads a new companion binary to companion.exe.new
+// and returns a staged ActionResult. The agent (a separate Windows Service)
+// will later be asked to stop the companion, swap the binary, and restart it.
+//
+// On Windows, a running .exe is locked -- it cannot be overwritten or renamed
+// while the process is alive. The companion cannot stop itself (stopping the
+// companion service kills this process, which kills any child process like
+// install.bat). So instead, the companion downloads the new binary to a .new
+// file, reports a "staged" result, and the aggregator auto-pushes
+// ActionCompleteCompanionSwap to the agent on the same host.
+func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggregator.ActionResult {
+	fail := func(format string, args ...any) aggregator.ActionResult {
+		return aggregator.ActionResult{ActionID: action.ID, Message: fmt.Sprintf(format, args...), CompletedAt: time.Now()}
+	}
+
+	// Resolve the download URL from the Forgejo API.
+	assetName := "update-detector-companion-windows-amd64.exe"
+	downloadURL, err := resolveAssetURL(action.TargetVersion, assetName)
+	if err != nil {
+		return fail("resolving download URL: %v", err)
+	}
+
+	// Download to a temp file first (atomic: temp → .new), so a partial
+	// download never leaves a stale .new file that the agent might try
+	// to swap in.
+	newPath := companionExePath + ".new"
+	tmpPath := newPath + ".tmp"
+
+	if err := downloadFile(ctx, downloadURL, tmpPath); err != nil {
+		return fail("downloading companion update: %v", err)
+	}
+
+	// Atomic rename: tmp → .new
+	if err := os.Rename(tmpPath, newPath); err != nil {
+		os.Remove(tmpPath) // best-effort cleanup
+		return fail("renaming downloaded file: %v", err)
+	}
+
+	return aggregator.ActionResult{
+		ActionID:    action.ID,
+		Success:     true,
+		Message:     fmt.Sprintf("companion update staged to %s, awaiting agent swap", newPath),
+		CompletedAt: time.Now(),
+		Staged:      true,
+	}
+}
+
+// resolveAssetURL queries the Forgejo API for the download URL of the
+// given asset name in the specified release.
+func resolveAssetURL(targetVersion, assetName string) (string, error) {
+	apiBase := os.Getenv("FORGEJO_API_BASE")
+	if apiBase == "" {
+		apiBase = "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+	}
+
+	releaseURL := apiBase + "/releases/tags/" + targetVersion
+	resp, err := http.Get(releaseURL)
+	if err != nil {
+		return "", fmt.Errorf("fetching release info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("release API returned %s", resp.Status)
+	}
+
+	var release struct {
+		Assets []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", fmt.Errorf("decoding release JSON: %w", err)
+	}
+
+	for _, a := range release.Assets {
+		if a.Name == assetName {
+			return a.BrowserDownloadURL, nil
+		}
+	}
+	return "", fmt.Errorf("asset %q not found in release %s", assetName, targetVersion)
+}
+
+// downloadFile downloads url to dstPath. Writes to a temp file first,
+// then renames -- but the caller is responsible for the atomic rename
+// to the final path.
+func downloadFile(ctx context.Context, url, dstPath string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download returned %s", resp.Status)
+	}
+
+	f, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		os.Remove(dstPath)
+		return err
+	}
+	return nil
+}
+
 // installNative re-invokes install.bat non-interactively to update
-// component to targetVersion. The Windows Service restart for each
-// component is bundled into install.bat's own install step -- the
-// companion's own restart happens inside the script, so code after this
-// call may never run for Component == "companion".
+// component to targetVersion. Used for agent and aggregator updates
+// (the companion uses stageCompanionUpdate instead, since it can't
+// stop itself).
 //
 // The exec.Cmd below is deliberately built from context.Background(),
 // never ctx: for a self-update of "companion" specifically, install.bat's

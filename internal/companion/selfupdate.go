@@ -55,10 +55,7 @@ func SelfUpdate(ctx context.Context, action aggregator.Action) aggregator.Action
 	// install_companion's own uninstall code already documents this same
 	// fact, so there's no Docker case to even check here.
 	if action.Component == "companion" {
-		if err := installNative(ctx, "companion", action.TargetVersion); err != nil {
-			return fail("%v", err)
-		}
-		return succeed("update installed, restarting")
+		return companionSelfUpdate(ctx, action)
 	}
 
 	unitName, err := componentUnitName(action.Component)
