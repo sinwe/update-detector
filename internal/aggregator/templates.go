@@ -517,7 +517,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
             {{else}}
               <span class="badge badge-muted">No report</span>
             {{end}}
-            {{if .AnyStreamConnected}}<span class="badge badge-info">Agent</span>{{end}}
+            {{if .AnyStreamConnected}}<span class="badge badge-info">Agent</span>{{else}}<span class="badge badge-muted">not connected</span>{{end}}
             {{if .CompanionConnected}}<span class="badge badge-ok">Companion</span>{{end}}
           </div>
         </div>
@@ -557,12 +557,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{end}}
 
         <div class="host-actions">
-          <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Recheck</button>
+          <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
           {{if .CompanionConnected}}
-            {{if .Upgrades}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
-            <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade</button>
-            {{end}}
+            <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
             {{if .AgentUpdateAvailable}}
             <button class="btn-sm" onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update agent to {{$.LatestVersion}}">Update agent</button>
             {{end}}
@@ -572,6 +570,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
             {{if .CompanionUpdateAvailable}}
             <button class="btn-sm" onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update companion to {{$.LatestVersion}}">Update companion</button>
             {{end}}
+          {{else}}
+            <span class="badge badge-muted">install companion to enable apply</span>
           {{end}}
           <span style="flex:1"></span>
           <form method="post" action="/admin/agents/{{.ID}}/reject"><button class="btn-danger btn-sm">Revoke</button></form>
@@ -593,7 +593,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
 
         {{if .RecentResults}}
         <details>
-          <summary>Recent actions ({{len .RecentResults}})</summary>
+          <summary>recent actions ({{len .RecentResults}})</summary>
           <ul class="results-list">
             {{range .RecentResults}}
             <li>
