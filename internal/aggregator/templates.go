@@ -187,175 +187,451 @@ func renderAdminPage(w io.Writer, data adminPageData) error {
 }
 
 const adminTemplateSrc = `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>update-detector aggregator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Update Detector</title>
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
-    th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; }
+    :root {
+      --bg: #f8f9fa; --surface: #fff; --surface-hover: #f1f3f5;
+      --border: #e9ecef; --border-strong: #dee2e6;
+      --text: #212529; --text-secondary: #868e96; --text-muted: #adb5bd;
+      --green: #40c057; --green-bg: #d3f9d8; --green-text: #2b8a3e;
+      --red: #fa5252; --red-bg: #ffe3e3; --red-text: #c92a2a;
+      --orange: #fd7e14; --orange-bg: #fff4e6; --orange-text: #d9480f;
+      --blue: #4c6ef5; --blue-bg: #dbe4ff; --blue-text: #364fc7;
+      --radius: 10px; --radius-sm: 6px;
+      --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+      --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+      --transition: .15s ease;
+    }
+    @media(prefers-color-scheme:dark) {
+      :root {
+        --bg: #1a1b1e; --surface: #25262b; --surface-hover: #2c2e33;
+        --border: #373840; --border-strong: #47484e;
+        --text: #e4e5e7; --text-secondary: #909296; --text-muted: #5c5e66;
+        --green: #51cf66; --green-bg: #1b3a21; --green-text: #69db7c;
+        --red: #ff6b6b; --red-bg: #3a1b1b; --red-text: #ffa8a8;
+        --orange: #ffa94d; --orange-bg: #3a2b1b; --orange-text: #ffd8a8;
+        --blue: #748ffc; --blue-bg: #1b243a; --blue-text: #91a7ff;
+        --shadow: 0 1px 3px rgba(0,0,0,.3); --shadow-md: 0 4px 12px rgba(0,0,0,.4);
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+      min-height: 100dvh; -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
+    button {
+      cursor: pointer; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      padding: .35rem .75rem; font-size: .813rem; font-weight: 500;
+      background: var(--surface); color: var(--text); transition: var(--transition);
+      display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap;
+    }
+    button:hover { background: var(--surface-hover); }
+    button:active { transform: scale(.97); }
     form { display: inline; }
-    button { cursor: pointer; }
-    .ok { color: #1a7f37; }
-    .bad { color: #b91c1c; }
-    .muted { color: #666; }
-    .apply-section { margin-top: 0.5rem; }
-    .apply-section button { margin-right: 0.3rem; margin-top: 0.3rem; }
-    .banner { background: #fff8e1; border: 1px solid #e0c66b; border-radius: 4px; padding: 0.6rem 1rem; margin-bottom: 1rem; }
-    .restart-banner { display: none; position: sticky; top: 0; background: #1a7f37; color: #fff; padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
-    .output-pane { display: none; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.8rem; padding: 0.5rem; margin-top: 0.4rem; max-height: 240px; overflow-y: auto; white-space: pre-wrap; border-radius: 4px; }
+    .btn-primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+    .btn-primary:hover { filter: brightness(1.1); background: var(--blue); }
+    .btn-danger { background: var(--red); color: #fff; border-color: var(--red); }
+    .btn-danger:hover { filter: brightness(1.1); background: var(--red); }
+    .btn-success { background: var(--green); color: #fff; border-color: var(--green); }
+    .btn-success:hover { filter: brightness(1.1); background: var(--green); }
+    .btn-warn { background: var(--orange); color: #fff; border-color: var(--orange); }
+    .btn-warn:hover { filter: brightness(1.1); background: var(--orange); }
+    .btn-sm { padding: .2rem .5rem; font-size: .75rem; }
+
+    /* Layout */
+    .container { max-width: 960px; margin: 0 auto; padding: 1rem; }
+    @media(min-width:640px) { .container { padding: 1.5rem; } }
+
+    /* Header */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem;
+    }
+    .header h1 { font-size: 1.25rem; font-weight: 700; display: flex; align-items: center; gap: .5rem; }
+    .header h1 svg { width: 24px; height: 24px; }
+    .version-badge {
+      font-size: .7rem; font-weight: 600; background: var(--blue-bg); color: var(--blue-text);
+      padding: .15rem .45rem; border-radius: 99px; letter-spacing: .02em;
+    }
+
+    /* Banners */
+    .banner {
+      padding: .75rem 1rem; border-radius: var(--radius); margin-bottom: .75rem;
+      font-size: .875rem; display: flex; align-items: flex-start; gap: .5rem;
+    }
+    .banner-warn { background: var(--orange-bg); color: var(--orange-text); }
+    .banner-info { background: var(--blue-bg); color: var(--blue-text); }
+    .restart-banner {
+      display: none; position: sticky; top: 0; z-index: 100;
+      background: var(--green); color: #fff; padding: .75rem 1rem;
+      border-radius: var(--radius); margin-bottom: .75rem;
+      font-size: .875rem; font-weight: 500;
+    }
+
+    /* Channel toggle */
+    .channel-row {
+      display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+      font-size: .813rem; color: var(--text-secondary); margin-bottom: .75rem;
+    }
+    .channel-row label {
+      display: inline-flex; align-items: center; gap: .25rem; cursor: pointer;
+      padding: .2rem .5rem; border-radius: var(--radius-sm); transition: var(--transition);
+    }
+    .channel-row label:hover { background: var(--surface-hover); }
+    .channel-row input[type=radio] { accent-color: var(--blue); }
+
+    /* Links row */
+    .links-row {
+      display: flex; gap: .75rem; flex-wrap: wrap; font-size: .813rem;
+      margin-bottom: 1rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border);
+    }
+
+    /* Section */
+    .section { margin-bottom: 1.5rem; }
+    .section-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: .5rem;
+    }
+    .section-title {
+      font-size: .938rem; font-weight: 600; color: var(--text-secondary);
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .section-count {
+      font-size: .75rem; font-weight: 700; background: var(--border);
+      color: var(--text-secondary); padding: .1rem .5rem; border-radius: 99px;
+    }
+
+    /* Empty state */
+    .empty {
+      text-align: center; padding: 1.5rem; color: var(--text-muted);
+      font-size: .875rem;
+    }
+
+    /* Host cards */
+    .host-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1rem; margin-bottom: .5rem;
+      box-shadow: var(--shadow); transition: var(--transition);
+    }
+    .host-card:hover { box-shadow: var(--shadow-md); }
+    .host-top {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem;
+    }
+    .host-name {
+      font-weight: 600; font-size: 1rem; display: flex; align-items: center; gap: .4rem;
+    }
+    .host-id { font-size: .7rem; color: var(--text-muted); font-family: monospace; }
+    .host-badges { display: flex; gap: .35rem; flex-wrap: wrap; }
+
+    /* Status badges */
+    .badge {
+      font-size: .688rem; font-weight: 600; padding: .15rem .5rem;
+      border-radius: 99px; display: inline-flex; align-items: center; gap: .25rem;
+      white-space: nowrap;
+    }
+    .badge-ok { background: var(--green-bg); color: var(--green-text); }
+    .badge-bad { background: var(--red-bg); color: var(--red-text); }
+    .badge-warn { background: var(--orange-bg); color: var(--orange-text); }
+    .badge-info { background: var(--blue-bg); color: var(--blue-text); }
+    .badge-muted { background: var(--border); color: var(--text-muted); }
+    .badge::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      display: inline-block; flex-shrink: 0;
+    }
+    .badge-ok::before { background: var(--green); }
+    .badge-bad::before { background: var(--red); }
+    .badge-warn::before { background: var(--orange); }
+    .badge-info::before { background: var(--blue); }
+    .badge-muted::before { background: var(--text-muted); }
+
+    /* Host details */
+    .host-meta {
+      display: flex; gap: 1rem; flex-wrap: wrap; font-size: .813rem;
+      color: var(--text-secondary); margin-bottom: .5rem;
+    }
+    .host-meta span { display: inline-flex; align-items: center; gap: .25rem; }
+    .host-report {
+      font-size: .813rem; color: var(--text-secondary);
+      display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
+    }
+    .host-report strong { color: var(--text); }
+
+    /* Actions row */
+    .host-actions {
+      display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .5rem;
+      padding-top: .5rem; border-top: 1px solid var(--border);
+    }
+
+    /* Details/summary */
+    details { margin-top: .25rem; }
+    summary {
+      cursor: pointer; font-size: .813rem; color: var(--blue);
+      padding: .2rem 0; user-select: none;
+    }
+    summary:hover { text-decoration: underline; }
+    details[open] summary { margin-bottom: .25rem; }
+    .pkg-list {
+      list-style: none; font-size: .813rem; display: flex; flex-direction: column; gap: .2rem;
+    }
+    .pkg-list li {
+      padding: .2rem .5rem; border-radius: var(--radius-sm);
+      display: flex; align-items: center; gap: .4rem;
+    }
+    .pkg-list li:hover { background: var(--surface-hover); }
+    .pkg-sec { color: var(--red-text); font-weight: 600; }
+    .pkg-arrow { color: var(--text-muted); }
+    .pkg-ver { font-family: monospace; font-size: .75rem; color: var(--text-secondary); }
+
+    /* Apply form */
+    .apply-form { font-size: .813rem; }
+    .apply-form label {
+      display: flex; align-items: center; gap: .3rem; padding: .15rem 0; cursor: pointer;
+    }
+    .apply-form input[type=checkbox] { accent-color: var(--blue); }
+
+    /* Output pane */
+    .output-pane {
+      display: none; background: #1e1e1e; color: #d4d4d4;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: .75rem; padding: .75rem; margin-top: .5rem;
+      max-height: 240px; overflow-y: auto; white-space: pre-wrap;
+      border-radius: var(--radius-sm); line-height: 1.6;
+    }
+
+    /* Recent results */
+    .results-list { list-style: none; font-size: .813rem; }
+    .results-list li {
+      padding: .2rem 0; display: flex; gap: .5rem; align-items: baseline;
+      color: var(--text-secondary);
+    }
+    .results-list .res-ok { color: var(--green-text); }
+    .results-list .res-bad { color: var(--red-text); }
+
+    /* Pending cards (simpler) */
+    .pending-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .75rem 1rem;
+      margin-bottom: .5rem; box-shadow: var(--shadow);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: .5rem;
+    }
+    .pending-info { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+    .pending-info .host-name { font-size: .938rem; }
+    .pending-actions { display: flex; gap: .35rem; }
+
+    /* Rejected cards */
+    .rejected-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .75rem 1rem;
+      margin-bottom: .5rem; box-shadow: var(--shadow);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: .5rem; opacity: .7;
+    }
+
+    /* Scrollbar */
+    .output-pane::-webkit-scrollbar { width: 6px; }
+    .output-pane::-webkit-scrollbar-track { background: transparent; }
+    .output-pane::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
   </style>
 </head>
 <body>
-  <div id="restartBanner" class="restart-banner">Updating the aggregator&hellip; this page will reload automatically once it's back.</div>
-  <h1>update-detector aggregator <small class="muted">{{.AggregatorVersion}}</small></h1>
-  {{if .SelfUpdateConfigured}}
-  <p class="muted">
-    Self-update channel:
-    <label><input type="radio" name="selfUpdateChannel" value="release" {{if not .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(false)"> release only</label>
-    <label><input type="radio" name="selfUpdateChannel" value="prerelease" {{if .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(true)"> include pre-releases (-rcN)</label>
-  </p>
-  {{end}}
-  {{if .AggregatorUpdateAvailable}}
-  <div class="banner">
-    <strong>{{.LatestVersion}}</strong> is available (this aggregator is running <strong>{{.AggregatorVersion}}</strong>).
-    Use "Update aggregator" from whichever host's row below actually runs it -- there's no single button here since
-    the aggregator itself isn't one of the per-host rows.
-  </div>
-  {{end}}
-  <p><a href="/widgets/packages">all pending packages (fleet-wide)</a> &middot; <a href="/widgets/packages?security=true">security only</a> &middot; <a href="/widgets/summary">summary</a></p>
+  <div class="container">
+    <div id="restartBanner" class="restart-banner">Updating the aggregator&hellip; this page will reload automatically once it's back.</div>
 
-  <h2>Pending ({{len .Pending}})</h2>
-  <table>
-    <tr><th>Hostname</th><th>Agent ID</th><th>First seen</th><th>Actions</th></tr>
-    {{range .Pending}}
-    <tr>
-      <td>{{.Hostname}}</td>
-      <td>{{.ShortID}}</td>
-      <td>{{.FirstSeen}}</td>
-      <td>
-        <form method="post" action="/admin/agents/{{.ID}}/approve"><button>Approve</button></form>
-        <form method="post" action="/admin/agents/{{.ID}}/reject"><button>Reject</button></form>
-      </td>
-    </tr>
-    {{else}}
-    <tr><td colspan="4" class="muted">none</td></tr>
+    <div class="header">
+      <h1>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-6.219-8.56"/><polyline points="21 3 21 9 15 9"/><path d="M12 8v4l3 3"/></svg>
+        Update Detector
+        <span class="version-badge">{{.AggregatorVersion}}</span>
+      </h1>
+    </div>
+
+    {{if .SelfUpdateConfigured}}
+    <div class="channel-row">
+      Channel:
+      <label><input type="radio" name="selfUpdateChannel" value="release" {{if not .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(false)"> Release</label>
+      <label><input type="radio" name="selfUpdateChannel" value="prerelease" {{if .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(true)"> Pre-release</label>
+    </div>
     {{end}}
-  </table>
 
-  <h2>Approved ({{len .Approved}})</h2>
-  <table>
-    <tr><th>Hostname</th><th>Agent ID</th><th>Last seen</th><th>Last report</th><th>Agent</th><th>Companion</th><th>Actions</th></tr>
-    {{range .Approved}}
-    <tr>
-      <td>{{.Hostname}}</td>
-      <td>{{.ShortID}}</td>
-      <td>{{.LastSeen}}</td>
-      <td>
+    {{if .AggregatorUpdateAvailable}}
+    <div class="banner banner-warn">
+      <strong>{{.LatestVersion}}</strong> is available (running <strong>{{.AggregatorVersion}}</strong>).
+      Use "Update aggregator" from the host that runs it.
+    </div>
+    {{end}}
+
+    <div class="links-row">
+      <a href="/widgets/packages">All packages</a>
+      <a href="/widgets/packages?security=true">Security only</a>
+      <a href="/widgets/summary">Summary</a>
+    </div>
+
+    {{if .Pending}}
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Pending</span>
+        <span class="section-count">{{len .Pending}}</span>
+      </div>
+      {{range .Pending}}
+      <div class="pending-card">
+        <div class="pending-info">
+          <span class="host-name">{{.Hostname}}</span>
+          <span class="host-id">{{.ShortID}}</span>
+          <span class="badge badge-muted">{{.FirstSeen}}</span>
+        </div>
+        <div class="pending-actions">
+          <form method="post" action="/admin/agents/{{.ID}}/approve"><button class="btn-success btn-sm">Approve</button></form>
+          <form method="post" action="/admin/agents/{{.ID}}/reject"><button class="btn-danger btn-sm">Reject</button></form>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Hosts</span>
+        <span class="section-count">{{len .Approved}}</span>
+      </div>
+      {{if .Approved}}
+      {{range .Approved}}
+      <div class="host-card">
+        <div class="host-top">
+          <div>
+            <span class="host-name">{{.Hostname}}</span>
+            <span class="host-id">{{.ShortID}}</span>
+          </div>
+          <div class="host-badges">
+            {{if .HasReport}}
+              {{if .OK}}<span class="badge badge-ok">OK</span>{{else}}<span class="badge badge-bad">Needs attention</span>{{end}}
+              {{if .RebootRequired}}<span class="badge badge-warn">Reboot</span>{{end}}
+              {{if .OSUpdateAvailable}}<span class="badge badge-warn">OS upgrade</span>{{end}}
+            {{else}}
+              <span class="badge badge-muted">No report</span>
+            {{end}}
+            {{if .AnyStreamConnected}}<span class="badge badge-info">Agent</span>{{end}}
+            {{if .CompanionConnected}}<span class="badge badge-ok">Companion</span>{{end}}
+          </div>
+        </div>
+
         {{if .HasReport}}
-          {{if .OK}}<span class="ok">OK</span>{{else}}<span class="bad">needs attention</span>{{end}}
-          &mdash; {{.UpgradableTotal}} upgradable ({{.UpgradableSecurity}} security){{if .RebootRequired}}, reboot required{{end}}{{if .OSUpdateAvailable}}, OS upgrade available{{end}}
-          {{if .AgentVersion}}<br><span class="muted">agent {{.AgentVersion}}</span>{{end}}
-          {{if .Upgrades}}
-          <details>
-            <summary>show packages</summary>
-            <ul>
-              {{range .Upgrades}}
-              <li>{{if .Security}}<strong class="bad">{{.Name}}</strong>{{else}}{{.Name}}{{end}}{{if .CurrentVersion}} {{.CurrentVersion}} &rarr;{{end}} {{.CandidateVersion}}</li>
-              {{end}}
-            </ul>
-          </details>
-          {{end}}
-          <br><a href="/widgets/hosts/{{.Hostname}}">raw JSON</a>
-          {{if .Errors}}<br><span class="muted">errors: {{range .Errors}}{{.}}; {{end}}</span>{{end}}
-        {{else}}
-          <span class="muted">no report yet</span>
-        {{end}}
-      </td>
-      <td>
-        {{if .AnyStreamConnected}}
-          <span class="ok">connected</span>
-        {{else}}
-          <span class="muted">not connected</span>
-        {{end}}
-        <br>
-        <button onclick="forceRecheck('{{.ID}}')" title="Re-scan this host now instead of waiting for the next CHECK_INTERVAL">Force recheck</button>
-      </td>
-      <td class="apply-section">
-        {{if .CompanionConnected}}
-          <span class="ok">connected</span>{{if .CompanionVersion}} <span class="muted">{{.CompanionVersion}}</span>{{end}}<br>
-          {{if .Upgrades}}
-          <details>
-            <summary>apply packages</summary>
-            <form onsubmit="return applyPackages(event, '{{.ID}}')">
-              {{range .Upgrades}}
-              <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{.Name}}</label><br>
-              {{end}}
-              <button type="submit">Apply selected</button>
-            </form>
-          </details>
-          {{end}}
-          <button onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
-          <button onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
-          {{if .AgentUpdateAvailable}}
-          <button onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update this host's agent to {{$.LatestVersion}}">Update agent</button>
-          {{end}}
-          {{if and $.AggregatorUpdateAvailable .AggregatorPresent}}
-          <button onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update the aggregator co-located with this host to {{$.LatestVersion}}">Update aggregator</button>
-          {{end}}
-          {{if .CompanionUpdateAvailable}}
-          <button onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update this host's companion to {{$.LatestVersion}}">Update companion</button>
-          {{end}}
-        {{else}}
-          <span class="muted">install companion to enable apply</span>
-        {{end}}
-        <pre id="output-{{.ID}}" class="output-pane" data-agent-id="{{.ID}}"{{if .PendingActionID}} data-pending-action-id="{{.PendingActionID}}"{{end}}></pre>
-        {{if .RecentResults}}
+        <div class="host-meta">
+          {{if .AgentVersion}}<span>Agent {{.AgentVersion}}</span>{{end}}
+          {{if .CompanionConnected}}{{if .CompanionVersion}}<span>Companion {{.CompanionVersion}}</span>{{end}}{{end}}
+        </div>
+        <div class="host-report">
+          <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
+          <span><strong>{{.UpgradableSecurity}}</strong> security</span>
+          <a href="/widgets/hosts/{{.Hostname}}" style="font-size:.75rem">JSON</a>
+        </div>
+
+        {{if .Upgrades}}
         <details>
-          <summary>recent actions ({{len .RecentResults}})</summary>
-          <ul>
-            {{range .RecentResults}}
-            <li>{{.CompletedAt}} &mdash; {{if .Success}}<span class="ok">success</span>{{else}}<span class="bad">failed</span>{{end}}: {{.Message}}</li>
+          <summary>{{len .Upgrades}} package{{if gt (len .Upgrades) 1}}s{{end}}</summary>
+          <ul class="pkg-list">
+            {{range .Upgrades}}
+            <li>
+              {{if .Security}}<span class="pkg-sec">{{.Name}}</span>{{else}}{{.Name}}{{end}}
+              {{if .CurrentVersion}}<span class="pkg-ver">{{.CurrentVersion}}</span>{{end}}
+              <span class="pkg-arrow">&rarr;</span>
+              <span class="pkg-ver">{{.CandidateVersion}}</span>
+            </li>
             {{end}}
           </ul>
         </details>
         {{end}}
-      </td>
-      <td>
-        <form method="post" action="/admin/agents/{{.ID}}/reject"><button>Revoke</button></form>
-      </td>
-    </tr>
-    {{else}}
-    <tr><td colspan="7" class="muted">none</td></tr>
-    {{end}}
-  </table>
 
-  <h2>Rejected ({{len .Rejected}})</h2>
-  <table>
-    <tr><th>Hostname</th><th>Agent ID</th><th>Actions</th></tr>
-    {{range .Rejected}}
-    <tr>
-      <td>{{.Hostname}}</td>
-      <td>{{.ShortID}}</td>
-      <td>
-        <form method="post" action="/admin/agents/{{.ID}}/approve"><button>Approve</button></form>
-      </td>
-    </tr>
-    {{else}}
-    <tr><td colspan="3" class="muted">none</td></tr>
+        {{if .Errors}}
+        <div style="font-size:.75rem;color:var(--red-text);margin-top:.25rem">
+          {{range .Errors}}{{.}}; {{end}}
+        </div>
+        {{end}}
+        {{end}}
+
+        <div class="host-actions">
+          <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Recheck</button>
+          {{if .CompanionConnected}}
+            {{if .Upgrades}}
+            <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
+            <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade</button>
+            {{end}}
+            {{if .AgentUpdateAvailable}}
+            <button class="btn-sm" onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update agent to {{$.LatestVersion}}">Update agent</button>
+            {{end}}
+            {{if and $.AggregatorUpdateAvailable .AggregatorPresent}}
+            <button class="btn-sm" onclick="postSelfUpdate('{{.ID}}', 'aggregator', '{{$.LatestVersion}}')" title="Update aggregator to {{$.LatestVersion}}">Update aggregator</button>
+            {{end}}
+            {{if .CompanionUpdateAvailable}}
+            <button class="btn-sm" onclick="postSelfUpdate('{{.ID}}', 'companion', '{{$.LatestVersion}}')" title="Update companion to {{$.LatestVersion}}">Update companion</button>
+            {{end}}
+          {{end}}
+          <span style="flex:1"></span>
+          <form method="post" action="/admin/agents/{{.ID}}/reject"><button class="btn-danger btn-sm">Revoke</button></form>
+        </div>
+
+        {{if .CompanionConnected}}{{if .Upgrades}}
+        <details>
+          <summary>Select packages to apply</summary>
+          <form class="apply-form" onsubmit="return applyPackages(event, '{{.ID}}')">
+            {{range .Upgrades}}
+            <label><input type="checkbox" name="pkg" value="{{.Name}}"> {{if .Security}}<span class="pkg-sec">{{.Name}}</span>{{else}}{{.Name}}{{end}}</label>
+            {{end}}
+            <button type="submit" class="btn-primary btn-sm" style="margin-top:.35rem">Apply selected</button>
+          </form>
+        </details>
+        {{end}}{{end}}
+
+        <pre id="output-{{.ID}}" class="output-pane" data-agent-id="{{.ID}}"{{if .PendingActionID}} data-pending-action-id="{{.PendingActionID}}"{{end}}></pre>
+
+        {{if .RecentResults}}
+        <details>
+          <summary>Recent actions ({{len .RecentResults}})</summary>
+          <ul class="results-list">
+            {{range .RecentResults}}
+            <li>
+              <span style="font-family:monospace;font-size:.75rem">{{.CompletedAt}}</span>
+              {{if .Success}}<span class="res-ok">success</span>{{else}}<span class="res-bad">failed</span>{{end}}
+              {{.Message}}
+            </li>
+            {{end}}
+          </ul>
+        </details>
+        {{end}}
+      </div>
+      {{end}}
+      {{else}}
+      <div class="empty">No approved hosts yet</div>
+      {{end}}
+    </div>
+
+    {{if .Rejected}}
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Rejected</span>
+        <span class="section-count">{{len .Rejected}}</span>
+      </div>
+      {{range .Rejected}}
+      <div class="rejected-card">
+        <div class="pending-info">
+          <span class="host-name">{{.Hostname}}</span>
+          <span class="host-id">{{.ShortID}}</span>
+        </div>
+        <form method="post" action="/admin/agents/{{.ID}}/approve"><button class="btn-success btn-sm">Approve</button></form>
+      </div>
+      {{end}}
+    </div>
     {{end}}
-  </table>
+  </div>
 
   <script>
-    // No reverse-proxy needed to use this: the browser asks for
-    // ADMIN_APPLY_SHARED_SECRET once, remembers it in this browser's
-    // localStorage, and sends it as X-Admin-Apply-Secret on every apply
-    // call -- the exact same header the server already checks either way.
-    // If you *do* put the aggregator behind your own auth (e.g.
-    // Authentik) and have it inject this header itself instead, that
-    // works too and this prompt just never fires (the stored value is
-    // only used as a fallback when the header isn't already present).
     function getAdminApplySecret() {
       let secret = localStorage.getItem('adminApplySecret');
       if (!secret) {
@@ -365,40 +641,12 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return secret;
     }
 
-    // Opens a live view of id's in-flight action, replacing whatever this
-    // row's pane was showing before. Multiple rows' streams are fully
-    // independent EventSource connections -- this is what lets several
-    // hosts update concurrently, each with its own live view, on the
-    // same page load. Returns the EventSource so a caller whose trigger
-    // request then fails can close it again (see closeLiveOutput).
-    //
-    // Deliberately takes no action_id and subscribes immediately, before
-    // the caller has even fired the request that triggers the action --
-    // the endpoint is scoped per-agent, not per-action, specifically so
-    // this doesn't need one. Subscribing only *after* that request's
-    // response comes back (as this used to work) loses anything for an
-    // action fast enough to finish within that one extra round-trip --
-    // recheck runs no shell command at all, so it routinely finishes
-    // (and its own "done" already broadcast to zero subscribers) before
-    // a second, separate request to open this connection would even land.
-    //
-    // selfUpdateExpect is only set for a self-update of "agent" or
-    // "companion" -- {component, targetVersion}. For anything else
-    // (package apply/upgrade/full-upgrade/recheck, or a self-update of
-    // "aggregator", which watchAggregatorRestart already watches
-    // separately), omit it.
     function openLiveOutput(id, selfUpdateExpect) {
       const pane = document.getElementById('output-' + id);
       if (!pane) return null;
       pane.style.display = 'block';
       pane.textContent = '';
-
-      // Captured now, before the action has had any realistic chance to
-      // produce a fresh report (the companion hasn't even started running
-      // apt-get yet) -- the baseline watchReportUpdated compares against
-      // once "done" fires, for the non-self-update case below.
       const baselinePromise = selfUpdateExpect ? null : fetchAgentVersionInfo(id).then(d => d ? d.last_seen : '');
-
       const es = new EventSource('/admin/agents/' + id + '/output/stream');
       es.addEventListener('line', (e) => {
         const data = JSON.parse(e.data);
@@ -408,26 +656,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
       es.addEventListener('done', async () => {
         es.close();
         if (selfUpdateExpect) {
-          // "done" here only means the companion's restart/redeploy
-          // command was *issued* successfully -- the row's version
-          // label won't actually reflect it until the new agent/companion
-          // process finishes starting up and reports back in on its own,
-          // which routinely takes longer than any fixed short delay would
-          // assume. Poll for that report specifically instead of guessing.
           pane.textContent += '--- done -- waiting for ' + selfUpdateExpect.component +
             ' to report version ' + selfUpdateExpect.targetVersion + ' ---\n';
           watchComponentVersion(id, selfUpdateExpect, pane);
         } else {
-          // "done" here means the companion finished apt-get and (for
-          // anything but a plain recheck) triggered the agent's own
-          // out-of-band recheck -- but that recheck is itself another
-          // detection cycle plus a report round-trip to this aggregator,
-          // which routinely takes longer than any fixed short delay would
-          // assume. Without waiting for it, this row's upgradable-package
-          // list/counts (only ever computed at page-render time) reload
-          // showing the pre-apply numbers, exactly as if nothing happened,
-          // until a later manual refresh happens to land after the real
-          // report. Poll for that report specifically instead of guessing.
           pane.textContent += '--- done -- waiting for the fresh report to land ---\n';
           watchReportUpdated(id, await baselinePromise, pane);
         }
@@ -439,40 +671,24 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return es;
     }
 
-    // Reverts what openLiveOutput just did, for when the request that was
-    // actually supposed to trigger an action turns out to have failed (bad
-    // secret, 409 conflict, network error, ...) -- there's no action to
-    // watch after all.
     function closeLiveOutput(id, es) {
       if (es) es.close();
       const pane = document.getElementById('output-' + id);
       if (pane) pane.style.display = 'none';
     }
 
-    // Best-effort fetch of GET /admin/agents/{id}/version -- straight from
-    // the registry/hub, not the page's own stale render. Returns null (not
-    // a throw) on any failure, so callers can just treat that as "try
-    // again next poll" instead of every call site handling its own catch.
     async function fetchAgentVersionInfo(id) {
       try {
         const resp = await fetch('/admin/agents/' + id + '/version', {cache: 'no-store'});
         if (resp.ok) return await resp.json();
-      } catch (e) {
-        // Transient fetch failure -- treated the same as a non-OK
-        // response by every caller below: keep polling.
-      }
+      } catch (e) {}
       return null;
     }
 
-    // Polls until expect.component's reported version actually matches
-    // expect.targetVersion, then reloads. Same "poll instead of assume"
-    // pattern as watchAggregatorRestart. Gives up after maxAttempts and
-    // leaves a message instead of ever reloading onto what might still be
-    // a stale render.
     function watchComponentVersion(id, expect, pane) {
       const field = expect.component === 'companion' ? 'companion_version' : 'agent_version';
       let attempts = 0;
-      const maxAttempts = 60; // ~2 minutes at 2s each
+      const maxAttempts = 60;
       const poll = setInterval(async () => {
         attempts++;
         const data = await fetchAgentVersionInfo(id);
@@ -488,16 +704,9 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }, 2000);
     }
 
-    // Polls until this host's last-report time actually advances past
-    // baseline (captured just before the action started), then reloads --
-    // baseline, not a specific expected value, since a plain apply has no
-    // single "target" to compare against the way a self-update's version
-    // does; any strictly newer report reflects this action's outcome.
-    // Gives up after maxAttempts and leaves a message instead of ever
-    // reloading onto what might still be pre-apply data.
     function watchReportUpdated(id, baseline, pane) {
       let attempts = 0;
-      const maxAttempts = 60; // ~2 minutes at 2s each
+      const maxAttempts = 60;
       const poll = setInterval(async () => {
         attempts++;
         const data = await fetchAgentVersionInfo(id);
@@ -551,8 +760,6 @@ const adminTemplateSrc = `<!DOCTYPE html>
       postApply(id, {type: 'packages', packages: packages});
       return false;
     }
-    // No secret needed here, unlike postApply -- recheck can't change
-    // anything on the host, only make it report sooner.
     async function forceRecheck(id) {
       const es = openLiveOutput(id);
       try {
@@ -592,19 +799,11 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
     }
 
-    // This page's own aggregator version at load time -- html/template
-    // context-escapes this correctly for a JS string literal, same as
-    // every other templated value elsewhere on this page.
     const startingAggregatorVersion = "{{.AggregatorVersion}}";
 
     async function postSelfUpdate(id, component, targetVersion) {
       const secret = getAdminApplySecret();
       if (!secret) return;
-      // "aggregator" has no version-polling expectation here -- the page
-      // itself is about to go down and watchAggregatorRestart below is
-      // what actually detects it coming back up on the new version;
-      // agent/companion have no such signal, so they poll
-      // /admin/agents/{id}/version instead of guessing a delay.
       const expect = component === 'aggregator' ? null : {component: component, targetVersion: targetVersion};
       const es = openLiveOutput(id, expect);
       try {
@@ -623,10 +822,6 @@ const adminTemplateSrc = `<!DOCTYPE html>
           }
           return;
         }
-        // Updating the aggregator additionally takes down this page's own
-        // process -- watch for it coming back on top of (not instead of)
-        // the live view above, since the live view itself will just show
-        // "disconnected" once the restart actually happens.
         if (component === 'aggregator') {
           watchAggregatorRestart();
         }
@@ -636,18 +831,11 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
     }
 
-    // Jenkins-style: show a banner, keep polling /healthz in the
-    // background through the restart window (fetch failures are
-    // expected and ignored while the aggregator is actually down), and
-    // reload only once it reports a version that's actually different
-    // from what was running when this update was triggered -- not just
-    // "got any response," since a stale response during the restart
-    // window shouldn't look like success.
     function watchAggregatorRestart() {
       const banner = document.getElementById('restartBanner');
       banner.style.display = 'block';
       let attempts = 0;
-      const maxAttempts = 60; // ~2 minutes at 2s each
+      const maxAttempts = 60;
       const poll = setInterval(async () => {
         attempts++;
         try {
@@ -660,10 +848,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
               return;
             }
           }
-        } catch (e) {
-          // Expected while the aggregator is actually down mid-restart --
-          // keep polling rather than treating this as a failure.
-        }
+        } catch (e) {}
         if (attempts >= maxAttempts) {
           clearInterval(poll);
           banner.textContent = 'Aggregator restart is taking longer than expected -- reload manually once it\'s back.';
@@ -671,14 +856,6 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }, 2000);
     }
 
-    // Resume watching any action already in flight when this page loads
-    // -- e.g. triggered from another tab, by another operator, or before
-    // a reload -- not just ones this exact page load itself triggers.
-    // No selfUpdateExpect: the template doesn't carry enough about an
-    // already-in-flight action to know its component/target version, so
-    // this always falls back to the generic "wait for a fresh report"
-    // path below, same as it already did before this function stopped
-    // needing an action_id at all.
     document.querySelectorAll('[data-pending-action-id]').forEach((pane) => {
       openLiveOutput(pane.dataset.agentId);
     });
