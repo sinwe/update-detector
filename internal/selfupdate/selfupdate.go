@@ -32,6 +32,12 @@ type Client struct {
 	latestTag         string
 	fetchedAt         time.Time
 	hasResult         bool
+
+	// subscribers are notified (in their own goroutines) whenever a
+	// Refresh changes the cached latestTag. Nil-safe: OnChange is
+	// only called when the set of subscribers is non-empty.
+	subscribers map[int64]func(latestTag string)
+	nextSubID   int64
 }
 
 // New returns a Client for apiBase (e.g.
@@ -47,7 +53,7 @@ func New(apiBase string, includePreRelease bool) *Client {
 	if apiBase == "" {
 		apiBase = defaultForgejoAPI
 	}
-	return &Client{apiBase: apiBase, includePreRelease: includePreRelease, http: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{apiBase: apiBase, includePreRelease: includePreRelease, http: &http.Client{Timeout: 15 * time.Second}, subscribers: make(map[int64]func(latestTag string))}
 }
 
 // Refresh fetches the release list and updates the cached latest real
@@ -93,10 +99,19 @@ func (c *Client) Refresh(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
+	prevTag := c.latestTag
 	c.latestTag = latest
 	c.fetchedAt = time.Now()
 	c.hasResult = true
+	subs := c.subscribers
 	c.mu.Unlock()
+
+	// Notify subscribers only when the latest tag actually changed.
+	if latest != prevTag && len(subs) > 0 {
+		for _, fn := range subs {
+			go fn(latest)
+		}
+	}
 	return nil
 }
 
@@ -158,6 +173,23 @@ func (c *Client) IncludePreRelease() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.includePreRelease
+}
+
+// OnChange registers fn to be called (in its own goroutine) whenever a
+// successful Refresh changes the cached latest tag. The returned
+// function unregisters fn. This is used by the aggregator's SSE endpoint
+// to push version updates to connected browsers without polling.
+func (c *Client) OnChange(fn func(latestTag string)) (unsubscribe func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.nextSubID
+	c.nextSubID++
+	c.subscribers[id] = fn
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.subscribers, id)
+	}
 }
 
 // Run refreshes c on a timer until ctx is done -- once immediately, then
