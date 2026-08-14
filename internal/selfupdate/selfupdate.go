@@ -1,4 +1,4 @@
-// Package selfupdate checks a Forgejo repo's release list for the
+// Package selfupdate checks a GitHub repo's release list for the
 // newest real (non-pre-release) tag of update-detector itself, so the
 // aggregator can tell a fleet "vX.Y.Z is available."
 package selfupdate
@@ -8,19 +8,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"update-detector/internal/version"
 )
 
-const defaultForgejoAPI = "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+const defaultGitHubAPI = "https://api.github.com/repos/winarto/update-detector"
 
 type release struct {
 	TagName string `json:"tag_name"`
+	// GitHub returns "prerelease": true for pre-releases, but we also
+	// filter by tag name convention (version.IsPreRelease) for consistency
+	// with our own tagging scheme.
+	PreRelease bool `json:"prerelease"`
 }
 
-// Client checks a Forgejo repo's release list for the newest release
+// Client checks a GitHub repo's release list for the newest release
 // tag matching the configured channel, caching the result in memory.
 // Safe for concurrent use.
 type Client struct {
@@ -41,7 +46,7 @@ type Client struct {
 }
 
 // New returns a Client for apiBase (e.g.
-// "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"), or
+// "https://api.github.com/repos/winarto/update-detector"), or
 // this repo's own default if apiBase is empty. includePreRelease
 // selects the channel: false considers only real releases (the default,
 // safer choice for a production fleet); true also considers -rcN tags,
@@ -51,21 +56,28 @@ type Client struct {
 // the newest build available, pre-release or not.
 func New(apiBase string, includePreRelease bool) *Client {
 	if apiBase == "" {
-		apiBase = defaultForgejoAPI
+		apiBase = defaultGitHubAPI
 	}
-	return &Client{apiBase: apiBase, includePreRelease: includePreRelease, http: &http.Client{Timeout: 15 * time.Second}, subscribers: make(map[int64]func(latestTag string))}
+	return &Client{
+		apiBase:           apiBase,
+		includePreRelease: includePreRelease,
+		http: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+		subscribers: make(map[int64]func(latestTag string)),
+	}
 }
 
 // Refresh fetches the release list and updates the cached latest real
 // release tag. A fetch failure (network, non-200, bad JSON, or no real
 // release found at all) leaves any previously cached result untouched --
-// a transient Forgejo/network outage must not erase an otherwise-valid
+// a transient GitHub/network outage must not erase an otherwise-valid
 // "update available" fact the admin page is showing.
 //
 // Deliberately not GET /releases/latest: this repo's own tags (see
-// .forgejo/workflows/release.yml's `tags: - 'v*'` trigger) include -rcN
+// .github/workflows/release.yml's `tags: - 'v*'` trigger) include -rcN
 // pre-releases, and the release-creation call there never sets a
-// "prerelease" flag -- so Forgejo's own "latest" can be an rc build if
+// "prerelease" flag -- so GitHub's own "latest" can be an rc build if
 // it happens to be the most recently published release. Fetching the
 // list and filtering by tag-name convention (version.IsPreRelease) is
 // the only reliable way to exclude those.
@@ -75,10 +87,17 @@ func New(apiBase string, includePreRelease bool) *Client {
 // tags pushed after it than the limit, which isn't a realistic release
 // cadence for this repo; a deliberate, accepted simplification.
 func (c *Client) Refresh(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/releases?limit=20", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/releases?per_page=20", nil)
 	if err != nil {
 		return fmt.Errorf("selfupdate: building request: %w", err)
 	}
+
+	// Add GitHub token if available for higher rate limits
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("selfupdate: request failed: %w", err)
@@ -116,7 +135,7 @@ func (c *Client) Refresh(ctx context.Context) error {
 }
 
 // highestRelease returns the highest-versioned tag among releases (by
-// version.Compare, not by list order -- Forgejo's own ordering isn't
+// version.Compare, not by list order -- GitHub's own ordering isn't
 // relied on) matching the given channel: includePreRelease=false skips
 // any -rcN tag entirely; true considers both and picks the single
 // highest across both, which naturally prefers a pre-release over any
@@ -126,6 +145,11 @@ func highestRelease(releases []release, includePreRelease bool) (string, bool) {
 	var best string
 	found := false
 	for _, r := range releases {
+		// Skip GitHub-marked pre-releases if we're not including them
+		if !includePreRelease && r.PreRelease {
+			continue
+		}
+		// Also skip by our own tag convention (e.g., -rcN)
 		if !includePreRelease && version.IsPreRelease(r.TagName) {
 			continue
 		}
