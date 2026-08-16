@@ -50,18 +50,32 @@ jobs:
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
-          
+
+          # A -alphaN/-betaN/-rcN tag must never become :latest -- anything
+          # in the fleet still tracking :latest (not pinned to a specific
+          # version) would otherwise silently pick up a pre-release build.
+          # See internal/version's own alpha < beta < rc < release
+          # convention -- kept in sync with it manually since this is bash,
+          # not Go.
+          is_prerelease=false
+          if [[ "$TAG" =~ -(alpha|beta|rc)[0-9]+$ ]]; then
+            is_prerelease=true
+          fi
+
           build_and_push() {
             local image="$1" dockerfile="$2"
+            local tags=(--tag "forgejo.winar.to/winarto/$image:$TAG")
+            if [ "$is_prerelease" = false ]; then
+              tags+=(--tag "forgejo.winar.to/winarto/$image:latest")
+            fi
             docker buildx build \
               --platform "linux/amd64,linux/arm64" \
               --file "$dockerfile" \
               --build-arg "VERSION=$TAG" \
-              --tag "forgejo.winar.to/winarto/$image:$TAG" \
-              --tag "forgejo.winar.to/winarto/$image:latest" \
+              "${tags[@]}" \
               --push .
           }
-          
+
           build_and_push update-detector ./Dockerfile
           build_and_push update-aggregator ./Dockerfile.aggregator
 
