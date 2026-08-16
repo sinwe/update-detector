@@ -49,8 +49,8 @@
 
 set -eu
 
-GITHUB_API="https://api.github.com/repos/winarto/update-detector"
-INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/winarto/update-detector/main/install.sh"
+GITHUB_API="https://api.github.com/repos/sinwe/update-detector"
+INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
 # Where the companion caches its own copy of this script for self-update
 # use (see internal/companion/selfupdate.go) -- it re-invokes this file
@@ -96,9 +96,9 @@ is_wsl2() {
 resolve_asset_url() {
   asset_name="$1"
   if [ "$INSTALL_VERSION" = "latest" ]; then
-    release_url="$FORGEJO_API/releases/latest"
+    release_url="$GITHUB_API/releases/latest"
   else
-    release_url="$FORGEJO_API/releases/tags/$INSTALL_VERSION"
+    release_url="$GITHUB_API/releases/tags/$INSTALL_VERSION"
   fi
   # Deliberately not `curl -f ... | jq ...`: same reasoning as
   # release.yml's own publish step -- a failed request here would silently
@@ -150,7 +150,7 @@ cache_install_sh_for_companion() {
   if [ "$INSTALL_VERSION" = "latest" ]; then
     raw_url="$INSTALL_SH_RAW_URL"
   else
-  raw_url="https://raw.githubusercontent.com/winarto/update-detector/$INSTALL_VERSION/install.sh"
+  raw_url="https://raw.githubusercontent.com/sinwe/update-detector/$INSTALL_VERSION/install.sh"
   fi
   if curl -fsSL "$raw_url" -o "$CACHED_INSTALL_SH.new"; then
     chmod 0755 "$CACHED_INSTALL_SH.new"
