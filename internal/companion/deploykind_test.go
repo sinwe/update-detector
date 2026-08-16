@@ -63,8 +63,8 @@ case "$1" in
     shift 3
     for id in "$@"; do
       case "$id" in
-        aaa111) echo "ghcr.io/winarto/update-detector-companion:v0.9.0" ;;
-        bbb222) echo "ghcr.io/winarto/update-detector:v0.9.0" ;;
+        aaa111) echo "ghcr.io/sinwe/update-detector-companion:v0.9.0" ;;
+        bbb222) echo "ghcr.io/sinwe/update-detector:v0.9.0" ;;
       esac
     done
     ;;
@@ -74,7 +74,7 @@ esac
 	if id != "bbb222" {
 		t.Fatalf("got id %q, want bbb222 -- must not match the -companion image for a bare \"update-detector\" pattern", id)
 	}
-	if image != "ghcr.io/winarto/update-detector:v0.9.0" {
+	if image != "ghcr.io/sinwe/update-detector:v0.9.0" {
 		t.Fatalf("got image %q, want the matching container's own image reference", image)
 	}
 }
@@ -141,7 +141,7 @@ case "$1" in
     shift 3
     for id in "$@"; do
       case "$id" in
-        aaa111) echo "ghcr.io/winarto/update-aggregator:v0.9.0" ;;
+        aaa111) echo "ghcr.io/sinwe/update-aggregator:v0.9.0" ;;
       esac
     done
     ;;
@@ -181,7 +181,7 @@ case "$1" in
         # docker ps itself would show a bare ID like this for aaa111 --
         # dockerContainerFor must never ask docker ps for the image at
         # all, only docker inspect, which still resolves it correctly.
-        aaa111) echo "ghcr.io/winarto/update-detector:latest" ;;
+        aaa111) echo "ghcr.io/sinwe/update-detector:latest" ;;
       esac
     done
     ;;
@@ -191,7 +191,7 @@ esac
 	if id != "aaa111" {
 		t.Fatalf("got id %q, want aaa111", id)
 	}
-	if image != "ghcr.io/winarto/update-detector:latest" {
+	if image != "ghcr.io/sinwe/update-detector:latest" {
 		t.Fatalf("got image %q, want the tag docker inspect reports, not whatever docker ps would have shown", image)
 	}
 }

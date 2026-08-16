@@ -758,8 +758,8 @@ from the same tag, via QEMU emulation since the runner itself is amd64-only)
 and pushes them to Forgejo's container registry:
 
 ```
-ghcr.io/winarto/update-detector:<tag>    and  :latest
-ghcr.io/winarto/update-aggregator:<tag>  and  :latest
+ghcr.io/sinwe/update-detector:<tag>    and  :latest
+ghcr.io/sinwe/update-aggregator:<tag>  and  :latest
 ```
 
 The same tag also cross-compiles all three binaries — `update-detector`,
