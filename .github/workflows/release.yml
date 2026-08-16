@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -26,7 +31,8 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer an explicit GHCR_PAT secret if provided; fall back to the workflow token
+          password: ${{ secrets.GHCR_PAT || github.token }}
 
       - name: Build and push multi-arch images
         run: |
@@ -84,14 +90,14 @@ jobs:
 
       - name: Publish native binaries as release assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
           API="https://api.github.com/repos/winarto/update-detector"
 
           http_status=$(curl -sS -o /tmp/release.json -w "%{http_code}" \
-            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Authorization: token $RELEASE_TOKEN" \
             "$API/releases/tags/$TAG")
 
           if [ "$http_status" = "200" ]; then
