@@ -96,7 +96,7 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 func resolveAssetURL(targetVersion, assetName string) (string, error) {
 	apiBase := os.Getenv("FORGEJO_API_BASE")
 	if apiBase == "" {
-		apiBase = "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+		apiBase = "https://api.github.com/repos/winarto/update-detector"
 	}
 
 	releaseURL := apiBase + "/releases/tags/" + targetVersion

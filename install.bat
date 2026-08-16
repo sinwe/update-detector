@@ -7,7 +7,7 @@ setlocal EnableDelayedExpansion
 :: cmd.exe has no way to run a script piped straight from stdin, so this
 :: is two steps, not one:
 ::
-::   curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.bat -o install.bat
+::   curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.bat -o install.bat
 ::   install.bat
 ::
 :: A .bat, not a .ps1: cmd.exe runs a .bat directly, while a .ps1 run via
@@ -42,8 +42,8 @@ setlocal EnableDelayedExpansion
 :: or set UNINSTALL_COMPONENTS the same way as INSTALL_COMPONENTS above,
 :: for non-interactive use.
 
-set "FORGEJO_API=https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
-set "INSTALL_BAT_RAW_URL=https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.bat"
+set "GITHUB_API=https://api.github.com/repos/winarto/update-detector"
+set "INSTALL_BAT_RAW_URL=https://raw.githubusercontent.com/winarto/update-detector/main/install.bat"
 if not defined INSTALL_VERSION set "INSTALL_VERSION=latest"
 set "BIN_DIR=%ProgramFiles%\update-detector"
 :: Where the companion caches its own copy of this script for
@@ -145,7 +145,7 @@ echo install.bat: caching a copy of install.bat for the companion's own self-upd
 if "%INSTALL_VERSION%"=="latest" (
   set "raw_url=%INSTALL_BAT_RAW_URL%"
 ) else (
-  set "raw_url=https://forgejo.winar.to/winarto/update-detector/raw/tag/%INSTALL_VERSION%/install.bat"
+  set "raw_url=https://raw.githubusercontent.com/winarto/update-detector/%INSTALL_VERSION%/install.bat"
 )
 curl -fsSL "!raw_url!" -o "%CACHED_INSTALL_BAT%.new"
 if errorlevel 1 (

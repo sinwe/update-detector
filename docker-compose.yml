@@ -4,7 +4,7 @@ services:
     # this published image (built by .forgejo/workflows/release.yml on
     # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d
     # --build` still builds from source and ignores the registry entirely.
-    image: forgejo.winar.to/winarto/update-detector:latest
+    image: ghcr.io/winarto/update-detector:latest
     build: .
     restart: unless-stopped
     # Recommended: set this explicitly per host so Gatus/Telegram messages

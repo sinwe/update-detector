@@ -2,7 +2,7 @@
 # install.sh installs update-detector's pieces as native systemd services.
 # Run as root:
 #
-#   curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo sh
 #
 # On a normal Linux host, this installs just the companion
 # (update-detector-companion), auto-discovering everything it needs from an
@@ -49,8 +49,8 @@
 
 set -eu
 
-FORGEJO_API="https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
-INSTALL_SH_RAW_URL="https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh"
+GITHUB_API="https://api.github.com/repos/winarto/update-detector"
+INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/winarto/update-detector/main/install.sh"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
 # Where the companion caches its own copy of this script for self-update
 # use (see internal/companion/selfupdate.go) -- it re-invokes this file
@@ -150,7 +150,7 @@ cache_install_sh_for_companion() {
   if [ "$INSTALL_VERSION" = "latest" ]; then
     raw_url="$INSTALL_SH_RAW_URL"
   else
-    raw_url="https://forgejo.winar.to/winarto/update-detector/raw/tag/$INSTALL_VERSION/install.sh"
+  raw_url="https://raw.githubusercontent.com/winarto/update-detector/$INSTALL_VERSION/install.sh"
   fi
   if curl -fsSL "$raw_url" -o "$CACHED_INSTALL_SH.new"; then
     chmod 0755 "$CACHED_INSTALL_SH.new"
