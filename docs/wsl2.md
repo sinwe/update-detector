@@ -94,10 +94,17 @@ It detects WSL2 on its own and prompts:
 ```
 
 For scripted/non-interactive use (e.g. provisioning automation), skip the
-prompt entirely with `INSTALL_COMPONENTS` (comma-separated):
+prompt entirely with `INSTALL_COMPONENTS` (comma-separated). Export it
+first, don't prefix it directly onto `curl` -- in a pipeline, a leading
+`VAR=val` only sets that variable for the one command it's attached to
+(`curl` here, which doesn't need it and never forwards it downstream), so
+`INSTALL_COMPONENTS=... curl ... | sudo -E sh` silently fails to pass
+anything to the `sh` on the other end of the pipe -- confirmed live, this
+is exactly what breaks a scripted install that looks correct at a glance:
 
 ```sh
-INSTALL_COMPONENTS=aggregator,agent,companion curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo -E sh
+export INSTALL_COMPONENTS=aggregator,agent,companion
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo -E sh
 ```
 
 ### 3. Check that everything you picked actually started
