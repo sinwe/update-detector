@@ -59,7 +59,7 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 		return aggregator.ActionResult{ActionID: action.ID, Message: fmt.Sprintf(format, args...), CompletedAt: time.Now()}
 	}
 
-	// Resolve the download URL from the Forgejo API.
+	// Resolve the download URL from the GitHub API (GITHUB_API_BASE, fallback FORGEJO_API_BASE).
 	assetName := "update-detector-companion-windows-amd64.exe"
 	downloadURL, err := resolveAssetURL(action.TargetVersion, assetName)
 	if err != nil {
@@ -94,9 +94,12 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 // resolveAssetURL queries the Forgejo API for the download URL of the
 // given asset name in the specified release.
 func resolveAssetURL(targetVersion, assetName string) (string, error) {
-	apiBase := os.Getenv("FORGEJO_API_BASE")
+	apiBase := os.Getenv("GITHUB_API_BASE")
 	if apiBase == "" {
-		apiBase = "https://api.github.com/repos/winarto/update-detector"
+		apiBase = os.Getenv("FORGEJO_API_BASE")
+	}
+	if apiBase == "" {
+		apiBase = "https://api.github.com/repos/sinwe/update-detector"
 	}
 
 	releaseURL := apiBase + "/releases/tags/" + targetVersion
