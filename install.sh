@@ -2,7 +2,7 @@
 # install.sh installs update-detector's pieces as native systemd services.
 # Run as root:
 #
-#   curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 #
 # On a normal Linux host, this installs just the companion
 # (update-detector-companion), auto-discovering everything it needs from an
@@ -49,8 +49,8 @@
 
 set -eu
 
-FORGEJO_API="https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
-INSTALL_SH_RAW_URL="https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh"
+GITHUB_API="https://api.github.com/repos/sinwe/update-detector"
+INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
 # Where the companion caches its own copy of this script for self-update
 # use (see internal/companion/selfupdate.go) -- it re-invokes this file
@@ -96,16 +96,17 @@ is_wsl2() {
 resolve_asset_url() {
   asset_name="$1"
   if [ "$INSTALL_VERSION" = "latest" ]; then
-    release_url="$FORGEJO_API/releases/latest"
+    release_url="$GITHUB_API/releases/latest"
   else
-    release_url="$FORGEJO_API/releases/tags/$INSTALL_VERSION"
+    release_url="$GITHUB_API/releases/tags/$INSTALL_VERSION"
   fi
   # Deliberately not `curl -f ... | jq ...`: same reasoning as
   # release.yml's own publish step -- a failed request here would silently
   # produce an empty result via a suppressed body, rather than a clear
   # error. grep+sed avoids needing jq on the *installing* host too, which
   # (unlike the release workflow's own runner) we don't control.
-  curl -fsSL "$release_url" \
+  # GitHub's API rejects requests with no User-Agent at all (403).
+  curl -fsSL -H "User-Agent: update-detector-install.sh" "$release_url" \
     | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
     | head -1 \
     | sed -E 's/.*"(https[^"]+)"$/\1/'
@@ -150,7 +151,7 @@ cache_install_sh_for_companion() {
   if [ "$INSTALL_VERSION" = "latest" ]; then
     raw_url="$INSTALL_SH_RAW_URL"
   else
-    raw_url="https://forgejo.winar.to/winarto/update-detector/raw/tag/$INSTALL_VERSION/install.sh"
+    raw_url="https://raw.githubusercontent.com/sinwe/update-detector/$INSTALL_VERSION/install.sh"
   fi
   if curl -fsSL "$raw_url" -o "$CACHED_INSTALL_SH.new"; then
     chmod 0755 "$CACHED_INSTALL_SH.new"

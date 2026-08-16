@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      # Our only GOARCH targets are linux/amd64, linux/arm64, and
+      # windows/amd64 -- Go cross-compiles all of these trivially on any
+      # host, no per-arch container/QEMU/docker-cp workaround needed here
+      # (that dance existed only because Forgejo's job container couldn't
+      # bind-mount this repo's own source into a sibling container; a
+      # GitHub-hosted runner has no such split).
+      - name: Cross-compile native binaries
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          mkdir -p dist
+          build() {
+            local goos="$1" goarch="$2" ext="$3"
+            for name in update-detector update-aggregator update-detector-companion; do
+              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+                -ldflags "-X update-detector/internal/version.Version=$TAG" \
+                -o "dist/$name-$goos-$goarch$ext" "./cmd/$name"
+            done
+          }
+          build linux amd64 ""
+          build linux arm64 ""
+          build windows amd64 ".exe"
+          ls -la dist/
+
+      # A -alphaN/-betaN/-rcN tag must never become :latest -- anything in
+      # the fleet still tracking :latest (not pinned to a specific version)
+      # would otherwise silently pick up a pre-release build. See
+      # internal/version's own alpha < beta < rc < release convention --
+      # kept in sync with it manually since this is bash, not Go. Same
+      # regex also decides whether the GitHub Release itself gets marked
+      # prerelease below.
+      - name: Determine prerelease status
+        id: prerelease
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" =~ -(alpha|beta|rc)[0-9]+$ ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # Default docker-container driver -- unlike Forgejo's registry,
+      # GHCR doesn't 403 its blob-existence check, so a real single-command
+      # multi-platform --push works here (no need for Forgejo's per-arch
+      # build + docker manifest create/push workaround).
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch images
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          IS_PRERELEASE="${{ steps.prerelease.outputs.is_prerelease }}"
+
+          build_and_push() {
+            local image="$1" dockerfile="$2"
+            local tags=(--tag "ghcr.io/sinwe/$image:$TAG")
+            if [ "$IS_PRERELEASE" = "false" ]; then
+              tags+=(--tag "ghcr.io/sinwe/$image:latest")
+            fi
+            docker buildx build \
+              --platform "linux/amd64,linux/arm64" \
+              --file "$dockerfile" \
+              --build-arg "VERSION=$TAG" \
+              "${tags[@]}" \
+              --push .
+          }
+
+          build_and_push update-detector ./Dockerfile
+          build_and_push update-aggregator ./Dockerfile.aggregator
+
+      # Replaces ~65 lines of hand-rolled Forgejo REST calls (multipart
+      # asset upload, `token`-style auth header, separate create-or-find-
+      # release logic) -- gh is preinstalled on GitHub-hosted runners and
+      # handles create-or-update, multi-asset upload, and the prerelease
+      # flag natively (Forgejo's own release-creation call never set that
+      # flag at all; GitHub's real one does).
+      - name: Publish release with binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          PRERELEASE_FLAG=""
+          if [ "${{ steps.prerelease.outputs.is_prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes $PRERELEASE_FLAG
+          fi

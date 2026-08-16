@@ -97,12 +97,13 @@ func SelfUpdate(ctx context.Context, action aggregator.Action) aggregator.Action
 //
 // Deliberately NOT a plain `docker compose pull && up -d`: this repo's
 // own compose files pin `image: .../update-detector:latest`, and that
-// tag gets moved on *every* release push, including -rcN ones (see
-// .forgejo/workflows/release.yml) -- a plain pull fetches whatever
+// tag gets moved on every real-release push (see
+// .github/workflows/release.yml) -- a plain pull fetches whatever
 // :latest currently is on the registry, which is not necessarily
-// targetVersion at all. Confirmed live: requesting a downgrade to an
-// older real release instead silently pulled a newer -rc build that had
-// been pushed moments earlier for an unrelated reason. Instead, pull the
+// targetVersion at all. Confirmed live (before :latest was excluded from
+// pre-release pushes): requesting a downgrade to an older real release
+// instead silently pulled a newer -rc build that had been pushed moments
+// earlier for an unrelated reason. Instead, pull the
 // *specific* targetVersion tag by name, then locally retag it as
 // whatever tag the container's own image reference already uses (so the
 // compose file's own `image:` line, unedited, resolves to the right
@@ -129,7 +130,7 @@ func updateDockerCompose(ctx context.Context, containerID, image, targetVersion 
 	// Splitting on the *last* colon, not the first, since a registry
 	// host can itself contain a colon for a non-default port (e.g.
 	// "registry.example.com:5000/name:tag") -- this repo's own images
-	// never do that (forgejo.winar.to has no port in the hostname), so
+	// never do that (ghcr.io has no port in the hostname), so
 	// this is a deliberate simplification, not general image-reference
 	// parsing, matching how internal/version.Compare is also scoped to
 	// this repo's own tag convention rather than general semver.

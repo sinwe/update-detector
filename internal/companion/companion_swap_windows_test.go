@@ -134,7 +134,7 @@ func TestCompleteCompanionSwapEmptyNewFile(t *testing.T) {
 }
 
 func TestStageCompanionUpdateWritesNewFile(t *testing.T) {
-	// Set up a fake Forgejo API server that returns a release with a
+	// Set up a fake GitHub API server that returns a release with a
 	// downloadable asset.
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, "update-detector-companion.exe")
@@ -166,8 +166,8 @@ func TestStageCompanionUpdateWritesNewFile(t *testing.T) {
 	}))
 	t.Cleanup(fakeServer.Close)
 
-	// Override FORGEJO_API_BASE
-	t.Setenv("FORGEJO_API_BASE", fakeServer.URL+"/api/v1/repos/test/repo")
+	// Override GITHUB_API_BASE
+	t.Setenv("GITHUB_API_BASE", fakeServer.URL+"/api/v1/repos/test/repo")
 
 	action := aggregator.Action{ID: "act1", Type: aggregator.ActionSelfUpdate, Component: "companion", TargetVersion: "v0.99.0"}
 	result := stageCompanionUpdate(context.Background(), action)

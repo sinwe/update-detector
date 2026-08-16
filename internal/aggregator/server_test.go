@@ -30,16 +30,16 @@ func newTestServerWithSecret(t *testing.T, adminApplySecret string) (*Server, *R
 
 // newTestServerWithLatestVersion is like newTestServerWithSecret, but
 // with a real *selfupdate.Client already refreshed (against a throwaway
-// fake Forgejo server) to report latestVersion as the newest release --
+// fake release server) to report latestVersion as the newest release --
 // for exercising the admin page's update-available banner/buttons.
 func newTestServerWithLatestVersion(t *testing.T, adminApplySecret, latestVersion string) (*Server, *Registry) {
 	t.Helper()
-	fakeForgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeReleaseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]map[string]string{{"tag_name": latestVersion}})
 	}))
-	t.Cleanup(fakeForgejo.Close)
+	t.Cleanup(fakeReleaseServer.Close)
 
-	client := selfupdate.New(fakeForgejo.URL, "release")
+	client := selfupdate.New(fakeReleaseServer.URL, "release")
 	if err := client.Refresh(context.Background()); err != nil {
 		t.Fatalf("refreshing fake selfupdate client: %v", err)
 	}

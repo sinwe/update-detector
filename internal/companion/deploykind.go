@@ -28,7 +28,7 @@ type Detection struct {
 	Native            bool
 	DockerContainerID string // "" if no Docker container found
 	// DockerImage is the exact image reference (e.g.
-	// "forgejo.winar.to/winarto/update-detector:latest") the container
+	// "ghcr.io/sinwe/update-detector:latest") the container
 	// is currently running -- needed to pull and pin a *specific*
 	// version later (see updateDockerCompose), since a plain
 	// `docker compose pull` would just re-fetch whatever this same tag
@@ -115,7 +115,7 @@ func AggregatorColocated(ctx context.Context) bool {
 // pin, which release.yml moves on every tag push including -rcN builds)
 // -- confirmed live against a real long-running container whose `docker
 // ps` showed a raw hex ID while `docker inspect .Config.Image` still
-// correctly reported "forgejo.winar.to/winarto/update-detector:latest".
+// correctly reported "ghcr.io/sinwe/update-detector:latest".
 // docker inspect's Config.Image is the reference the container was
 // actually created with and never silently changes, so it's used
 // instead -- one extra call, but a single "docker inspect id1 id2 ..."

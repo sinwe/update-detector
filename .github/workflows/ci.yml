@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # internal/companion is deliberately excluded on Windows: it's the
+      # Linux-native apply/self-update logic (apt-get, systemd, Unix
+      # sockets, fake-shell-script-on-PATH test fixtures) that has never
+      # been claimed to work on Windows -- everything else (including
+      # internal/aggregator, internal/companiontoken, and the checker/
+      # config/hostflavor registry pieces) passes cleanly there.
+      # shell: bash forces Git Bash (present on windows-latest) so this
+      # $(...)/grep substitution works the same on both runners.
+      - name: Test
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            go test $(go list ./... | grep -v '/internal/companion$') -v
+          else
+            go test ./...
+          fi

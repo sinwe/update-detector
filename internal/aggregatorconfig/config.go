@@ -27,7 +27,7 @@ type Config struct {
 	AdminApplySharedSecret string
 
 	// SelfUpdateCheckInterval controls how often the aggregator checks
-	// Forgejo for a newer update-detector release (see
+	// GitHub for a newer update-detector release (see
 	// internal/selfupdate). Losing this on a restart is fine -- it's
 	// purely an in-memory cache, re-fetched fresh either way.
 	SelfUpdateCheckInterval time.Duration

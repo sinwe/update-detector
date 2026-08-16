@@ -21,7 +21,7 @@ const (
 
 // parsed is this repo's own tag shape: vMAJOR.MINOR.PATCH, optionally
 // suffixed with -alphaN, -betaN, or -rcN. Not general semver -- there's
-// no need to handle anything outside what .forgejo/workflows/release.yml
+// no need to handle anything outside what .github/workflows/release.yml
 // actually tags.
 type parsed struct {
 	major, minor, patch int

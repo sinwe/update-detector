@@ -12,10 +12,10 @@
 services:
   update-aggregator:
     # For real deploys: `docker compose pull && docker compose up -d` uses
-    # this published image (built by .forgejo/workflows/release.yml on
+    # this published image (built by .github/workflows/release.yml on
     # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d
     # --build` still builds from source and ignores the registry entirely.
-    image: forgejo.winar.to/winarto/update-aggregator:latest
+    image: ghcr.io/sinwe/update-aggregator:latest
     build:
       context: .
       dockerfile: Dockerfile.aggregator

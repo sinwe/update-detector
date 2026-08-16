@@ -1,4 +1,4 @@
-// Package selfupdate checks a Forgejo repo's release list for the
+// Package selfupdate checks a GitHub repo's release list for the
 // newest real (non-pre-release) tag of update-detector itself, so the
 // aggregator can tell a fleet "vX.Y.Z is available."
 package selfupdate
@@ -14,13 +14,13 @@ import (
 	"update-detector/internal/version"
 )
 
-const defaultForgejoAPI = "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+const defaultGitHubAPI = "https://api.github.com/repos/sinwe/update-detector"
 
 type release struct {
 	TagName string `json:"tag_name"`
 }
 
-// Client checks a Forgejo repo's release list for the newest release
+// Client checks a GitHub repo's release list for the newest release
 // tag matching the configured channel, caching the result in memory.
 // Safe for concurrent use.
 type Client struct {
@@ -35,8 +35,8 @@ type Client struct {
 }
 
 // New returns a Client for apiBase (e.g.
-// "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"), or
-// this repo's own default if apiBase is empty. channel selects the
+// "https://api.github.com/repos/sinwe/update-detector"), or this repo's
+// own default if apiBase is empty. channel selects the
 // minimum acceptable stage (one of version.Channels: "alpha", "beta",
 // "rc", "release") -- "release" (the default, safer choice for a
 // production fleet) considers only real releases; any pre-release
@@ -49,7 +49,7 @@ type Client struct {
 // runtime condition to handle gracefully.
 func New(apiBase, channel string) *Client {
 	if apiBase == "" {
-		apiBase = defaultForgejoAPI
+		apiBase = defaultGitHubAPI
 	}
 	if !version.ValidChannel(channel) {
 		panic(fmt.Sprintf("selfupdate: invalid channel %q (want one of %v)", channel, version.Channels))
@@ -60,26 +60,29 @@ func New(apiBase, channel string) *Client {
 // Refresh fetches the release list and updates the cached latest real
 // release tag. A fetch failure (network, non-200, bad JSON, or no real
 // release found at all) leaves any previously cached result untouched --
-// a transient Forgejo/network outage must not erase an otherwise-valid
+// a transient GitHub/network outage must not erase an otherwise-valid
 // "update available" fact the admin page is showing.
 //
-// Deliberately not GET /releases/latest: this repo's own tags (see
-// .forgejo/workflows/release.yml's `tags: - 'v*'` trigger) include
-// -alphaN/-betaN/-rcN pre-releases, and the release-creation call there
-// never sets a "prerelease" flag -- so Forgejo's own "latest" can be a
-// pre-release build if it happens to be the most recently published
-// release. Fetching the list and filtering by tag-name convention
-// (version.MeetsChannel) is the only reliable way to exclude those.
+// Deliberately not GET /releases/latest, even though GitHub's version of
+// that endpoint (unlike Forgejo's) does correctly exclude prereleases:
+// channel selection (see version.MeetsChannel) needs the *whole* list to
+// find the highest release at or above a given stage, not just the
+// single overall latest -- an alpha/beta/rc channel needs to see
+// pre-release tags "latest" would filter out entirely.
 //
-// Fetches one page with a generous limit rather than paginating --
+// Fetches one page with a generous per_page rather than paginating --
 // missing the true latest release would require more pre-release-only
-// tags pushed after it than the limit, which isn't a realistic release
-// cadence for this repo; a deliberate, accepted simplification.
+// tags pushed after it than that page size, which isn't a realistic
+// release cadence for this repo; a deliberate, accepted simplification.
 func (c *Client) Refresh(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/releases?limit=20", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/releases?per_page=20", nil)
 	if err != nil {
 		return fmt.Errorf("selfupdate: building request: %w", err)
 	}
+	// GitHub's API rejects requests with no User-Agent at all (403), and
+	// recommends this Accept value for the current API version.
+	req.Header.Set("User-Agent", "update-detector-selfupdate")
+	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("selfupdate: request failed: %w", err)
@@ -108,7 +111,7 @@ func (c *Client) Refresh(ctx context.Context) error {
 }
 
 // highestRelease returns the highest-versioned tag among releases (by
-// version.Compare, not by list order -- Forgejo's own ordering isn't
+// version.Compare, not by list order -- GitHub's own ordering isn't
 // relied on) whose stage meets channel (version.MeetsChannel): a
 // "release" channel skips any pre-release tag entirely; a pre-release
 // channel (alpha/beta/rc) also considers tags at that stage or more

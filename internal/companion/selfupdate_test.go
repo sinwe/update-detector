@@ -256,7 +256,7 @@ case "$1" in
         shift 3
         for id in "$@"; do
           case "$id" in
-            cid123) echo "forgejo.winar.to/winarto/update-detector:v0.9.0" ;;
+            cid123) echo "ghcr.io/sinwe/update-detector:v0.9.0" ;;
           esac
         done
         ;;
@@ -286,10 +286,10 @@ esac
 	// a plain `docker compose pull` would just re-fetch whatever tag the
 	// compose file already references (":v0.9.0" here), not the actually
 	// requested target version, which is exactly the bug this exercises.
-	if !strings.Contains(calls, "pull forgejo.winar.to/winarto/update-detector:v0.11.0") {
+	if !strings.Contains(calls, "pull ghcr.io/sinwe/update-detector:v0.11.0") {
 		t.Fatalf("expected a pull of the target version, got log: %q", calls)
 	}
-	if !strings.Contains(calls, "tag forgejo.winar.to/winarto/update-detector:v0.11.0 forgejo.winar.to/winarto/update-detector:v0.9.0") {
+	if !strings.Contains(calls, "tag ghcr.io/sinwe/update-detector:v0.11.0 ghcr.io/sinwe/update-detector:v0.9.0") {
 		t.Fatalf("expected the target version retagged onto the currently-referenced tag, got log: %q", calls)
 	}
 	if !strings.Contains(calls, "-f "+composeDir+"/docker-compose.yml up -d update-detector") {
@@ -332,7 +332,7 @@ case "$1" in
     shift 3
     for id in "$@"; do
       case "$id" in
-        cid123) echo "forgejo.winar.to/winarto/update-detector:v0.9.0" ;;
+        cid123) echo "ghcr.io/sinwe/update-detector:v0.9.0" ;;
       esac
     done
     ;;

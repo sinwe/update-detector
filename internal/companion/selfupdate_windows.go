@@ -59,7 +59,7 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 		return aggregator.ActionResult{ActionID: action.ID, Message: fmt.Sprintf(format, args...), CompletedAt: time.Now()}
 	}
 
-	// Resolve the download URL from the Forgejo API.
+	// Resolve the download URL from the GitHub API.
 	assetName := "update-detector-companion-windows-amd64.exe"
 	downloadURL, err := resolveAssetURL(action.TargetVersion, assetName)
 	if err != nil {
@@ -91,16 +91,24 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 	}
 }
 
-// resolveAssetURL queries the Forgejo API for the download URL of the
+// resolveAssetURL queries the GitHub API for the download URL of the
 // given asset name in the specified release.
 func resolveAssetURL(targetVersion, assetName string) (string, error) {
-	apiBase := os.Getenv("FORGEJO_API_BASE")
+	apiBase := os.Getenv("GITHUB_API_BASE")
 	if apiBase == "" {
-		apiBase = "https://forgejo.winar.to/api/v1/repos/winarto/update-detector"
+		apiBase = "https://api.github.com/repos/sinwe/update-detector"
 	}
 
 	releaseURL := apiBase + "/releases/tags/" + targetVersion
-	resp, err := http.Get(releaseURL)
+	req, err := http.NewRequest(http.MethodGet, releaseURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("building request: %w", err)
+	}
+	// GitHub's API rejects requests with no User-Agent at all (403), and
+	// recommends this Accept value for the current API version.
+	req.Header.Set("User-Agent", "update-detector-companion")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching release info: %w", err)
 	}

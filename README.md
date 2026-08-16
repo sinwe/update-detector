@@ -40,7 +40,7 @@ cloning this repo.
 
 ```sh
 mkdir -p ~/update-detector && cd ~/update-detector
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.yml -o docker-compose.yml
 ```
 
 Set the hostname this instance reports as (so multiple hosts don't look
@@ -100,7 +100,7 @@ e.g. testing both roles on one box) — see the warning below for why:
 
 ```sh
 mkdir -p ~/update-aggregator && cd ~/update-aggregator
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
 docker compose -f docker-compose.aggregator.yml pull
 docker compose -f docker-compose.aggregator.yml up -d
 ```
@@ -394,7 +394,7 @@ host already considers legitimate, never arbitrary command execution.
 `AGGREGATOR_URL` set):
 
 ```sh
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 ```
 
 (On WSL2, this same script detects that and offers a different, native
@@ -407,7 +407,7 @@ install instead — see [WSL2](docs/wsl2.md).)
 (Administrator) Command Prompt:
 
 ```bat
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.bat -o install.bat
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.bat -o install.bat
 install.bat
 ```
 
@@ -426,7 +426,7 @@ installed — the companion here, or (on WSL2) the agent/aggregator from
 [WSL2](docs/wsl2.md):
 
 ```sh
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh -s -- --uninstall
 ```
 
 On Windows, from an elevated Command Prompt, after downloading
@@ -611,7 +611,7 @@ on `/admin`); nothing critical is lost either way.
 **3. Install the companion on that same host:**
 
 ```sh
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 systemctl status update-detector-companion --no-pager
 journalctl -u update-detector-companion -n 20 --no-pager
 ```
@@ -629,7 +629,7 @@ Repeat steps 2–4 for the next agent host.
 
 ## Self-updating update-detector
 
-The aggregator periodically checks Forgejo for a newer update-detector
+The aggregator periodically checks GitHub for a newer update-detector
 release (`SELF_UPDATE_CHECK_INTERVAL`, default 24h) and surfaces it on
 `/admin`: a fleet-wide banner if the aggregator itself is behind, and
 **Update agent**/**Update companion**/**Update aggregator** buttons on
@@ -740,7 +740,7 @@ in `docker-compose.yml`.
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
 | `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
-| `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check Forgejo for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
+| `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check GitHub for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
 | `SELF_UPDATE_CHANNEL` | `release` | Minimum release stage to surface as "available": `alpha`, `beta`, `rc`, or `release` — see [Self-updating update-detector](#self-updating-update-detector) |
 | `SELF_UPDATE_INCLUDE_PRERELEASE` | `false` | Deprecated: only consulted when `SELF_UPDATE_CHANNEL` is unset; `true` maps to `alpha`, `false` to `release` |
 
@@ -758,34 +758,34 @@ see [Triggering updates](#triggering-updates-companion).
 ## Releases
 
 Pushing a tag matching `v*` (e.g. `v0.1.0`) triggers
-`.forgejo/workflows/release.yml`, which builds both images for
+`.github/workflows/release.yml`, which builds both images for
 `linux/amd64` and `linux/arm64` (covers Ubuntu servers and Raspberry Pi 4B
-from the same tag, via QEMU emulation since the runner itself is amd64-only)
-and pushes them to Forgejo's container registry:
+from the same tag, via QEMU emulation since GitHub's hosted runners are
+amd64-only) and pushes them to GHCR:
 
 ```
-forgejo.winar.to/winarto/update-detector:<tag>    and  :latest
-forgejo.winar.to/winarto/update-aggregator:<tag>  and  :latest
+ghcr.io/sinwe/update-detector:<tag>    and  :latest
+ghcr.io/sinwe/update-aggregator:<tag>  and  :latest
 ```
+
+(`:latest` is skipped for `-alpha`/`-beta`/`-rc` tags — see
+[Self-updating update-detector](#self-updating-update-detector) for why.)
 
 The same tag also cross-compiles all three binaries — `update-detector`,
-`update-aggregator`, and `update-detector-companion` — for `linux/amd64`
-and `linux/arm64` (no QEMU needed — Go cross-compiles natively) and
-attaches all six as plain binary assets on that tag's Forgejo release.
-`install.sh` fetches whichever it needs: just the companion on a
-Docker-based host (see [Triggering updates](#triggering-updates-companion)),
-or any/all three for a native WSL2 install (see [WSL2](docs/wsl2.md)). The
-aggregator also reads this same release list on its own, periodically, to
-know when a newer version is available to offer from `/admin` — see
+`update-aggregator`, and `update-detector-companion` — for `linux/amd64`,
+`linux/arm64`, and `windows/amd64` (no QEMU needed for these — Go
+cross-compiles natively) and attaches all nine as plain binary assets on
+that tag's GitHub release. `install.sh`/`install.bat` fetch whichever they
+need: just the companion on a Docker-based host (see
+[Triggering updates](#triggering-updates-companion)), or any/all three for
+a native WSL2 or Windows install (see [WSL2](docs/wsl2.md)). The aggregator
+also reads this same release list on its own, periodically, to know when a
+newer version is available to offer from `/admin` — see
 [Self-updating update-detector](#self-updating-update-detector).
 
-Requires two repo secrets, scoped separately on purpose (least-privilege —
-a leaked/misused token from one step can't touch what the other covers):
-
-- `REGISTRY_TOKEN` — a Forgejo access token with `write:package`/`read:package`
-  scope, used for the image pushes.
-- `RELEASE_TOKEN` — a Forgejo access token with read/write repository scope,
-  used only for creating the release and uploading the binary assets.
+No separate secrets needed — the workflow uses the repo's own built-in
+`GITHUB_TOKEN` (with `contents: write` and `packages: write` permissions)
+for both the GHCR image pushes and creating the release/uploading assets.
 
 Deploying a release is then just `docker compose pull && docker compose up
 -d` on each host — no `--build` needed, since `docker-compose.yml` /
@@ -799,8 +799,8 @@ fetch the one compose file it actually needs with `curl` or `wget`:
 On an agent host:
 
 ```sh
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.yml -o docker-compose.yml
-# or: wget https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.yml -o docker-compose.yml
+# or: wget https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.yml
 
 docker compose pull
 docker compose up -d
@@ -809,8 +809,8 @@ docker compose up -d
 On the aggregator host:
 
 ```sh
-curl -fsSL https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
-# or: wget https://forgejo.winar.to/winarto/update-detector/raw/branch/main/docker-compose.aggregator.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
+# or: wget https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.aggregator.yml
 
 docker compose -f docker-compose.aggregator.yml pull
 docker compose -f docker-compose.aggregator.yml up -d
