@@ -78,7 +78,7 @@ interactively instead of silently defaulting to push-mode-disabled.
 ### 2. Run install.sh and pick components
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo -E sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo -E sh
 ```
 
 (`-E` carries through anything you exported in step 1 — plain `sudo`
@@ -97,7 +97,7 @@ For scripted/non-interactive use (e.g. provisioning automation), skip the
 prompt entirely with `INSTALL_COMPONENTS` (comma-separated):
 
 ```sh
-INSTALL_COMPONENTS=aggregator,agent,companion curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo -E sh
+INSTALL_COMPONENTS=aggregator,agent,companion curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo -E sh
 ```
 
 ### 3. Check that everything you picked actually started
@@ -170,7 +170,7 @@ silently falling back to defaults:
 export AGGREGATOR_URL=http://localhost:9090
 export TELEGRAM_BOT_TOKEN=your-bot-token-from-BotFather
 export TELEGRAM_CHAT_ID=your-chat-id
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo -E sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo -E sh
 ```
 
 **Change config after installing (or at any time)** — edit the systemd

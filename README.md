@@ -40,7 +40,7 @@ cloning this repo.
 
 ```sh
 mkdir -p ~/update-detector && cd ~/update-detector
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.yml -o docker-compose.yml
 ```
 
 Set the hostname this instance reports as (so multiple hosts don't look
@@ -100,7 +100,7 @@ e.g. testing both roles on one box) — see the warning below for why:
 
 ```sh
 mkdir -p ~/update-aggregator && cd ~/update-aggregator
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
 docker compose -f docker-compose.aggregator.yml pull
 docker compose -f docker-compose.aggregator.yml up -d
 ```
@@ -394,7 +394,7 @@ host already considers legitimate, never arbitrary command execution.
 `AGGREGATOR_URL` set):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 ```
 
 (On WSL2, this same script detects that and offers a different, native
@@ -407,7 +407,7 @@ install instead — see [WSL2](docs/wsl2.md).)
 (Administrator) Command Prompt:
 
 ```bat
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.bat -o install.bat
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.bat -o install.bat
 install.bat
 ```
 
@@ -426,7 +426,7 @@ installed — the companion here, or (on WSL2) the agent/aggregator from
 [WSL2](docs/wsl2.md):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo sh -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh -s -- --uninstall
 ```
 
 On Windows, from an elevated Command Prompt, after downloading
@@ -611,7 +611,7 @@ on `/admin`); nothing critical is lost either way.
 **3. Install the companion on that same host:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 systemctl status update-detector-companion --no-pager
 journalctl -u update-detector-companion -n 20 --no-pager
 ```
@@ -793,8 +793,8 @@ fetch the one compose file it actually needs with `curl` or `wget`:
 On an agent host:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/docker-compose.yml -o docker-compose.yml
-# or: wget https://raw.githubusercontent.com/winarto/update-detector/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.yml -o docker-compose.yml
+# or: wget https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.yml
 
 docker compose pull
 docker compose up -d
@@ -803,8 +803,8 @@ docker compose up -d
 On the aggregator host:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
-# or: wget https://raw.githubusercontent.com/winarto/update-detector/main/docker-compose.aggregator.yml
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.aggregator.yml -o docker-compose.aggregator.yml
+# or: wget https://raw.githubusercontent.com/sinwe/update-detector/main/docker-compose.aggregator.yml
 
 docker compose -f docker-compose.aggregator.yml pull
 docker compose -f docker-compose.aggregator.yml up -d
