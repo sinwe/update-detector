@@ -2,7 +2,7 @@
 # install.sh installs update-detector's pieces as native systemd services.
 # Run as root:
 #
-#   curl -fsSL https://raw.githubusercontent.com/winarto/update-detector/main/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 #
 # On a normal Linux host, this installs just the companion
 # (update-detector-companion), auto-discovering everything it needs from an
@@ -100,15 +100,28 @@ resolve_asset_url() {
   else
     release_url="$GITHUB_API/releases/tags/$INSTALL_VERSION"
   fi
-  # Deliberately not `curl -f ... | jq ...`: same reasoning as
-  # release.yml's own publish step -- a failed request here would silently
-  # produce an empty result via a suppressed body, rather than a clear
-  # error. grep+sed avoids needing jq on the *installing* host too, which
-  # (unlike the release workflow's own runner) we don't control.
-  curl -fsSL "$release_url" \
+
+  # Try the preferred release URL first
+  download_url=$(curl -fsSL "$release_url" \
     | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
     | head -1 \
-    | sed -E 's/.*"(https[^"]+)"$/\1/'
+    | sed -E 's/.*"(https[^"]+)"$/\1/')
+
+  # If not found and we requested "latest", GitHub's /releases/latest returns
+  # 404 when only prereleases exist. Fall back to listing releases (which
+  # includes prereleases) and pick the first tag_name we find.
+  if [ -z "$download_url" ] && [ "$INSTALL_VERSION" = "latest" ]; then
+    fallback_tag=$(curl -fsSL "$GITHUB_API/releases" | grep -o '"tag_name"\s*:\s*"[^"]\+"' | sed -E 's/.*"([^"]+)"$/\1/' | head -1)
+    if [ -n "$fallback_tag" ]; then
+      release_url="$GITHUB_API/releases/tags/$fallback_tag"
+      download_url=$(curl -fsSL "$release_url" \
+        | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
+        | head -1 \
+        | sed -E 's/.*"(https[^"]+)"$/\1/')
+    fi
+  fi
+
+  printf '%s' "$download_url"
 }
 
 # download_binary NAME DEST -> downloads NAME-linux-$goarch to DEST,
