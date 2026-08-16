@@ -795,6 +795,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
           }
           return;
         }
+        const body = await resp.json();
+        if (body.refresh_error) {
+          // The channel switch itself succeeded, but the immediate refresh
+          // that's supposed to make it visible right away didn't -- without
+          // this, a transient failure here looks identical to "no update on
+          // this channel" and can go unnoticed until the next scheduled
+          // check (see SELF_UPDATE_CHECK_INTERVAL, default 24h).
+          alert('channel switched to ' + channel + ', but refreshing the version check failed: ' + body.refresh_error + '\n\nThe page will still reload; retry the switch (or wait for the next scheduled check) to pick up the latest version.');
+        }
         location.reload();
       } catch (e) {
         alert('channel switch failed: ' + e);

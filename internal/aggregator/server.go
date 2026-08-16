@@ -852,6 +852,12 @@ func (s *Server) handleAdminSelfUpdateChannel(w http.ResponseWriter, r *http.Req
 	// transient Refresh failure.
 	resp := map[string]any{"channel": req.Channel}
 	if err := s.selfUpdate.Refresh(r.Context()); err != nil {
+		// Also logged server-side, not just returned in the response body --
+		// the admin page's JS surfaces this to whoever triggered the switch,
+		// but a channel switch made once and never revisited would
+		// otherwise leave a stale LatestVersion with no trace anywhere an
+		// operator might look afterwards.
+		log.Printf("handleAdminSelfUpdateChannel: switched to %q but the immediate refresh failed (stale LatestVersion until the next scheduled check): %v", req.Channel, err)
 		resp["refresh_error"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, resp)
