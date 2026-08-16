@@ -63,9 +63,9 @@ func run(ctx context.Context) error {
 		log.Println("apply endpoint enabled")
 	}
 
-	selfUpdateClient := selfupdate.New("", cfg.SelfUpdateIncludePreRelease)
+	selfUpdateClient := selfupdate.New("", cfg.SelfUpdateChannel)
 	log.Printf("self-update check enabled (channel=%s, interval=%s)",
-		selfUpdateChannelLabel(cfg.SelfUpdateIncludePreRelease), cfg.SelfUpdateCheckInterval)
+		cfg.SelfUpdateChannel, cfg.SelfUpdateCheckInterval)
 
 	hub := aggregator.NewCompanionHub()
 	outputHub := aggregator.NewOutputHub()
@@ -91,11 +91,4 @@ func run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return httpSrv.Shutdown(shutdownCtx)
-}
-
-func selfUpdateChannelLabel(includePreRelease bool) string {
-	if includePreRelease {
-		return "prerelease"
-	}
-	return "stable"
 }

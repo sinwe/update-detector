@@ -468,11 +468,11 @@ paths:
     post:
       summary: Switch which release channel "latest available" self-update checks consider
       description: >
-        Overrides SELF_UPDATE_INCLUDE_PRERELEASE at runtime and refreshes
-        immediately, so a pre-release cut can be tested against a live
-        fleet without editing the aggregator's env and restarting it.
-        Resets back to SELF_UPDATE_INCLUDE_PRERELEASE's own value on the
-        next aggregator restart, same as the version cache itself.
+        Overrides SELF_UPDATE_CHANNEL at runtime and refreshes immediately,
+        so a pre-release cut can be tested against a live fleet without
+        editing the aggregator's env and restarting it. Resets back to
+        SELF_UPDATE_CHANNEL's own value on the next aggregator restart,
+        same as the version cache itself.
       operationId: setSelfUpdateChannel
       security:
         - adminApplySecret: []
@@ -490,10 +490,13 @@ paths:
               schema:
                 type: object
                 properties:
-                  include_prerelease:
-                    type: boolean
+                  channel:
+                    type: string
+                    enum: [alpha, beta, rc, release]
                   refresh_error:
                     type: string
+        "400":
+          description: Body doesn't parse, or channel isn't one of alpha/beta/rc/release
         "403":
           description: Missing or invalid X-Admin-Apply-Secret
         "501":
@@ -688,10 +691,11 @@ components:
 
     SelfUpdateChannelRequest:
       type: object
-      required: [include_prerelease]
+      required: [channel]
       properties:
-        include_prerelease:
-          type: boolean
+        channel:
+          type: string
+          enum: [alpha, beta, rc, release]
 
     EnrollRequest:
       type: object

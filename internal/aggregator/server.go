@@ -506,7 +506,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	data := adminPageData{AggregatorVersion: version.Version}
 	if s.selfUpdate != nil {
 		data.SelfUpdateConfigured = true
-		data.SelfUpdateIncludePreRelease = s.selfUpdate.IncludePreRelease()
+		data.SelfUpdateChannel = s.selfUpdate.Channel()
 		if latest, _, ok := s.selfUpdate.Latest(); ok {
 			data.LatestVersion = latest
 			if cmp, err := version.Compare(latest, version.Version); err == nil && cmp > 0 {
@@ -805,7 +805,7 @@ func (s *Server) handleAdminAgentVersion(w http.ResponseWriter, _ *http.Request,
 }
 
 type selfUpdateChannelRequest struct {
-	IncludePreRelease bool `json:"include_prerelease"`
+	Channel string `json:"channel"`
 }
 
 // handleAdminSelfUpdateChannel switches which release channel
@@ -840,14 +840,17 @@ func (s *Server) handleAdminSelfUpdateChannel(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	s.selfUpdate.SetIncludePreRelease(req.IncludePreRelease)
+	if err := s.selfUpdate.SetChannel(req.Channel); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Refresh synchronously so the very next GET /admin reflects the new
 	// channel right away, instead of waiting for the next
 	// SELF_UPDATE_CHECK_INTERVAL tick. A refresh failure here doesn't undo
 	// the channel switch -- it just means the operator sees a stale
 	// LatestVersion until the next successful refresh, same as any other
 	// transient Refresh failure.
-	resp := map[string]any{"include_prerelease": req.IncludePreRelease}
+	resp := map[string]any{"channel": req.Channel}
 	if err := s.selfUpdate.Refresh(r.Context()); err != nil {
 		resp["refresh_error"] = err.Error()
 	}

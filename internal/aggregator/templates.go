@@ -96,10 +96,10 @@ type adminPageData struct {
 	// a selfupdate.Client at all -- hides the channel toggle entirely
 	// rather than showing a control that would just 501 on every use.
 	SelfUpdateConfigured bool
-	// SelfUpdateIncludePreRelease mirrors selfupdate.Client's own current
-	// channel (SELF_UPDATE_INCLUDE_PRERELEASE at startup, or whatever an
-	// operator has since switched it to via the toggle below).
-	SelfUpdateIncludePreRelease bool
+	// SelfUpdateChannel mirrors selfupdate.Client's own current channel
+	// (SELF_UPDATE_CHANNEL at startup, or whatever an operator has since
+	// switched it to via the selector below) -- one of version.Channels.
+	SelfUpdateChannel string
 	Pending                     []agentView
 	Approved                    []agentView
 	Rejected                    []agentView
@@ -456,8 +456,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
     {{if .SelfUpdateConfigured}}
     <div class="channel-row">
       Channel:
-      <label><input type="radio" name="selfUpdateChannel" value="release" {{if not .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(false)"> Release</label>
-      <label><input type="radio" name="selfUpdateChannel" value="prerelease" {{if .SelfUpdateIncludePreRelease}}checked{{end}} onchange="postSelfUpdateChannel(true)"> Pre-release</label>
+      <label><input type="radio" name="selfUpdateChannel" value="alpha" {{if eq .SelfUpdateChannel "alpha"}}checked{{end}} onchange="postSelfUpdateChannel('alpha')"> Alpha</label>
+      <label><input type="radio" name="selfUpdateChannel" value="beta" {{if eq .SelfUpdateChannel "beta"}}checked{{end}} onchange="postSelfUpdateChannel('beta')"> Beta</label>
+      <label><input type="radio" name="selfUpdateChannel" value="rc" {{if eq .SelfUpdateChannel "rc"}}checked{{end}} onchange="postSelfUpdateChannel('rc')"> RC</label>
+      <label><input type="radio" name="selfUpdateChannel" value="release" {{if eq .SelfUpdateChannel "release"}}checked{{end}} onchange="postSelfUpdateChannel('release')"> Release</label>
     </div>
     {{end}}
 
@@ -775,14 +777,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
     }
 
-    async function postSelfUpdateChannel(includePreRelease) {
+    async function postSelfUpdateChannel(channel) {
       const secret = getAdminApplySecret();
       if (!secret) return;
       try {
         const resp = await fetch('/admin/self-update-channel', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', 'X-Admin-Apply-Secret': secret},
-          body: JSON.stringify({include_prerelease: includePreRelease}),
+          body: JSON.stringify({channel: channel}),
         });
         if (!resp.ok) {
           if (resp.status === 403) {

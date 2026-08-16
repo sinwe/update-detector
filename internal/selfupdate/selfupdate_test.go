@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-func serverServing(t *testing.T, body string, status int, includePreRelease bool) (*httptest.Server, *Client) {
+func serverServing(t *testing.T, body string, status int, channel string) (*httptest.Server, *Client) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return srv, New(srv.URL, includePreRelease)
+	return srv, New(srv.URL, channel)
 }
 
 func TestRefreshStableChannelPicksHighestRealReleaseIgnoringPreReleasesAndOrder(t *testing.T) {
@@ -29,7 +29,7 @@ func TestRefreshStableChannelPicksHighestRealReleaseIgnoringPreReleasesAndOrder(
 		{"tag_name": "v0.10.0"},
 		{"tag_name": "v0.10.0-rc1"}
 	]`
-	_, c := serverServing(t, body, http.StatusOK, false)
+	_, c := serverServing(t, body, http.StatusOK, "release")
 
 	if err := c.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh failed: %v", err)
@@ -43,13 +43,13 @@ func TestRefreshStableChannelPicksHighestRealReleaseIgnoringPreReleasesAndOrder(
 	}
 }
 
-func TestRefreshPreReleaseChannelPrefersNewestRc(t *testing.T) {
+func TestRefreshRcChannelPrefersRealReleaseOfSameVersion(t *testing.T) {
 	body := `[
 		{"tag_name": "v0.10.0"},
 		{"tag_name": "v0.10.0-rc2"},
 		{"tag_name": "v0.10.0-rc1"}
 	]`
-	_, c := serverServing(t, body, http.StatusOK, true)
+	_, c := serverServing(t, body, http.StatusOK, "rc")
 
 	if err := c.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh failed: %v", err)
@@ -60,9 +60,9 @@ func TestRefreshPreReleaseChannelPrefersNewestRc(t *testing.T) {
 	}
 }
 
-func TestRefreshPreReleaseChannelPicksRcNewerThanAnyRealRelease(t *testing.T) {
+func TestRefreshRcChannelPicksRcNewerThanAnyRealRelease(t *testing.T) {
 	body := `[{"tag_name": "v0.10.0"}, {"tag_name": "v0.11.0-rc1"}]`
-	_, c := serverServing(t, body, http.StatusOK, true)
+	_, c := serverServing(t, body, http.StatusOK, "rc")
 
 	if err := c.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh failed: %v", err)
@@ -73,8 +73,38 @@ func TestRefreshPreReleaseChannelPicksRcNewerThanAnyRealRelease(t *testing.T) {
 	}
 }
 
+func TestRefreshBetaChannelExcludesAlphaButIncludesBetaAndAbove(t *testing.T) {
+	body := `[
+		{"tag_name": "v0.11.0-alpha3"},
+		{"tag_name": "v0.10.0-beta1"},
+		{"tag_name": "v0.9.0"}
+	]`
+	_, c := serverServing(t, body, http.StatusOK, "beta")
+
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	tag, _, _ := c.Latest()
+	if tag != "v0.10.0-beta1" {
+		t.Fatalf("got tag %q, want v0.10.0-beta1 (newest tag at beta or more stable, excluding the newer alpha)", tag)
+	}
+}
+
+func TestRefreshAlphaChannelAdmitsEverything(t *testing.T) {
+	body := `[{"tag_name": "v0.9.0"}, {"tag_name": "v0.11.0-alpha1"}]`
+	_, c := serverServing(t, body, http.StatusOK, "alpha")
+
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	tag, _, _ := c.Latest()
+	if tag != "v0.11.0-alpha1" {
+		t.Fatalf("got tag %q, want v0.11.0-alpha1 (the alpha channel admits every stage)", tag)
+	}
+}
+
 func TestRefreshFailurePreservesPreviousResult(t *testing.T) {
-	srv, c := serverServing(t, `[{"tag_name": "v0.10.0"}]`, http.StatusOK, false)
+	srv, c := serverServing(t, `[{"tag_name": "v0.10.0"}]`, http.StatusOK, "release")
 	if err := c.Refresh(context.Background()); err != nil {
 		t.Fatalf("first Refresh failed: %v", err)
 	}
@@ -93,7 +123,7 @@ func TestRefreshFailurePreservesPreviousResult(t *testing.T) {
 }
 
 func TestRefreshNoMatchingReleaseFound(t *testing.T) {
-	_, c := serverServing(t, `[{"tag_name": "v0.10.0-rc1"}]`, http.StatusOK, false)
+	_, c := serverServing(t, `[{"tag_name": "v0.10.0-rc1"}]`, http.StatusOK, "release")
 	if err := c.Refresh(context.Background()); err == nil {
 		t.Fatal("expected an error when every release is a pre-release and the channel excludes them")
 	}
@@ -104,7 +134,7 @@ func TestRefreshNoMatchingReleaseFound(t *testing.T) {
 
 func TestRefreshSkipsUnparseableTagsWithoutFailingTheScan(t *testing.T) {
 	body := `[{"tag_name": "some-unrelated-tag"}, {"tag_name": "v0.10.0"}]`
-	_, c := serverServing(t, body, http.StatusOK, false)
+	_, c := serverServing(t, body, http.StatusOK, "release")
 	if err := c.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh failed: %v", err)
 	}
@@ -114,17 +144,36 @@ func TestRefreshSkipsUnparseableTagsWithoutFailingTheScan(t *testing.T) {
 	}
 }
 
+func TestNewPanicsOnInvalidChannel(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected New to panic on an invalid channel")
+		}
+	}()
+	New("", "stable")
+}
+
+func TestSetChannelRejectsInvalidChannel(t *testing.T) {
+	c := New("", "release")
+	if err := c.SetChannel("stable"); err == nil {
+		t.Fatal("expected SetChannel to reject an invalid channel")
+	}
+	if got := c.Channel(); got != "release" {
+		t.Fatalf("got channel %q after a rejected SetChannel, want unchanged \"release\"", got)
+	}
+}
+
 func TestHighestReleaseHelper(t *testing.T) {
 	releases := []release{{TagName: "v1.0.0"}, {TagName: "v2.0.0-rc1"}, {TagName: "v1.5.0"}}
 
-	tag, ok := highestRelease(releases, false)
+	tag, ok := highestRelease(releases, "release")
 	if !ok || tag != "v1.5.0" {
-		t.Fatalf("stable channel: got tag=%q ok=%v, want v1.5.0 (v2.0.0-rc1 excluded)", tag, ok)
+		t.Fatalf("release channel: got tag=%q ok=%v, want v1.5.0 (v2.0.0-rc1 excluded)", tag, ok)
 	}
 
-	tag, ok = highestRelease(releases, true)
+	tag, ok = highestRelease(releases, "alpha")
 	if !ok || tag != "v2.0.0-rc1" {
-		t.Fatalf("pre-release channel: got tag=%q ok=%v, want v2.0.0-rc1 (highest overall)", tag, ok)
+		t.Fatalf("alpha channel: got tag=%q ok=%v, want v2.0.0-rc1 (highest overall)", tag, ok)
 	}
 }
 
@@ -135,7 +184,7 @@ func TestRunRefreshesImmediatelyAndOnTimer(t *testing.T) {
 		_ = json.NewEncoder(w).Encode([]release{{TagName: "v0.10.0"}})
 	}))
 	defer srv.Close()
-	c := New(srv.URL, false)
+	c := New(srv.URL, "release")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()

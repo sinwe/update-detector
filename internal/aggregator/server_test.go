@@ -39,7 +39,7 @@ func newTestServerWithLatestVersion(t *testing.T, adminApplySecret, latestVersio
 	}))
 	t.Cleanup(fakeForgejo.Close)
 
-	client := selfupdate.New(fakeForgejo.URL, false)
+	client := selfupdate.New(fakeForgejo.URL, "release")
 	if err := client.Refresh(context.Background()); err != nil {
 		t.Fatalf("refreshing fake selfupdate client: %v", err)
 	}
@@ -1340,7 +1340,7 @@ func TestHandleAdminSelfUpdateRejectsAgentOnlyStream(t *testing.T) {
 
 func TestHandleAdminSelfUpdateChannelRequiresConfiguredSelfUpdate(t *testing.T) {
 	s, _ := newTestServerWithSecret(t, "s3cret")
-	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{Channel: "alpha"}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("got status %d, want 501 when the server has no selfupdate.Client at all", rec.Code)
 	}
@@ -1348,13 +1348,13 @@ func TestHandleAdminSelfUpdateChannelRequiresConfiguredSelfUpdate(t *testing.T) 
 
 func TestHandleAdminSelfUpdateChannelRequiresSecret(t *testing.T) {
 	s, _ := newTestServerWithLatestVersion(t, "", "v1.0.0")
-	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, nil)
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{Channel: "alpha"}, nil)
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("got status %d, want 501 when ADMIN_APPLY_SHARED_SECRET is unset", rec.Code)
 	}
 
 	s2, _ := newTestServerWithLatestVersion(t, "s3cret", "v1.0.0")
-	rec = doJSON(t, s2, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, nil)
+	rec = doJSON(t, s2, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{Channel: "alpha"}, nil)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("got status %d, want 403 with no secret header", rec.Code)
 	}
@@ -1362,16 +1362,27 @@ func TestHandleAdminSelfUpdateChannelRequiresSecret(t *testing.T) {
 
 func TestHandleAdminSelfUpdateChannelSwitchesAndRefreshesImmediately(t *testing.T) {
 	s, _ := newTestServerWithLatestVersion(t, "s3cret", "v1.0.0")
-	if s.selfUpdate.IncludePreRelease() {
-		t.Fatal("expected the fake client to start on the release-only channel")
+	if got := s.selfUpdate.Channel(); got != "release" {
+		t.Fatalf("expected the fake client to start on the release channel, got %q", got)
 	}
 
-	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{IncludePreRelease: true}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{Channel: "alpha"}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, body %s, want 200", rec.Code, rec.Body.String())
 	}
-	if !s.selfUpdate.IncludePreRelease() {
-		t.Fatal("expected the channel to actually switch to include-prerelease")
+	if got := s.selfUpdate.Channel(); got != "alpha" {
+		t.Fatalf("expected the channel to actually switch to alpha, got %q", got)
+	}
+}
+
+func TestHandleAdminSelfUpdateChannelRejectsInvalidChannel(t *testing.T) {
+	s, _ := newTestServerWithLatestVersion(t, "s3cret", "v1.0.0")
+	rec := doJSON(t, s, http.MethodPost, "/admin/self-update-channel", selfUpdateChannelRequest{Channel: "stable"}, map[string]string{"X-Admin-Apply-Secret": "s3cret"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, body %s, want 400 for an unrecognized channel name", rec.Code, rec.Body.String())
+	}
+	if got := s.selfUpdate.Channel(); got != "release" {
+		t.Fatalf("expected the channel to remain unchanged after a rejected switch, got %q", got)
 	}
 }
 

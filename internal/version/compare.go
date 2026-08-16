@@ -124,7 +124,16 @@ func Stage(v string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	switch p.stage {
+	return stageName(p.stage)
+}
+
+// Channels lists the valid channel names, ordered least to most stable --
+// the same order a "minimum acceptable stage" selector should present
+// them in.
+var Channels = []string{"alpha", "beta", "rc", "release"}
+
+func stageName(s stage) (string, error) {
+	switch s {
 	case stageAlpha:
 		return "alpha", nil
 	case stageBeta:
@@ -134,8 +143,49 @@ func Stage(v string) (string, error) {
 	case stageRelease:
 		return "release", nil
 	default:
-		return "", fmt.Errorf("version: unknown stage in %q", v)
+		return "", fmt.Errorf("version: unknown stage %d", s)
 	}
+}
+
+func parseChannel(channel string) (stage, error) {
+	switch channel {
+	case "alpha":
+		return stageAlpha, nil
+	case "beta":
+		return stageBeta, nil
+	case "rc":
+		return stageRC, nil
+	case "release":
+		return stageRelease, nil
+	default:
+		return stageInvalid, fmt.Errorf("version: %q is not a valid channel (want one of %v)", channel, Channels)
+	}
+}
+
+// ValidChannel reports whether channel is one of the four recognized
+// channel names ("alpha", "beta", "rc", "release").
+func ValidChannel(channel string) bool {
+	_, err := parseChannel(channel)
+	return err == nil
+}
+
+// MeetsChannel reports whether v's stage is at least as stable as channel
+// (e.g. a "-rc1" tag meets the "beta" channel, since rc > beta; a
+// "-beta1" tag does not meet the "rc" channel). channel must be one of
+// Channels; v must parse as this repo's tag convention. Returns an error,
+// rather than a guess, for either -- callers making a trust decision
+// (which release is "available" on a given channel) must fail closed
+// rather than silently admit or reject a tag.
+func MeetsChannel(v, channel string) (bool, error) {
+	p, err := parseTag(v)
+	if err != nil {
+		return false, err
+	}
+	minStage, err := parseChannel(channel)
+	if err != nil {
+		return false, err
+	}
+	return p.stage >= minStage, nil
 }
 
 func cmpInt(a, b int) int {

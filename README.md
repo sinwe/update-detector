@@ -684,15 +684,20 @@ come back" rather than going silent; the action's real outcome still
 arrives once the new process comes up and reports back, same as it
 always has.
 
-Set `SELF_UPDATE_INCLUDE_PRERELEASE=true` on the aggregator to also
-surface `-rcN` tags as "available" (always picking the single highest
-tag across both real releases and pre-releases) — off by default, since
-most fleets should only ever be offered stable releases. The admin page
-also has a live toggle for this (release-only vs. include pre-releases)
-that takes effect immediately without a restart — handy for testing a
-pre-release cut against a live fleet — but it resets back to whatever
-`SELF_UPDATE_INCLUDE_PRERELEASE` says on every aggregator restart, same
-as the version cache itself.
+Releases move through four stages, in order: `alpha` < `beta` < `rc` <
+`release` (`v0.10.0-alpha1`, `v0.10.0-beta1`, `v0.10.0-rc1`, `v0.10.0`).
+Set `SELF_UPDATE_CHANNEL` on the aggregator to the *minimum* stage you
+want surfaced as "available" — `release` (the default) only ever offers
+a real release; `rc` also offers rc builds (and prefers a newer rc over
+an older real release); `beta` also offers beta and rc; `alpha` offers
+everything. Most fleets should stay on `release`. The admin page also
+has a live channel selector (alpha/beta/rc/release) that takes effect
+immediately without a restart — handy for testing a pre-release cut
+against a live fleet — but it resets back to whatever `SELF_UPDATE_CHANNEL`
+says on every aggregator restart, same as the version cache itself.
+(The older `SELF_UPDATE_INCLUDE_PRERELEASE` boolean still works if
+`SELF_UPDATE_CHANNEL` is unset — `true` maps to `alpha`, `false` to
+`release` — but new setups should use `SELF_UPDATE_CHANNEL` directly.)
 
 ## API reference
 
@@ -736,7 +741,8 @@ in `docker-compose.yml`.
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
 | `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
 | `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check Forgejo for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
-| `SELF_UPDATE_INCLUDE_PRERELEASE` | `false` | `true` also considers `-rcN` tags, and always prefers the single highest tag across both channels — see [Self-updating update-detector](#self-updating-update-detector) |
+| `SELF_UPDATE_CHANNEL` | `release` | Minimum release stage to surface as "available": `alpha`, `beta`, `rc`, or `release` — see [Self-updating update-detector](#self-updating-update-detector) |
+| `SELF_UPDATE_INCLUDE_PRERELEASE` | `false` | Deprecated: only consulted when `SELF_UPDATE_CHANNEL` is unset; `true` maps to `alpha`, `false` to `release` |
 
 `update-detector-companion` (host-native, not a container) reads:
 
