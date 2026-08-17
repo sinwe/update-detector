@@ -173,8 +173,15 @@ goto :eof
 :stop_if_running
 sc query "%~1" >nul 2>&1
 if errorlevel 1 goto :eof
-sc query "%~1" | find "RUNNING" >nul
-if errorlevel 1 goto :eof
+rem Checking for "not STOPPED" rather than "is RUNNING" is deliberate --
+rem confirmed live, a service wedged in START_PENDING (never finishing
+rem its transition, e.g. because the process itself is stuck) failed
+rem the old "RUNNING" check and was silently skipped here entirely,
+rem leaving its process alive to hold the port/file lock the reinstall
+rem below then failed against with "Access is denied.". Any state that
+rem isn't already STOPPED needs an actual stop attempt.
+sc query "%~1" | find "STOPPED" >nul
+if not errorlevel 1 goto :eof
 sc stop "%~1" >nul 2>&1
 set "tries=0"
 :stop_wait_loop
@@ -183,7 +190,16 @@ sc query "%~1" | find "STOPPED" >nul
 if not errorlevel 1 goto :eof
 set /a tries+=1
 if !tries! LSS 30 goto stop_wait_loop
-echo install.bat: warning: %~1 did not stop within 30s, continuing anyway >&2
+rem A service that never even reaches a state where it can accept a
+rem Stop control request (e.g. permanently wedged in START_PENDING)
+rem will never respond to `sc stop` at all -- confirmed live, this is
+rem exactly what leaves a reinstall unable to replace the binary.
+rem Force-kill its process directly as a last resort rather than just
+rem warning and leaving it running.
+echo install.bat: warning: %~1 did not stop within 30s -- force-killing its process instead >&2
+set "stuck_pid="
+for /f "tokens=3" %%P in ('sc query "%~1" ^| findstr /i "PID"') do set "stuck_pid=%%P"
+if defined stuck_pid taskkill /f /pid !stuck_pid! >nul 2>&1
 goto :eof
 
 :: start_service NAME -> starts NAME, printing sc.exe's own error text
