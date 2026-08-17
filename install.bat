@@ -291,15 +291,16 @@ if defined WINGET_ACCOUNT (
   set "wa_enable="
   set /p "wa_enable=Run %~1 as your own account so winget works too? [y/N]: "
   if /i not "!wa_enable!"=="y" goto :eof
-  rem .\USERNAME, not %USERDOMAIN%\%USERNAME% -- on a workgroup (non-
-  rem domain-joined) machine, USERDOMAIN is often just the literal
+  rem .\USERNAME, not %USERDOMAIN%\%USERNAME% -- on a workgroup,
+  rem non-domain-joined, machine USERDOMAIN is often just the literal
   rem string "WORKGROUP", which Windows doesn't recognize as a valid
-  rem account qualifier at all (confirmed live: SC error 1057, "account
-  rem name is invalid"). ".\" always means "this local machine"
-  rem regardless of workgroup/domain name. Must be a real local (or
-  rem domain, if typed over this default) account -- never a Microsoft/
-  rem email-style account, which SC cannot log a service on as at all
-  rem (confirmed live: error 1355, "specified domain does not exist").
+  rem account qualifier at all -- confirmed live: SC error 1057,
+  rem "account name is invalid". ".\" always means "this local
+  rem machine" regardless of workgroup/domain name. Must be a real
+  rem local account, or a domain account if typed over this default --
+  rem never a Microsoft/email-style account, which SC cannot log a
+  rem service on as at all -- confirmed live: error 1355, "specified
+  rem domain does not exist".
   set "wa_user=.\%USERNAME%"
   set /p "wa_user=Local or domain account, e.g. .\%USERNAME% [!wa_user!]: "
   for /f "delims=" %%P in ('powershell -NoProfile -Command "$p = Read-Host -AsSecureString 'Password for !wa_user!'; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p))"') do set "wa_pass=%%P"
