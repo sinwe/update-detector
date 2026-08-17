@@ -141,8 +141,23 @@ if errorlevel 1 (
   echo install.bat: download failed >&2
   exit /b 1
 )
-move /y "%~2.new" "%~2" >nul
-goto :eof
+rem Retry the swap a few times -- confirmed live, Windows Defender's
+rem real-time scan of a freshly-downloaded unsigned .exe can hold a
+rem brief lock on it that makes an immediate `move` fail with "Access
+rem is denied." even with the target service already fully stopped and
+rem nothing else on the system holding it -- the lock clears itself
+rem within a couple of seconds once the scan finishes.
+set "move_tries=0"
+:download_move_retry
+move /y "%~2.new" "%~2" >nul 2>&1
+if not errorlevel 1 goto :eof
+set /a move_tries+=1
+if !move_tries! LSS 5 (
+  timeout /t 1 /nobreak >nul
+  goto download_move_retry
+)
+echo install.bat: could not replace %~2 -- still locked after 5 retries (check for antivirus or other software holding it open) >&2
+exit /b 1
 
 :: cache_install_bat_for_companion -> saves a fresh copy of this exact
 :: script to CACHED_INSTALL_BAT, for the companion's own self-update
