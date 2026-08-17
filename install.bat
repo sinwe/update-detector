@@ -141,12 +141,20 @@ if errorlevel 1 (
   echo install.bat: download failed >&2
   exit /b 1
 )
-rem Retry the swap a few times -- confirmed live, Windows Defender's
-rem real-time scan of a freshly-downloaded unsigned .exe can hold a
-rem brief lock on it that makes an immediate `move` fail with "Access
-rem is denied." even with the target service already fully stopped and
-rem nothing else on the system holding it -- the lock clears itself
-rem within a couple of seconds once the scan finishes.
+rem move /y only suppresses the interactive overwrite prompt -- it does
+rem NOT clear a read-only attribute on the destination, and fails with
+rem this exact "Access is denied." if one is set (some antivirus/
+rem deployment tools mark installed executables read-only). Clear it
+rem unconditionally before attempting the swap; harmless no-op if the
+rem file doesn't exist yet (fresh install) or isn't read-only.
+if exist "%~2" attrib -R "%~2" >nul 2>&1
+rem Retry the swap a few times too -- confirmed live, Windows
+rem Defender's real-time scan of a freshly-downloaded unsigned .exe can
+rem separately hold a brief lock on it that makes an immediate `move`
+rem fail the same way even with the attribute cleared, the target
+rem service already fully stopped, and nothing else on the system
+rem holding it -- that lock clears itself within a couple of seconds
+rem once the scan finishes.
 set "move_tries=0"
 :download_move_retry
 move /y "%~2.new" "%~2" >nul 2>&1
