@@ -196,6 +196,16 @@ goto :eof
 :stop_if_running
 sc query "%~1" >nul 2>&1
 if errorlevel 1 goto :eof
+rem Disable auto-restart-on-failure BEFORE attempting a stop at all --
+rem confirmed live: create_or_update_service's own failure policy
+rem (restart every 5s) can relaunch a crash-looping service faster
+rem than the caller's subsequent download+swap completes, leaving a
+rem freshly-respawned process holding the binary file open even though
+rem `sc query` reported STOPPED at the moment this function checked
+rem it -- no amount of retrying the swap wins that race. Re-enabled
+rem automatically when create_or_update_service reconfigures the
+rem service again later in this same run.
+sc failure "%~1" reset= 0 actions= "" >nul 2>&1
 rem Checking for "not STOPPED" rather than "is RUNNING" is deliberate --
 rem confirmed live, a service wedged in START_PENDING (never finishing
 rem its transition, e.g. because the process itself is stuck) failed
