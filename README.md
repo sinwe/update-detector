@@ -308,8 +308,8 @@ an experimental detection-only implementation (`internal/checker/windows`):
   winget-sourced upgrade reports `security: false`. Winget's own table
   format has changed across App Installer versions, and winget itself
   may be entirely absent on locked-down or Server Windows machines, or
-  (see the account note below) simply not runnable from the account the
-  agent/companion happens to run as; none of that is treated as an error
+  (see below) simply not runnable from the account the agent/companion
+  happens to run as; none of that is treated as an error
   since winget is optional here — Windows Update above is what actually
   matters, and a winget failure only ever means missing out on its
   supplementary package list, not degraded detection overall. Any other
@@ -328,28 +328,25 @@ an experimental detection-only implementation (`internal/checker/windows`):
   around to grant an exception. Config is stored in each service's own
   registry `Environment` value (`REG_MULTI_SZ`), the native equivalent of
   systemd's `EnvironmentFile=`.
-- **winget account setup (optional), confirmed live**: every service
-  `install.bat` creates defaults to running as `LocalSystem`, under which
-  `winget` simply doesn't exist — `winget.exe` is an App Execution Alias
-  registered per-*user* (it lives under that user's own
+- **winget effectively never runs under `install.bat`, by design**: every
+  service `install.bat` creates defaults to running as `LocalSystem`,
+  under which `winget` simply doesn't exist — `winget.exe` is an App
+  Execution Alias registered per-*user* (it lives under that user's own
   `AppData\Local\Microsoft\WindowsApps`, on *that user's* `PATH` only),
   and `SYSTEM` has no such registration at all, confirmed live as
   `exec.LookPath("winget")` failing outright with "executable file not
-  found in %PATH%" even though `winget` works fine interactively. Since
-  winget is optional (see above — Windows Update, this checker's actual
-  primary signal, doesn't have this problem), `install.bat` only offers
-  to fix this, it never requires it: installing the agent or companion
-  prompts
-  ("Run \<service\> as your own account so winget works too? [y/N]"), and
-  if you say yes, prompts for the account (defaults to the one running
-  install.bat) and a masked password, reconfigures the service
-  (`sc config ... obj= ... password= ...`), and attempts to grant that
-  account the "Log on as a service" right via `secedit` so it doesn't
-  need a manual policy-editor step. Set `WINGET_ACCOUNT`/`WINGET_PASSWORD`
-  to answer non-interactively. If the automatic rights grant doesn't
-  take and the service then fails to start with Error 1069 ("logon
-  failure"), grant it manually: `secpol.msc` → Local Policies → User
-  Rights Assignment → "Log on as a service" → add that account.
+  found in %PATH%" even though `winget` works fine interactively.
+  `install.bat` used to offer to reconfigure a service's logon account
+  to work around this; that prompt/offer has been removed (the code
+  behind it is still there, just unreferenced) — since winget is only
+  a supplementary signal (Windows Update above is the real one, and
+  doesn't have this problem), the account-switching complexity wasn't
+  worth it, and the installer no longer prompts for or offers it at
+  all. The winget detection code itself still works if you manually
+  reconfigure a service to run as a real account
+  (`sc config <service> obj= ".\<user>" password= "<password>"`, plus
+  granting it "Log on as a service" via `secpol.msc` if needed) — it's
+  just not something the installer does for you anymore.
 - Also untested against a real Windows machine end-to-end for most of
   this: only fixture-based parsing tests and a hosted CI runner (no
   `winget`/real registry/real Windows Service state to exercise) have

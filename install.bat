@@ -551,7 +551,6 @@ if not defined TELEGRAM_CHAT_ID (
 call :create_or_update_service update-detector "update-detector agent" "%bin_path%"
 set "envval=LISTEN_ADDR=%LISTEN_ADDR%\0HOSTNAME_OVERRIDE=%HOSTNAME_OVERRIDE%\0CHECK_INTERVAL=%CHECK_INTERVAL%\0TELEGRAM_BOT_TOKEN=%TELEGRAM_BOT_TOKEN%\0TELEGRAM_CHAT_ID=%TELEGRAM_CHAT_ID%\0AGGREGATOR_URL=!resolved_aggregator_url!\0STATE_FILE=%data_dir%\state.json\0AGENT_IDENTITY_FILE=%data_dir%\agent-identity.json"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-detector" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
-call :configure_winget_account update-detector
 call :start_service update-detector
 
 echo install.bat: update-detector installed and started. Check: sc query update-detector
@@ -686,7 +685,6 @@ echo install.bat: aggregator=!agg_url! agent_status=!agent_status_url!
 call :create_or_update_service update-detector-companion "update-detector-companion" "%bin_path%"
 set "envval=COMPANION_SOCKET_PATH=\\.\pipe\update-detector\companion-token\0AGGREGATOR_URL=!agg_url!\0AGENT_STATUS_URL=!agent_status_url!"
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\update-detector-companion" /v Environment /t REG_MULTI_SZ /d "!envval!" /f >nul
-call :configure_winget_account update-detector-companion
 call :start_service update-detector-companion
 
 call :cache_install_bat_for_companion
