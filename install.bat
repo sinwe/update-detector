@@ -210,8 +210,19 @@ goto :eof
 :: check) works fine under LocalSystem regardless, so this is always
 :: skippable, and skipped by default. Set WINGET_ACCOUNT/WINGET_PASSWORD
 :: for non-interactive use (e.g. from another install.bat run, or a
-:: script); otherwise prompts once per service.
+:: script); otherwise prompts once per service -- but only the first
+:: time: if SERVICE is already configured to run as something other
+:: than LocalSystem (confirmed live to matter -- every self-update/
+:: manual re-run used to re-ask for a password even though the account
+:: was already set), this is skipped entirely rather than re-asking.
 :configure_winget_account
+set "current_start_name="
+for /f "delims=" %%A in ('powershell -NoProfile -Command "try { (Get-CimInstance Win32_Service | Where-Object { $_.Name -eq '%~1' }).StartName } catch { }"') do set "current_start_name=%%A"
+if not defined WINGET_ACCOUNT if defined current_start_name if /i not "!current_start_name!"=="LocalSystem" (
+  echo install.bat: %~1 is already configured to run as !current_start_name! -- leaving it as-is. >&2
+  echo   Set WINGET_ACCOUNT/WINGET_PASSWORD to explicitly reconfigure it. >&2
+  goto :eof
+)
 if defined WINGET_ACCOUNT (
   set "wa_user=%WINGET_ACCOUNT%"
   set "wa_pass=%WINGET_PASSWORD%"
@@ -422,7 +433,7 @@ if defined AGGREGATOR_URL (
   set "resolved_aggregator_url=%AGGREGATOR_URL%"
 ) else (
   call :read_service_var update-detector AGGREGATOR_URL
-  call :prompt_aggregator_url "%read_val%"
+  call :prompt_aggregator_url "!read_val!"
 )
 if not defined resolved_aggregator_url (
   echo install.bat: AGGREGATOR_URL is required -- set it and re-run. >&2
@@ -439,25 +450,25 @@ rem reached here too since a manual re-run never goes through that Go
 rem code at all.
 if not defined LISTEN_ADDR (
   call :read_service_var update-detector LISTEN_ADDR
-  set "LISTEN_ADDR=%read_val%"
+  set "LISTEN_ADDR=!read_val!"
 )
 if not defined LISTEN_ADDR set "LISTEN_ADDR=:8080"
 if not defined CHECK_INTERVAL (
   call :read_service_var update-detector CHECK_INTERVAL
-  set "CHECK_INTERVAL=%read_val%"
+  set "CHECK_INTERVAL=!read_val!"
 )
 if not defined CHECK_INTERVAL set "CHECK_INTERVAL=6h"
 if not defined HOSTNAME_OVERRIDE (
   call :read_service_var update-detector HOSTNAME_OVERRIDE
-  set "HOSTNAME_OVERRIDE=%read_val%"
+  set "HOSTNAME_OVERRIDE=!read_val!"
 )
 if not defined TELEGRAM_BOT_TOKEN (
   call :read_service_var update-detector TELEGRAM_BOT_TOKEN
-  set "TELEGRAM_BOT_TOKEN=%read_val%"
+  set "TELEGRAM_BOT_TOKEN=!read_val!"
 )
 if not defined TELEGRAM_CHAT_ID (
   call :read_service_var update-detector TELEGRAM_CHAT_ID
-  set "TELEGRAM_CHAT_ID=%read_val%"
+  set "TELEGRAM_CHAT_ID=!read_val!"
 )
 
 call :create_or_update_service update-detector "update-detector agent" "%bin_path%"
@@ -496,20 +507,20 @@ rem the prefixed *input* variable name below, mirroring
 rem existingConfigEnv's own translate() table on the Go side.
 if not defined AGGREGATOR_LISTEN_ADDR (
   call :read_service_var update-aggregator LISTEN_ADDR
-  set "AGGREGATOR_LISTEN_ADDR=%read_val%"
+  set "AGGREGATOR_LISTEN_ADDR=!read_val!"
 )
 if not defined AGGREGATOR_LISTEN_ADDR set "AGGREGATOR_LISTEN_ADDR=:9090"
 if not defined AGGREGATOR_TELEGRAM_BOT_TOKEN (
   call :read_service_var update-aggregator TELEGRAM_BOT_TOKEN
-  set "AGGREGATOR_TELEGRAM_BOT_TOKEN=%read_val%"
+  set "AGGREGATOR_TELEGRAM_BOT_TOKEN=!read_val!"
 )
 if not defined AGGREGATOR_TELEGRAM_CHAT_ID (
   call :read_service_var update-aggregator TELEGRAM_CHAT_ID
-  set "AGGREGATOR_TELEGRAM_CHAT_ID=%read_val%"
+  set "AGGREGATOR_TELEGRAM_CHAT_ID=!read_val!"
 )
 if not defined ADMIN_APPLY_SHARED_SECRET (
   call :read_service_var update-aggregator ADMIN_APPLY_SHARED_SECRET
-  set "ADMIN_APPLY_SHARED_SECRET=%read_val%"
+  set "ADMIN_APPLY_SHARED_SECRET=!read_val!"
 )
 
 call :create_or_update_service update-aggregator "update-aggregator" "%bin_path%"
