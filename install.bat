@@ -148,24 +148,33 @@ rem deployment tools mark installed executables read-only). Clear it
 rem unconditionally before attempting the swap; harmless no-op if the
 rem file doesn't exist yet (fresh install) or isn't read-only.
 if exist "%~2" attrib -R "%~2" >nul 2>&1
-rem Retry the swap a few times too -- confirmed live, Windows
-rem Defender's real-time scan of a freshly-downloaded unsigned .exe can
-rem separately hold a brief lock on it that makes an immediate `move`
-rem fail the same way even with the attribute cleared, the target
-rem service already fully stopped, and nothing else on the system
-rem holding it -- that lock clears itself within a couple of seconds
-rem once the scan finishes.
-set "move_tries=0"
-:download_move_retry
-move /y "%~2.new" "%~2" >nul 2>&1
-if not errorlevel 1 goto :eof
-set /a move_tries+=1
-if !move_tries! LSS 5 (
-  timeout /t 1 /nobreak >nul
-  goto download_move_retry
+rem Retry the swap a few times, without any new label/goto inside
+rem this subroutine -- confirmed live, adding a labeled backward-jump
+rem loop here (even one that never actually loops, e.g. succeeding on
+rem the very first attempt) corrupted label resolution for unrelated
+rem calls made later in the same install_* run (create_or_update_service,
+rem read_service_var). for /l avoids that entirely. Windows Defender's
+rem real-time scan of a freshly-downloaded unsigned .exe can hold a
+rem brief lock on it that makes an immediate `move` fail with "Access
+rem is denied." even with the target service already fully stopped and
+rem nothing else on the system holding it -- the lock clears itself
+rem within a couple of seconds once the scan finishes.
+set "move_ok=0"
+for /l %%i in (1,1,5) do (
+  if "!move_ok!"=="0" (
+    move /y "%~2.new" "%~2" >nul 2>&1
+    if not errorlevel 1 (
+      set "move_ok=1"
+    ) else (
+      timeout /t 1 /nobreak >nul
+    )
+  )
 )
-echo install.bat: could not replace %~2 -- still locked after 5 retries (check for antivirus or other software holding it open) >&2
-exit /b 1
+if "!move_ok!"=="0" (
+  echo install.bat: could not replace %~2 -- still locked after 5 retries ^(check for antivirus or other software holding it open^) >&2
+  exit /b 1
+)
+goto :eof
 
 :: cache_install_bat_for_companion -> saves a fresh copy of this exact
 :: script to CACHED_INSTALL_BAT, for the companion's own self-update
@@ -491,7 +500,8 @@ call :stop_if_running update-detector
 
 set "bin_path=%BIN_DIR%\update-detector.exe"
 call :download_binary update-detector "%bin_path%"
-if errorlevel 1 exit /b 1
+set "download_binary_rc=%errorlevel%"
+if not "%download_binary_rc%"=="0" exit /b 1
 
 set "data_dir=%ProgramData%\update-detector"
 if not exist "%data_dir%" mkdir "%data_dir%"
@@ -553,7 +563,8 @@ call :stop_if_running update-aggregator
 
 set "bin_path=%BIN_DIR%\update-aggregator.exe"
 call :download_binary update-aggregator "%bin_path%"
-if errorlevel 1 exit /b 1
+set "download_binary_rc=%errorlevel%"
+if not "%download_binary_rc%"=="0" exit /b 1
 
 set "data_dir=%ProgramData%\update-aggregator"
 if not exist "%data_dir%" mkdir "%data_dir%"
@@ -641,7 +652,8 @@ call :stop_if_running update-detector-companion
 
 set "bin_path=%BIN_DIR%\update-detector-companion.exe"
 call :download_binary update-detector-companion "%bin_path%"
-if errorlevel 1 exit /b 1
+set "download_binary_rc=%errorlevel%"
+if not "%download_binary_rc%"=="0" exit /b 1
 
 sc query update-detector >nul 2>&1
 if errorlevel 1 (
