@@ -91,11 +91,18 @@ if "%uninstall_requested%"=="1" (
 
 call :prompt_components
 set "haystack=,!components!,"
-echo !haystack!|find ",aggregator,">nul && call :install_aggregator_native
-echo !haystack!|find ",agent,">nul && call :install_agent_native
-echo !haystack!|find ",companion,">nul && call :install_companion
+rem Track failures explicitly -- a bare `exit /b 0` here regardless of
+rem outcome would report success even when a call below failed (e.g. a
+rem download error), which matters most for the companion's own
+rem self-update: its Go caller treats this script's exit code as the
+rem entire result. Confirmed live: a failed download used to be
+rem swallowed exactly this way.
+set "install_failed=0"
+echo !haystack!|find ",aggregator,">nul && (call :install_aggregator_native || set "install_failed=1")
+echo !haystack!|find ",agent,">nul && (call :install_agent_native || set "install_failed=1")
+echo !haystack!|find ",companion,">nul && (call :install_companion || set "install_failed=1")
 
-exit /b 0
+exit /b %install_failed%
 
 :: ============================================================
 :: Helpers
@@ -235,8 +242,17 @@ if defined WINGET_ACCOUNT (
   set "wa_enable="
   set /p "wa_enable=Run %~1 as your own account so winget works too? [y/N]: "
   if /i not "!wa_enable!"=="y" goto :eof
-  set "wa_user=%USERDOMAIN%\%USERNAME%"
-  set /p "wa_user=Account [!wa_user!]: "
+  rem .\USERNAME, not %USERDOMAIN%\%USERNAME% -- on a workgroup (non-
+  rem domain-joined) machine, USERDOMAIN is often just the literal
+  rem string "WORKGROUP", which Windows doesn't recognize as a valid
+  rem account qualifier at all (confirmed live: SC error 1057, "account
+  rem name is invalid"). ".\" always means "this local machine"
+  rem regardless of workgroup/domain name. Must be a real local (or
+  rem domain, if typed over this default) account -- never a Microsoft/
+  rem email-style account, which SC cannot log a service on as at all
+  rem (confirmed live: error 1355, "specified domain does not exist").
+  set "wa_user=.\%USERNAME%"
+  set /p "wa_user=Local or domain account, e.g. .\%USERNAME% [!wa_user!]: "
   for /f "delims=" %%P in ('powershell -NoProfile -Command "$p = Read-Host -AsSecureString 'Password for !wa_user!'; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p))"') do set "wa_pass=%%P"
 )
 if not defined wa_pass (
@@ -425,6 +441,7 @@ call :stop_if_running update-detector
 
 set "bin_path=%BIN_DIR%\update-detector.exe"
 call :download_binary update-detector "%bin_path%"
+if errorlevel 1 exit /b 1
 
 set "data_dir=%ProgramData%\update-detector"
 if not exist "%data_dir%" mkdir "%data_dir%"
@@ -486,6 +503,7 @@ call :stop_if_running update-aggregator
 
 set "bin_path=%BIN_DIR%\update-aggregator.exe"
 call :download_binary update-aggregator "%bin_path%"
+if errorlevel 1 exit /b 1
 
 set "data_dir=%ProgramData%\update-aggregator"
 if not exist "%data_dir%" mkdir "%data_dir%"
@@ -573,6 +591,7 @@ call :stop_if_running update-detector-companion
 
 set "bin_path=%BIN_DIR%\update-detector-companion.exe"
 call :download_binary update-detector-companion "%bin_path%"
+if errorlevel 1 exit /b 1
 
 sc query update-detector >nul 2>&1
 if errorlevel 1 (
