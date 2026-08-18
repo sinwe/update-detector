@@ -156,6 +156,37 @@ func TestHandleAdminApproveRejectFlow(t *testing.T) {
 	}
 }
 
+func TestHandleAdminForgetRemovesAgentRegardlessOfStatus(t *testing.T) {
+	s, reg := newTestServer(t)
+	if _, _, err := reg.Enroll("a1", "web01", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetStatus("a1", StatusRejected); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/forget", nil, nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("got status %d, body %s, want redirect", rec.Code, rec.Body.String())
+	}
+	if _, ok := reg.Get("a1"); ok {
+		t.Fatal("expected a1 to be gone from the registry after forget")
+	}
+
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if strings.Contains(body, "web01") {
+		t.Fatalf("expected web01 to no longer appear on the admin page after forget, got: %s", body)
+	}
+}
+
+func TestHandleAdminForgetUnknownAgent(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/does-not-exist/forget", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404", rec.Code)
+	}
+}
+
 func TestHandleAdminPageShowsPackages(t *testing.T) {
 	s, reg := newTestServer(t)
 	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)

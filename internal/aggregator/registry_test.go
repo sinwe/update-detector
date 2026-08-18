@@ -129,6 +129,59 @@ func TestSetStatusNotFound(t *testing.T) {
 	}
 }
 
+func TestForgetRemovesEntryRegardlessOfStatus(t *testing.T) {
+	r := newTestRegistry(t)
+	if _, _, err := r.Enroll("agent-1", "web01", "token-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetStatus("agent-1", StatusRejected); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.Forget("agent-1"); err != nil {
+		t.Fatalf("Forget failed: %v", err)
+	}
+	if _, ok := r.Get("agent-1"); ok {
+		t.Fatal("expected agent-1 to be gone after Forget")
+	}
+
+	// Re-enrolling afterward starts over as pending, not blocked by the
+	// deleted record somehow lingering.
+	_, status, err := r.Enroll("agent-1", "web01", "token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusPending {
+		t.Fatalf("got status %v after re-enrolling a forgotten agent, want StatusPending", status)
+	}
+}
+
+func TestForgetNotFound(t *testing.T) {
+	r := newTestRegistry(t)
+	if err := r.Forget("nope"); err != ErrNotFound {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+}
+
+func TestForgetPersistsAcrossLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	r1 := NewRegistry(path)
+	if _, _, err := r1.Enroll("agent-1", "web01", "token-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.Forget("agent-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	r2 := NewRegistry(path)
+	if err := r2.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if _, ok := r2.Get("agent-1"); ok {
+		t.Fatal("expected agent-1 to stay gone after reloading from disk")
+	}
+}
+
 func TestFindApprovedByHostnamePicksMostRecentlySeen(t *testing.T) {
 	r := newTestRegistry(t)
 	for _, id := range []string{"agent-1", "agent-2"} {

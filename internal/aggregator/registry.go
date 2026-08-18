@@ -219,6 +219,23 @@ func (r *Registry) SetStatus(id string, status Status) error {
 	return r.saveLocked()
 }
 
+// Forget permanently removes id from the registry -- unlike SetStatus,
+// there's no way back short of the agent re-enrolling from scratch
+// (which starts it over as pending). Intended for rejected/pending
+// entries an operator wants gone rather than just parked; works
+// regardless of an entry's current status, since deleting bookkeeping
+// carries none of the "is this host currently live" risk that removing
+// an approved, actively-connected host's *service* would.
+func (r *Registry) Forget(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.agents[id]; !ok {
+		return ErrNotFound
+	}
+	delete(r.agents, id)
+	return r.saveLocked()
+}
+
 // Get returns a snapshot of one agent by id.
 func (r *Registry) Get(id string) (AgentRecord, bool) {
 	r.mu.RLock()

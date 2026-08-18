@@ -294,6 +294,27 @@ paths:
         "404":
           description: Unknown agent id
 
+  /admin/agents/{id}/forget:
+    post:
+      summary: Permanently remove an agent from the registry
+      description: >
+        Unlike approve/reject, this isn't a status transition -- it deletes
+        the registry entry outright. Works regardless of the entry's
+        current status. The only way back is for that agent to re-enroll
+        from scratch, starting over as pending.
+      operationId: forgetAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Redirect back to /admin
+        "404":
+          description: Unknown agent id
+
   /admin/agents/{id}/apply:
     post:
       summary: Trigger a package upgrade on one agent's host

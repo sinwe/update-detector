@@ -531,10 +531,13 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAdminAction serves POST /admin/agents/{id}/approve and .../reject,
-// among others, plus (the one GET among otherwise all-POST actions here)
-// /admin/agents/{id}/output/stream.
+// handleAdminAction serves POST /admin/agents/{id}/approve, .../reject,
+// and .../forget, among others, plus (the one GET among otherwise
+// all-POST actions here) /admin/agents/{id}/output/stream.
 // Revoking an approved agent reuses reject — there's no separate state for it.
+// forget, unlike approve/reject, isn't a status transition -- it deletes
+// the registry entry outright, so a rejected (or stale pending) host can
+// actually be cleared instead of parked in that section forever.
 func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/admin/agents/")
 	parts := strings.Split(trimmed, "/")
@@ -570,6 +573,18 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if action == "self-update" {
 		s.handleAdminSelfUpdate(w, r, id)
+		return
+	}
+	if action == "forget" {
+		if err := s.registry.Forget(id); err != nil {
+			if err == ErrNotFound {
+				http.Error(w, "agent not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
 

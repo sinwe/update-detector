@@ -626,7 +626,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <span class="host-name">{{.Hostname}}</span>
           <span class="host-id">{{.ShortID}}</span>
         </div>
-        <form method="post" action="/admin/agents/{{.ID}}/approve"><button class="btn-success btn-sm">Approve</button></form>
+        <div class="pending-actions">
+          <form method="post" action="/admin/agents/{{.ID}}/approve"><button class="btn-success btn-sm">Approve</button></form>
+          <form method="post" action="/admin/agents/{{.ID}}/forget" onsubmit="return confirm('Forget {{.Hostname}} permanently? It will have to re-enroll from scratch to come back.')"><button class="btn-danger btn-sm">Forget</button></form>
+        </div>
       </div>
       {{end}}
     </div>
