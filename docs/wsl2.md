@@ -39,10 +39,12 @@ readlink -f "$(command -v docker)"
   case — it never will for the Windows-shim case, since that daemon isn't
   running inside this distro at all.
 
-If you have a genuine engine, the normal
-[Installation](../README.md#installation) instructions (Docker Compose)
-work exactly as documented — nothing WSL2-specific needed. The rest of
-this page is for the (much more common) shim case.
+If you have a genuine engine, `install.sh`'s own Docker-availability check
+(`docker_available` in the script) detects that too and offers the same
+Docker Compose deployment it would on any other Linux host, right from
+the same prompt described below — there's no need to bypass it or follow
+different steps. The rest of this page is for the (much more common) shim
+case, where you want the native path instead.
 
 ## Native install, step by step
 
@@ -160,7 +162,7 @@ at the top of this page.
 
 ## Configuration — there's no `.env` here
 
-The `.env` file the main [Configuration](../README.md#configuration)
+The `.env` file the main [Configuration](reference.md#configuration)
 instructions mention is a **`docker compose`-specific mechanism** — it
 doesn't exist for the native install at all. Don't create one next to
 `install.sh` expecting it to be picked up; it won't be. Native config

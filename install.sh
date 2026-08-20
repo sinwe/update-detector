@@ -1,37 +1,50 @@
 #!/bin/sh
-# install.sh installs update-detector's pieces as native systemd services.
-# Run as root:
+# install.sh installs update-detector's pieces -- as Docker containers
+# where that's actually usable, native systemd services otherwise. Run as
+# root:
 #
 #   curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
 #
-# On a normal Linux host, this installs just the companion
-# (update-detector-companion), auto-discovering everything it needs from an
-# already-running update-detector *container*: its bind-mounted state dir
-# (for the Unix-socket token handoff), its AGGREGATOR_URL, and its published
-# port. This is the same behavior install.sh has always had.
+# On a host that already has an agent (Docker or native), this installs
+# just the companion, auto-discovering everything it needs from the
+# existing one: its state dir/bind mount (for the Unix-socket token
+# handoff), its AGGREGATOR_URL, and its published port. This is the same
+# behavior install.sh has always had.
 #
-# On WSL2, this offers something different: an interactive choice of
-# installing the aggregator, the detector (agent), the companion, or all
-# three, each as a *native* systemd service with no Docker involved at all.
-# This exists because WSL2 commonly has no real Docker engine inside the
-# distro itself -- `docker` on PATH there is frequently just Docker
-# Desktop's Windows-side CLI shim (confirmed live: resolves to
-# /mnt/c/Program Files/Docker/...), which talks to Docker Desktop's own
-# hidden VM, not this distro's filesystem. Running the agent containerized
-# against that shim would silently detect updates for the wrong system,
-# with no visible error -- so native is the safer default on WSL2. See
-# docs/wsl2.md for the full explanation and how to tell if you actually
-# have a real in-distro Docker engine (in which case the normal
-# docker-compose.yml path works fine and this native install isn't needed).
+# On a host with nothing installed yet, this prompts (interactively, or
+# via INSTALL_COMPONENTS below) for which of the aggregator, the agent, and
+# the companion to set up. For the aggregator and the agent specifically
+# (the companion is always native -- it needs real root to run apt-get),
+# it then checks whether Docker is actually usable here (see
+# docker_available below) and defaults to a Docker Compose deployment when
+# it is -- prompting for a directory (default ~/docker-updater; the agent
+# and aggregator share one by default -- see default_docker_dir -- since
+# their compose files have different names and the aggregator always runs
+# under its own fixed Compose project name, they don't collide there) --
+# or a native systemd service otherwise. Re-running this later against an
+# existing Docker deployment finds it automatically (via the same
+# Compose-label introspection the companion's own self-update already
+# relies on) and updates it in place, rather than re-prompting or creating
+# a duplicate. Set USE_DOCKER=1/0 to skip that prompt non-interactively;
+# DOCKER_DIR/AGGREGATOR_DOCKER_DIR override the default directory the same
+# way (set both to genuinely separate the two, if you'd rather not share).
+#
+# "Actually usable" excludes the common WSL2 case where `docker` is only
+# Docker Desktop's Windows-side CLI shim (confirmed live: resolves to
+# /mnt/c/Program Files/Docker/...), talking to Docker Desktop's own hidden
+# VM, not the WSL2 distro's own filesystem -- a containerized agent there
+# would silently detect updates for the wrong system, with no visible
+# error. See docs/wsl2.md for the full explanation. A WSL2 distro with a
+# genuine in-distro Docker engine is treated as a normal Docker host.
 #
 # Set INSTALL_VERSION to pin a release instead of "latest". Set
 # INSTALL_COMPONENTS (comma-separated: aggregator,agent,companion) for a
-# scripted/non-interactive native install of any of those three on *any*
-# host, not just WSL2 -- this is also how the companion's own self-update
-# feature re-invokes this exact script to update a specific native
-# component wherever it's actually running. On WSL2 specifically, leaving
-# INSTALL_COMPONENTS unset still gets the interactive prompt described
-# above instead of the plain companion-only default.
+# scripted/non-interactive install of any of those three on any host --
+# this is also how the companion's own self-update feature re-invokes this
+# exact script to update a specific *native* component wherever it's
+# actually running (Docker-based components self-update through a
+# different path -- see internal/companion/selfupdate.go -- so this reuse
+# only ever targets native installs).
 #
 # To remove a native install instead, either pipe with an explicit
 # argument --
@@ -43,9 +56,11 @@
 # scripted/non-interactive use, set UNINSTALL_COMPONENTS the same way as
 # INSTALL_COMPONENTS above -- no special invocation needed for that one.
 # Either way, this only ever touches a *native* install it can find unit
-# files for; a Docker-based agent/aggregator is left alone with a warning,
-# since install.sh never created that deployment and has no compose file
-# path or volume names to safely act on.
+# files for; a Docker-based agent/aggregator is left alone with a warning
+# (naming the directory it found, if any) -- uninstall never runs `docker
+# compose down` itself, since it can't safely tell "install.sh set this up"
+# apart from "you did, by hand," and a wrong guess there means deleting a
+# volume.
 
 set -eu
 
@@ -63,24 +78,32 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# docker is deliberately not required here (unlike earlier versions of this
-# script) -- on WSL2 it's frequently present on PATH but not a working
-# engine (see header), and requiring it would block native-only installs
-# for no reason. Each Docker-dependent code path below handles its absence
-# or failure gracefully instead.
-for tool in curl systemctl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "install.sh: $tool is required but not found on PATH" >&2
-    exit 1
-  fi
-done
+# Neither docker nor systemctl is required unconditionally here: docker
+# is frequently present but not a working engine (WSL2's CLI shim, see
+# header), and a Docker-only install (agent/aggregator via Compose, no
+# companion) never needs systemctl at all. Each code path below checks
+# for what it actually needs instead -- systemctl inside install_unit,
+# used only by the native install functions and the always-native
+# companion.
+if ! command -v curl >/dev/null 2>&1; then
+  echo "install.sh: curl is required but not found on PATH" >&2
+  exit 1
+fi
 
-arch="$(uname -m)"
-case "$arch" in
-  x86_64) goarch=amd64 ;;
-  aarch64|arm64) goarch=arm64 ;;
-  *) echo "install.sh: unsupported architecture $arch" >&2; exit 1 ;;
-esac
+# Resolved lazily, on first actual native binary download -- a pure
+# Docker install (no native component involved at all) never needs this,
+# and shouldn't fail on an architecture this script has no native build
+# for but Docker/the published images support fine.
+goarch=""
+resolve_goarch() {
+  [ -n "$goarch" ] && return 0
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64) goarch=amd64 ;;
+    aarch64|arm64) goarch=arm64 ;;
+    *) echo "install.sh: unsupported architecture $arch for a native install" >&2; exit 1 ;;
+  esac
+}
 
 # Any one of these being true is sufficient; checking all three is just
 # defense against any single one being absent on some WSL2 build.
@@ -89,6 +112,25 @@ is_wsl2() {
   grep -qi microsoft /proc/version 2>/dev/null && return 0
   [ -e /proc/sys/fs/binfmt_misc/WSLInterop ] && return 0
   return 1
+}
+
+# docker_available -> true if docker is actually usable for a real
+# deployment here: present, a live engine actually answers to it, and
+# (on WSL2 specifically) it isn't just Docker Desktop's Windows-side CLI
+# shim -- confirmed live, that shim resolves under /mnt/c/... and answers
+# `docker info` just fine, but talks to Docker Desktop's own hidden VM,
+# not this distro's filesystem, so a container using it would silently
+# detect updates for the wrong system (see docs/wsl2.md, "Check which one
+# you actually have" -- the same check reused here).
+docker_available() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 || return 1
+  if is_wsl2; then
+    case "$(readlink -f "$(command -v docker)" 2>/dev/null)" in
+      /mnt/*) return 1 ;;
+    esac
+  fi
+  return 0
 }
 
 # resolve_asset_url ASSET_NAME -> prints that asset's browser_download_url
@@ -117,6 +159,7 @@ resolve_asset_url() {
 # working binary) and executable.
 download_binary() {
   name="$1" dest="$2"
+  resolve_goarch
   asset_name="$name-linux-$goarch"
   echo "install.sh: resolving $asset_name from release $INSTALL_VERSION..."
   download_url=$(resolve_asset_url "$asset_name")
@@ -167,6 +210,10 @@ cache_install_sh_for_companion() {
 # leaving the old process running with its stale environment. `restart`
 # unconditionally stops-then-starts regardless of current state.
 install_unit() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "install.sh: systemctl is required for a native install but not found on PATH" >&2
+    exit 1
+  fi
   systemctl daemon-reload
   systemctl enable "$1"
   systemctl restart "$1"
@@ -242,6 +289,109 @@ docker_container_for() {
       echo "$id $(docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null)"
     done
   } | awk -v pat="$1" '$2 ~ pat {print $1; exit}'
+}
+
+# docker_compose_dir_for PATTERN -> prints the working directory of a
+# running container's Compose project (matching PATTERN, same anchoring
+# rules as docker_container_for above), or nothing if none matches. Same
+# Compose-label introspection internal/companion/selfupdate.go's own
+# updateDockerCompose already relies on for Go-side self-update -- Docker's
+# own container metadata is the source of truth for "where did this get
+# set up," not a separate state file this script would have to keep in
+# sync. Used by install_agent_docker/install_aggregator_docker to update
+# an existing deployment in place on re-run, instead of re-prompting for a
+# directory or creating a duplicate.
+docker_compose_dir_for() {
+  container_id=$(docker_container_for "$1")
+  [ -z "$container_id" ] && return 0
+  docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container_id" 2>/dev/null
+}
+
+# raw_url_for PATH -> raw.githubusercontent.com URL for PATH at
+# $INSTALL_VERSION (main, for "latest") -- same pinning reasoning as
+# cache_install_sh_for_companion below: a docker-compose.yml downloaded
+# for a pinned release should match the images that release actually
+# expects, not whatever's on main right now.
+raw_url_for() {
+  if [ "$INSTALL_VERSION" = "latest" ]; then
+    printf 'https://raw.githubusercontent.com/sinwe/update-detector/main/%s' "$1"
+  else
+    printf 'https://raw.githubusercontent.com/sinwe/update-detector/%s/%s' "$INSTALL_VERSION" "$1"
+  fi
+}
+
+# prompt_use_docker LABEL -> prints "1" or "0". Only called after
+# docker_available has already confirmed Docker is actually usable here,
+# so there's a real choice to make. USE_DOCKER overrides non-
+# interactively (any value other than "0" counts as yes). With a
+# terminal, prompts [Y/n] defaulting to yes -- Docker is the documented
+# default when it's available (see header) -- and with no terminal,
+# defaults to yes silently for the same reason.
+prompt_use_docker() {
+  if [ -n "${USE_DOCKER:-}" ]; then
+    case "$USE_DOCKER" in
+      0) echo 0 ;;
+      *) echo 1 ;;
+    esac
+    return
+  fi
+  if [ ! -r /dev/tty ]; then
+    echo 1
+    return
+  fi
+  printf "Docker is available -- use it for the %s (recommended)? [Y/n]: " "$1" >&2
+  read -r reply < /dev/tty
+  case "$reply" in
+    [nN]*) echo 0 ;;
+    *) echo 1 ;;
+  esac
+}
+
+# default_docker_dir -> ~/docker-updater, unless a Docker deployment of
+# the *other* component (agent or aggregator) already exists somewhere --
+# in which case that directory becomes the suggested default too. The
+# agent and aggregator share one directory by default (their Compose
+# files have different names -- docker-compose.yml vs
+# docker-compose.aggregator.yml -- so they don't collide there), so
+# installing both normally lands in the same place without the operator
+# having to type the same path twice.
+default_docker_dir() {
+  dir=$(docker_compose_dir_for '(^|/)update-detector(:|$)') || dir=""
+  if [ -z "$dir" ]; then
+    dir=$(docker_compose_dir_for '(^|/)update-aggregator(:|$)') || dir=""
+  fi
+  printf '%s' "${dir:-$HOME/docker-updater}"
+}
+
+# set_env_var FILE KEY VALUE -> creates/updates KEY=VALUE in FILE,
+# preserving every other line untouched, and always leaves FILE mode
+# 0600. Needed (rather than a truncating heredoc) because the agent and
+# aggregator now default to sharing one directory, and so one .env --
+# `docker compose` reads exactly one per directory -- overwriting the
+# whole file on each install would erase whatever the other component
+# already wrote there. Unconditionally 0600 rather than only when the
+# aggregator itself happens to write to it: the shared file can carry
+# ADMIN_APPLY_SHARED_SECRET regardless of which component's install last
+# touched it.
+set_env_var() {
+  file="$1" key="$2" value="$3"
+  touch "$file"
+  grep -v "^$key=" "$file" > "$file.new" 2>/dev/null || true
+  echo "$key=$value" >> "$file.new"
+  mv "$file.new" "$file"
+  chmod 0600 "$file"
+}
+
+# set_env_var_if_set FILE KEY VALUE -> like set_env_var, but a no-op when
+# VALUE is empty. Used for the handful of variables the agent's and the
+# aggregator's Compose files both read under the very same unprefixed
+# name (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID) now that they default to
+# sharing one .env -- an unset input on one component's install must
+# never silently blank out a value the other component already
+# configured there.
+set_env_var_if_set() {
+  [ -n "$3" ] && set_env_var "$1" "$2" "$3"
+  return 0
 }
 
 install_agent_native() {
@@ -321,6 +471,64 @@ EOF
   echo "install.sh: update-detector installed and started. Check: systemctl status update-detector"
 }
 
+# install_agent_docker -> Docker Compose equivalent of install_agent_native
+# above. If docker_compose_dir_for finds an existing deployment, updates
+# it in place (pull + up -d) rather than re-prompting for a directory or
+# creating a duplicate one -- this is the "detect this for future update
+# as well" behavior. Otherwise resolves a directory (DOCKER_DIR, prompted,
+# defaulting to wherever the aggregator's own Compose deployment already
+# lives if there is one, else ~/docker-updater -- see default_docker_dir),
+# downloads docker-compose.yml into it, and writes/updates a .env there
+# with the same variables install_agent_native accepts as env vars --
+# Compose reads .env from the project directory automatically, no
+# --env-file flag needed, same as a human following the README by hand.
+# No -f/-p flags needed for any of this: docker-compose.yml is Compose's
+# own default filename, and its project name defaults to the directory's
+# own basename -- both exactly as if this were the only compose file in
+# that directory, even when the aggregator's docker-compose.aggregator.yml
+# also lives there (see install_aggregator_docker for how that one stays
+# out of the way). AGGREGATOR_URL is mandatory here for the same reason
+# it's mandatory in install_agent_native: without one this agent can never
+# enroll with (or be applied through) an aggregator, and a companion could
+# never pair with it either.
+install_agent_docker() {
+  dir=$(docker_compose_dir_for '(^|/)update-detector(:|$)') || dir=""
+  if [ -n "$dir" ]; then
+    echo "install.sh: found an existing update-detector Compose deployment at $dir -- updating it in place"
+  else
+    dir="${DOCKER_DIR:-}"
+    if [ -z "$dir" ]; then
+      suggested_dir="$(default_docker_dir)"
+      if [ -r /dev/tty ]; then
+        printf "Directory for the update-detector Compose deployment [%s]: " "$suggested_dir" >&2
+        read -r dir < /dev/tty
+      fi
+      dir="${dir:-$suggested_dir}"
+    fi
+    echo "install.sh: setting up update-detector (agent) via Docker Compose in $dir..."
+
+    resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+    if [ -z "$resolved_aggregator_url" ]; then
+      echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
+      exit 1
+    fi
+
+    mkdir -p "$dir"
+    curl -fsSL "$(raw_url_for docker-compose.yml)" -o "$dir/docker-compose.yml"
+    set_env_var "$dir/.env" HOSTNAME_OVERRIDE "${HOSTNAME_OVERRIDE:-}"
+    # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID: see set_env_var_if_set's own
+    # comment -- this directory may already have an aggregator-configured
+    # value in there (they share one .env), so an unset input here must
+    # leave it alone rather than blank it out.
+    set_env_var_if_set "$dir/.env" TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
+    set_env_var_if_set "$dir/.env" TELEGRAM_CHAT_ID "${TELEGRAM_CHAT_ID:-}"
+    set_env_var "$dir/.env" AGGREGATOR_URL "$resolved_aggregator_url"
+  fi
+
+  ( cd "$dir" && docker compose pull && docker compose up -d )
+  echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
+}
+
 install_aggregator_native() {
   echo "install.sh: installing update-aggregator natively..."
   bin_path="/usr/local/bin/update-aggregator"
@@ -376,6 +584,73 @@ EOF
   else
     echo "install.sh: no ADMIN_APPLY_SHARED_SECRET set -- apply/self-update stay" >&2
     echo "  disabled (501) until you set one and restart update-aggregator." >&2
+  fi
+}
+
+# update-aggregator's own project name is fixed, deliberately not derived
+# from the directory (Compose's own default) -- since it defaults to
+# sharing a directory with the agent's docker-compose.yml (see
+# default_docker_dir), an implicit directory-basename project name would
+# put both compose files in the very same Compose project, which is
+# exactly the "Found orphan containers" confusion a fixed, distinct name
+# avoids entirely: every command below is explicit about both which
+# compose file and which project it means, so it can never be confused
+# for (or accidentally torn down by) a plain `docker compose ...` run
+# against the agent's own docker-compose.yml sitting right next to it.
+AGGREGATOR_COMPOSE_PROJECT="update-aggregator"
+
+# install_aggregator_docker -> Docker Compose equivalent of
+# install_aggregator_native above, same structure as install_agent_docker:
+# update an existing deployment in place if docker_compose_dir_for finds
+# one, otherwise resolve a directory (AGGREGATOR_DOCKER_DIR, prompted,
+# defaulting to wherever the agent's own Compose deployment already lives
+# if there is one, else ~/docker-updater -- see default_docker_dir; the
+# agent and aggregator share one directory by default, distinguished by
+# compose filename and the fixed project name above, not by directory) and
+# set up fresh. Unlike the agent, nothing here is mandatory --
+# ADMIN_APPLY_SHARED_SECRET unset just leaves apply/self-update disabled,
+# same as install_aggregator_native.
+install_aggregator_docker() {
+  dir=$(docker_compose_dir_for '(^|/)update-aggregator(:|$)') || dir=""
+  if [ -n "$dir" ]; then
+    echo "install.sh: found an existing update-aggregator Compose deployment at $dir -- updating it in place"
+  else
+    dir="${AGGREGATOR_DOCKER_DIR:-}"
+    if [ -z "$dir" ]; then
+      suggested_dir="$(default_docker_dir)"
+      if [ -r /dev/tty ]; then
+        printf "Directory for the update-aggregator Compose deployment [%s]: " "$suggested_dir" >&2
+        read -r dir < /dev/tty
+      fi
+      dir="${dir:-$suggested_dir}"
+    fi
+    echo "install.sh: setting up update-aggregator via Docker Compose in $dir..."
+    mkdir -p "$dir"
+    curl -fsSL "$(raw_url_for docker-compose.aggregator.yml)" -o "$dir/docker-compose.aggregator.yml"
+    # Prefixed AGGREGATOR_* input names, same reasoning as
+    # install_aggregator_native's own env file -- keeps a same-run agent +
+    # aggregator install from accidentally sharing one secret/token meant
+    # for only one of them. Written into the shared .env under the real,
+    # unprefixed names update-aggregator's own compose file actually
+    # reads, same as install_aggregator_native's own env file does for its
+    # systemd equivalent.
+    set_env_var_if_set "$dir/.env" TELEGRAM_BOT_TOKEN "${AGGREGATOR_TELEGRAM_BOT_TOKEN:-}"
+    set_env_var_if_set "$dir/.env" TELEGRAM_CHAT_ID "${AGGREGATOR_TELEGRAM_CHAT_ID:-}"
+    set_env_var "$dir/.env" ADMIN_APPLY_SHARED_SECRET "${ADMIN_APPLY_SHARED_SECRET:-}"
+  fi
+
+  ( cd "$dir" && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" pull \
+      && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" up -d )
+  echo "install.sh: update-aggregator running via Docker Compose in $dir. Check: cd $dir && docker compose -f docker-compose.aggregator.yml -p $AGGREGATOR_COMPOSE_PROJECT logs -f"
+  if [ -n "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
+    echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$ADMIN_APPLY_SHARED_SECRET" >&2
+    echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
+    echo "  credential gating apply/self-update actions, it's stored 0600 in" >&2
+    echo "  $dir/.env and never printed again after this, and every browser or" >&2
+    echo "  script that triggers an apply needs this exact value." >&2
+  else
+    echo "install.sh: no ADMIN_APPLY_SHARED_SECRET set -- apply/self-update stay" >&2
+    echo "  disabled (501) until you set one and restart the aggregator." >&2
   fi
 }
 
@@ -555,20 +830,31 @@ EOF
   echo "install.sh: done. Check status with: systemctl status update-detector-companion"
 }
 
-# warn_docker_not_managed NAME PATTERN -> if a Docker container matching
-# PATTERN exists (running or stopped), print a warning that install.sh
-# won't touch it -- it never created that deployment, so it has no
-# compose file path or volume names to safely act on, unlike a native
-# systemd unit it fully owns end to end. Covers both the Docker-only case
-# and the ambiguous both-native-and-Docker case (called unconditionally
-# after any native teardown below).
+# warn_docker_not_managed NAME PATTERN [COMPOSE_CMD] -> if a Docker
+# container matching PATTERN exists (running or stopped), print a warning
+# that install.sh won't touch it -- it never created that deployment, so
+# it has no compose file path or volume names to safely act on, unlike a
+# native systemd unit it fully owns end to end. Covers both the
+# Docker-only case and the ambiguous both-native-and-Docker case (called
+# unconditionally after any native teardown below). COMPOSE_CMD defaults
+# to plain "docker compose" (correct for the agent's docker-compose.yml,
+# Compose's own default file+project); the aggregator's own caller passes
+# its actual -f/-p invocation instead, since a bare "docker compose down"
+# in a shared directory (see default_docker_dir) would silently target
+# the agent's project, not the aggregator's.
 warn_docker_not_managed() {
   container_id=$(docker_container_for "$2")
   if [ -n "$container_id" ]; then
+    dir=$(docker_compose_dir_for "$2") || dir=""
+    compose_cmd="${3:-docker compose}"
     echo "install.sh: found a Docker container for $1 (id=$container_id) --" >&2
     echo "  install.sh doesn't manage Docker deployments it didn't create." >&2
-    echo "  Remove it yourself, e.g. \`docker compose down\` from wherever" >&2
-    echo "  that service's docker-compose.yml lives." >&2
+    if [ -n "$dir" ]; then
+      echo "  Remove it yourself: cd $dir && $compose_cmd down" >&2
+    else
+      echo "  Remove it yourself, e.g. \`$compose_cmd down\` from wherever" >&2
+      echo "  that service's compose file lives." >&2
+    fi
   fi
 }
 
@@ -626,7 +912,8 @@ uninstall_aggregator() {
     remove_system_user update-aggregator
   fi
 
-  warn_docker_not_managed update-aggregator '(^|/)update-aggregator(:|$)'
+  warn_docker_not_managed update-aggregator '(^|/)update-aggregator(:|$)' \
+    "docker compose -f docker-compose.aggregator.yml -p $AGGREGATOR_COMPOSE_PROJECT"
 }
 
 uninstall_companion() {
@@ -669,9 +956,11 @@ prompt_components() {
     echo "companion"
     return
   fi
-  echo "This looks like WSL2. Since there usually isn't a real Docker engine" >&2
-  echo "in here (see docs/wsl2.md), install.sh can install any of these as" >&2
-  echo "native systemd services instead -- no Docker needed for any of them:" >&2
+  echo "Which of update-detector's pieces would you like to set up on this host?" >&2
+  echo "(the aggregator and the agent can each go into Docker or run as a" >&2
+  echo "native systemd service -- you'll be asked which, if Docker is usable" >&2
+  echo "here; the companion is always native, since it needs real root to run" >&2
+  echo "apt-get)" >&2
   echo >&2
   echo "  1) aggregator only" >&2
   echo "  2) detector (agent) only" >&2
@@ -774,6 +1063,13 @@ if [ "${1:-}" = "--uninstall" ] || [ -n "${UNINSTALL_COMPONENTS:-}" ]; then
   uninstall_requested=1
 fi
 
+# Checked unconditionally (cheap either way) so the dispatch condition
+# below can ask "is there an agent here at all, native or Docker" without
+# repeating this lookup.
+existing_agent_native=0
+native_unit_present update-detector && existing_agent_native=1
+existing_agent_docker=$(docker_container_for '(^|/)update-detector(:|$)') || existing_agent_docker=""
+
 if [ "$uninstall_requested" = "1" ]; then
   components=$(prompt_uninstall_components)
   if [ -z "$components" ]; then
@@ -787,17 +1083,37 @@ if [ "$uninstall_requested" = "1" ]; then
   case ",$components," in *,companion,*) uninstall_companion ;; esac
   case ",$components," in *,agent,*) uninstall_agent ;; esac
   case ",$components," in *,aggregator,*) uninstall_aggregator ;; esac
-# INSTALL_COMPONENTS is honored regardless of platform, not just on
-# WSL2 -- this is also how the companion's own self-update feature
-# re-invokes this exact script to install a specific native component
-# (see internal/companion/selfupdate.go) on whatever host it's actually
-# running on, WSL2 or not. is_wsl2 only decides the *default*,
-# no-env-vars-set behavior: an interactive multi-component prompt there,
-# vs. the original companion-only install everywhere else.
-elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2; then
+# INSTALL_COMPONENTS is honored regardless of platform -- this is also how
+# the companion's own self-update feature re-invokes this exact script to
+# install a specific native component (see internal/companion/
+# selfupdate.go) on whatever host it's actually running on. Beyond that,
+# the interactive multi-component prompt (as opposed to the original
+# companion-only default) triggers on is_wsl2 (no real Docker engine
+# usually available there, see docker_available) or whenever no agent
+# install -- native or Docker -- exists yet on this host at all: that's
+# the "nothing set up here yet, so ask what to set up" case this whole
+# feature is for. If an agent already exists, the original zero-config
+# "just install the companion against it" default still applies.
+elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native" = "0" ] && [ -z "$existing_agent_docker" ]; }; then
   components=$(prompt_components)
-  case ",$components," in *,aggregator,*) install_aggregator_native ;; esac
-  case ",$components," in *,agent,*) install_agent_native ;; esac
+  case ",$components," in
+    *,aggregator,*)
+      if docker_available && [ "$(prompt_use_docker aggregator)" = "1" ]; then
+        install_aggregator_docker
+      else
+        install_aggregator_native
+      fi
+      ;;
+  esac
+  case ",$components," in
+    *,agent,*)
+      if docker_available && [ "$(prompt_use_docker agent)" = "1" ]; then
+        install_agent_docker
+      else
+        install_agent_native
+      fi
+      ;;
+  esac
   case ",$components," in *,companion,*) install_companion ;; esac
 else
   install_companion
