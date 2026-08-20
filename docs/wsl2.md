@@ -77,6 +77,14 @@ a companion can't pair with an agent that has none), so if you're
 installing either and haven't set it, `install.sh` prompts for it
 interactively instead of silently defaulting to push-mode-disabled.
 
+**Re-installing or upgrading an existing native agent/aggregator?** None
+of this step is needed then — `install.sh` reads back whatever's already
+in `/etc/default/update-detector` / `/etc/default/update-aggregator`
+first and reuses it (`AGGREGATOR_URL`, Telegram credentials,
+`ADMIN_APPLY_SHARED_SECRET`) unless you export a new value to override
+it. Only export something here if you're setting it for the first time,
+or deliberately changing it.
+
 ### 2. Run install.sh and pick components
 
 ```sh

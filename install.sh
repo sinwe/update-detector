@@ -404,6 +404,22 @@ install_agent_native() {
   mkdir -p "$state_dir"
   chown update-detector:update-detector "$state_dir"
 
+  # Read back whatever's already configured (a re-install/upgrade of an
+  # existing native agent) so re-running this doesn't reset every value to
+  # blank just because the shell re-running it doesn't happen to have
+  # these exported again -- confirmed live, this is exactly what made a
+  # WSL2 host with an already-connected agent look like it had "forgotten"
+  # its own AGGREGATOR_URL on a later agent-only re-run. Empty strings
+  # (fresh install, nothing to read yet) are harmless as fallbacks below.
+  env_file="/etc/default/update-detector"
+  existing_hostname_override="" existing_bot_token="" existing_chat_id="" existing_agg_url=""
+  if [ -f "$env_file" ]; then
+    existing_hostname_override="$(env_value "$env_file" HOSTNAME_OVERRIDE)"
+    existing_bot_token="$(env_value "$env_file" TELEGRAM_BOT_TOKEN)"
+    existing_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
+    existing_agg_url="$(env_value "$env_file" AGGREGATOR_URL)"
+  fi
+
   # Every file-path var is set to its real absolute value here, never the
   # config package's Docker-oriented /host/... defaults -- there's no
   # container boundary to cross on a native install, so /host/etc/... etc.
@@ -415,21 +431,21 @@ install_agent_native() {
   # applied through) an aggregator at all, and a companion could never
   # pair with it either -- there's no meaningful standalone mode for a
   # native install the way there arguably is for a bare Docker Compose
-  # deployment. Prompts only when interactive and not already set (e.g.
-  # from the environment, or preserved across a self-update
-  # re-invocation) -- never hangs a scripted/non-interactive run waiting
-  # for input that will never come; that case is fatal instead, same as
-  # a human leaving the prompt blank.
-  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+  # deployment. Prompts only when interactive and nothing's already known
+  # -- neither a fresh value from the environment nor one already
+  # configured on this host from before (see existing_agg_url above) --
+  # so a re-run never hangs a scripted/non-interactive install waiting for
+  # input that will never come; that case is fatal instead, same as a
+  # human leaving the prompt blank on a genuinely first-time install.
+  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
   if [ -z "$resolved_aggregator_url" ]; then
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
 
-  env_file="/etc/default/update-detector"
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
-HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-}
+HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-$existing_hostname_override}
 CHECK_INTERVAL=${CHECK_INTERVAL:-6h}
 APT_SOURCES_LIST=/etc/apt/sources.list
 APT_SOURCES_LIST_D=/etc/apt/sources.list.d
@@ -439,8 +455,8 @@ OS_RELEASE_FILE=/etc/os-release
 RELEASE_UPGRADES_FILE=/etc/update-manager/release-upgrades
 REBOOT_REQUIRED_FILE=/var/run/reboot-required
 STATE_FILE=$state_dir/state.json
-TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-$existing_bot_token}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-$existing_chat_id}
 NOTIFY_ON_STARTUP=false
 AGGREGATOR_URL=$resolved_aggregator_url
 AGENT_IDENTITY_FILE=$state_dir/agent-identity.json
@@ -544,13 +560,28 @@ install_aggregator_native() {
   # and aggregator in the same run can't accidentally share one secret/
   # token meant for only one of them. Written into the env file under the
   # actual names update-aggregator's own config package expects.
+  #
+  # Read back whatever's already configured first, same reasoning as
+  # install_agent_native's own existing_* reads above -- a re-install
+  # without re-exporting these must not silently blank out
+  # ADMIN_APPLY_SHARED_SECRET (disabling apply/self-update fleet-wide
+  # until someone notices and regenerates it) or reset the Telegram
+  # config, just because this particular run didn't happen to set them.
   env_file="/etc/default/update-aggregator"
+  existing_agg_bot_token="" existing_agg_chat_id="" existing_admin_secret=""
+  if [ -f "$env_file" ]; then
+    existing_agg_bot_token="$(env_value "$env_file" TELEGRAM_BOT_TOKEN)"
+    existing_agg_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
+    existing_admin_secret="$(env_value "$env_file" ADMIN_APPLY_SHARED_SECRET)"
+  fi
+  resolved_admin_secret="${ADMIN_APPLY_SHARED_SECRET:-$existing_admin_secret}"
+
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${AGGREGATOR_LISTEN_ADDR:-:9090}
 REGISTRY_FILE=$data_dir/registry.json
-TELEGRAM_BOT_TOKEN=${AGGREGATOR_TELEGRAM_BOT_TOKEN:-}
-TELEGRAM_CHAT_ID=${AGGREGATOR_TELEGRAM_CHAT_ID:-}
-ADMIN_APPLY_SHARED_SECRET=${ADMIN_APPLY_SHARED_SECRET:-}
+TELEGRAM_BOT_TOKEN=${AGGREGATOR_TELEGRAM_BOT_TOKEN:-$existing_agg_bot_token}
+TELEGRAM_CHAT_ID=${AGGREGATOR_TELEGRAM_CHAT_ID:-$existing_agg_chat_id}
+ADMIN_APPLY_SHARED_SECRET=$resolved_admin_secret
 EOF
   chmod 0600 "$env_file" # contains a secret, unlike the agent's own env file
 
@@ -575,8 +606,8 @@ EOF
 
   install_unit update-aggregator
   echo "install.sh: update-aggregator installed and started. Check: systemctl status update-aggregator"
-  if [ -n "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
-    echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$ADMIN_APPLY_SHARED_SECRET" >&2
+  if [ -n "$resolved_admin_secret" ]; then
+    echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$resolved_admin_secret" >&2
     echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
     echo "  credential gating apply/self-update actions, it's stored 0600 in" >&2
     echo "  $env_file and never printed again after this, and every browser or" >&2
