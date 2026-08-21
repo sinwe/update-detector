@@ -1,10 +1,16 @@
 # update-detector
 
-A small agent that detects (never applies) available OS updates on a host:
-package updates, security updates, pending-reboot state, and OS release
-upgrades. It exposes the result over HTTP for [Gatus](https://gatus.io) to
-poll, and can notify a channel (Telegram today) when something meaningful
-changes. Ships as a single Docker image, one container per host.
+A small agent that detects available OS updates on a host: package
+updates, security updates, pending-reboot state, and OS release upgrades.
+It exposes the result over HTTP for [Gatus](https://gatus.io) to poll, and
+can notify a channel (Telegram today) when something meaningful changes.
+Ships as its own Docker image (`update-detector`), one container per host.
+The agent itself never writes to the host — an optional aggregator (a
+separate Docker image, one instance for your whole fleet) and companion
+(always native, never containerized) add a central dashboard and
+push-button apply on top — see
+[Fleet dashboard and push-button updates](#fleet-dashboard-and-push-button-updates)
+below.
 
 ## Supported platforms
 
@@ -14,7 +20,7 @@ changes. Ships as a single Docker image, one container per host.
 | Plain Debian / Raspberry Pi OS (bare metal or VM) | ✅ supported now — see [OS flavors](docs/reference.md#os-flavors) |
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](docs/reference.md#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
-| Actual Windows OS (Windows Update, winget) | 🧪 experimental — detection, `install.bat`, and companion apply/self-update all exist, see [Limitations](docs/reference.md#platform-limitations); none of it verified against a real Windows host yet |
+| Actual Windows OS (Windows Update) | 🧪 experimental — detection, `install.bat`, and companion apply/self-update confirmed against a real Windows host, see [Limitations](docs/reference.md#platform-limitations); **winget is not supported** |
 | Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
 
 ## Installation
