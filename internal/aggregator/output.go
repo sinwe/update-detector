@@ -26,6 +26,14 @@ type outputEvent struct {
 	Kind     outputEventKind
 	ActionID string
 	Line     string // only set when Kind == EventLine
+	// Staged is only meaningful when Kind == EventDone: true means this
+	// "done" is a companion self-update that staged a new binary but
+	// couldn't restart itself (Windows) -- a follow-up
+	// ActionCompleteCompanionSwap is about to run on the agent for the
+	// same host (see handleCompanionResult), so a subscriber shouldn't
+	// treat this as the action's true end. See openLiveOutput's own
+	// handling in templates.go.
+	Staged bool
 }
 
 // OutputHub fans a companion's (or agent's) live action output out to
@@ -100,8 +108,10 @@ func (h *OutputHub) Publish(agentID, actionID, line string) {
 // success's clean stream-close must never show as "disconnected" after
 // handleCompanionResult already recorded "done", regardless of which of
 // the two HTTP requests happens to finish first). Clears the backlog too
-// -- once an action is over there's nothing left to replay for it.
-func (h *OutputHub) End(agentID, actionID string, kind outputEventKind) {
+// -- once an action is over there's nothing left to replay for it. staged
+// is only meaningful for kind == EventDone (see outputEvent.Staged);
+// pass false for EventDisconnected.
+func (h *OutputHub) End(agentID, actionID string, kind outputEventKind, staged bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.active[agentID] != actionID {
@@ -109,7 +119,7 @@ func (h *OutputHub) End(agentID, actionID string, kind outputEventKind) {
 	}
 	delete(h.active, agentID)
 	delete(h.backlog, agentID)
-	h.broadcast(agentID, outputEvent{Kind: kind, ActionID: actionID})
+	h.broadcast(agentID, outputEvent{Kind: kind, ActionID: actionID, Staged: staged})
 }
 
 // broadcast must be called with h.mu held.

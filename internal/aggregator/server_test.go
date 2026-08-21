@@ -1661,6 +1661,57 @@ func TestHandleCompanionResultStagedAutoPushesSwapAction(t *testing.T) {
 	}
 }
 
+// TestHandleCompanionResultStagedPropagatesToOutputStream is the
+// regression test for a Windows companion self-update's second phase
+// (the actual stop/swap/start-the-service work, done by
+// ActionCompleteCompanionSwap on the agent) never appearing in the live
+// output pane: the browser needs to know a "done" event was for a staged
+// intermediate result, not the real end, so it can keep watching instead
+// of switching to version-polling immediately.
+func TestHandleCompanionResultStagedPropagatesToOutputStream(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer s.hub.Disconnect("a1", res.Ch)
+	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionSelfUpdate, Component: "companion", CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	s.outputHub.Begin("a1", "act1")
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/admin/agents/a1/output/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(streamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResp.Body.Close()
+
+	rec := doJSON(t, s, http.MethodPost, "/companion/result", companionResultRequest{
+		ActionID: "act1",
+		Success:  true,
+		Message:  "companion update staged to .exe.new",
+		Staged:   true,
+	}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	buf := make([]byte, 4096)
+	n, err := streamResp.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	got := string(buf[:n])
+	if !strings.Contains(got, "event: done") || !strings.Contains(got, `"staged":true`) {
+		t.Fatalf("expected a done event with staged:true in SSE body, got: %q", got)
+	}
+}
+
 // TestHandleCompanionResultNonStagedDoesNotPushSwapAction verifies that
 // a normal (non-staged) result does NOT trigger an auto-push of
 // ActionCompleteCompanionSwap.

@@ -49,7 +49,7 @@ func TestOutputHubEndDoneThenLateDisconnectedIsNoop(t *testing.T) {
 	_, ch, cancel := h.Subscribe("a1")
 	defer cancel()
 
-	h.End("a1", "act1", EventDone)
+	h.End("a1", "act1", EventDone, false)
 	select {
 	case ev := <-ch:
 		if ev.Kind != EventDone {
@@ -59,11 +59,33 @@ func TestOutputHubEndDoneThenLateDisconnectedIsNoop(t *testing.T) {
 		t.Fatal("timed out waiting for done event")
 	}
 
-	h.End("a1", "act1", EventDisconnected)
+	h.End("a1", "act1", EventDisconnected, false)
 	select {
 	case ev := <-ch:
 		t.Fatalf("expected no further event after done already fired, got %#v", ev)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestOutputHubEndPropagatesStaged is the regression test for a Windows
+// companion self-update never showing its second phase (stop/swap/start
+// the service) live: the browser's "done" handler needs to know this
+// first "done" was a staged intermediate result, not the real end, so it
+// can keep watching instead of switching to version-polling.
+func TestOutputHubEndPropagatesStaged(t *testing.T) {
+	h := NewOutputHub()
+	h.Begin("a1", "act1")
+	_, ch, cancel := h.Subscribe("a1")
+	defer cancel()
+
+	h.End("a1", "act1", EventDone, true)
+	select {
+	case ev := <-ch:
+		if ev.Kind != EventDone || !ev.Staged {
+			t.Fatalf("got %#v, want a Staged EventDone", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for done event")
 	}
 }
 
@@ -73,7 +95,7 @@ func TestOutputHubEndDisconnectedForRestartCase(t *testing.T) {
 	_, ch, cancel := h.Subscribe("a1")
 	defer cancel()
 
-	h.End("a1", "act1", EventDisconnected)
+	h.End("a1", "act1", EventDisconnected, false)
 	select {
 	case ev := <-ch:
 		if ev.Kind != EventDisconnected {
@@ -141,7 +163,7 @@ func TestOutputHubEndClearsBacklog(t *testing.T) {
 	h := NewOutputHub()
 	h.Begin("a1", "act1")
 	h.Publish("a1", "act1", "one")
-	h.End("a1", "act1", EventDone)
+	h.End("a1", "act1", EventDone, false)
 
 	backlog, _, cancel := h.Subscribe("a1")
 	defer cancel()
@@ -157,7 +179,7 @@ func TestOutputHubBeginResetsBacklogForNewAction(t *testing.T) {
 	h := NewOutputHub()
 	h.Begin("a1", "act1")
 	h.Publish("a1", "act1", "from act1")
-	h.End("a1", "act1", EventDone)
+	h.End("a1", "act1", EventDone, false)
 
 	h.Begin("a1", "act2")
 	backlog, _, cancel := h.Subscribe("a1")

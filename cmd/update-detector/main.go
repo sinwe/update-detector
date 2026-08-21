@@ -260,12 +260,29 @@ func run(ctx context.Context) error {
 				sink.Close()
 				cancelStream()
 			case aggregator.ActionCompleteCompanionSwap:
-				result := companion.CompleteCompanionSwap(ctx, action)
+				// CompleteCompanionSwap already calls emitFromContext(ctx)
+				// and runCapped throughout (stop/swap/start the service) --
+				// it was always ready to stream, it just never had a sink
+				// attached to actually stream to. Same sink/StreamOutput/
+				// report-before-close pattern as ActionRecheck above.
+				sink := companion.NewOutputSink(1000)
+				streamCtx, cancelStream := context.WithCancel(ctx)
+				go func() {
+					if err := companion.StreamOutput(streamCtx, cfg.AggregatorURL, identity, action.ID, sink); err != nil {
+						log.Printf("aggregator: streaming companion-swap output for %s: %v", action.ID, err)
+					}
+				}()
+
+				result := companion.CompleteCompanionSwap(companion.WithOutputSink(ctx, sink), action)
+
 				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				if err := aggClient.ReportActionResult(resultCtx, action.ID, result.Success, result.Message); err != nil {
 					log.Printf("aggregator: reporting companion swap result for %s: %v", action.ID, err)
 				}
 				cancel()
+
+				sink.Close()
+				cancelStream()
 			default:
 				log.Printf("aggregator: ignoring unexpected action type %q on agent stream", action.Type)
 			}

@@ -322,7 +322,7 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		CompletedAt: time.Now(),
 		Staged:      req.Staged,
 	})
-	s.outputHub.End(rec.ID, req.ActionID, EventDone)
+	s.outputHub.End(rec.ID, req.ActionID, EventDone, req.Staged)
 
 	// When the companion reports a staged self-update (downloaded .exe.new
 	// but can't swap because stopping itself would kill the process),
@@ -411,7 +411,7 @@ func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
 	// arrives, so an old companion that predates output streaming
 	// entirely still resolves to a correct "done" via
 	// handleCompanionResult instead of a live pane that never closes.
-	defer s.outputHub.End(rec.ID, actionID, EventDisconnected)
+	defer s.outputHub.End(rec.ID, actionID, EventDisconnected, false)
 
 	scanner := bufio.NewScanner(r.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -475,7 +475,7 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 	// caught up first instead of just missing everything before it
 	// (re)connected.
 	for _, line := range backlog {
-		if err := writeOutputEvent(w, string(EventLine), id, line); err != nil {
+		if err := writeOutputEvent(w, string(EventLine), id, line, false); err != nil {
 			return
 		}
 	}
@@ -497,7 +497,7 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 			}
 			flusher.Flush()
 		case event := <-ch:
-			if err := writeOutputEvent(w, string(event.Kind), event.ActionID, event.Line); err != nil {
+			if err := writeOutputEvent(w, string(event.Kind), event.ActionID, event.Line, event.Staged); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -509,12 +509,14 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 // EventSource listener expects (see openLiveOutput in templates.go).
 // Shared by handleAdminOutputStream's backlog replay and its live-forward
 // loop so a replayed line is byte-identical to a live one -- the browser
-// must not be able to tell the difference.
-func writeOutputEvent(w io.Writer, kind, actionID, line string) error {
+// must not be able to tell the difference. staged is only meaningful on
+// a "done" event -- see outputEvent.Staged's own doc comment.
+func writeOutputEvent(w io.Writer, kind, actionID, line string, staged bool) error {
 	payload, err := json.Marshal(struct {
 		ActionID string `json:"action_id"`
 		Line     string `json:"line,omitempty"`
-	}{ActionID: actionID, Line: line})
+		Staged   bool   `json:"staged,omitempty"`
+	}{ActionID: actionID, Line: line, Staged: staged})
 	if err != nil {
 		return nil // malformed payload is skipped, not fatal to the stream
 	}
