@@ -15,11 +15,20 @@ import (
 // Update KB (see kbPattern), the same optional/supplementary role
 // winget already has on the detection side (see
 // internal/checker/windows/windows.go's own Check).
+//
+// Every invocation below includes --disable-interactivity, matching the
+// detection side's own already-working winget command (see
+// internal/checker/windows/packages.go) -- confirmed live, without it
+// the companion (always running as a Windows Service, so stdin is never
+// a real console) hit `ERROR: Input redirection is not supported,
+// exiting the process immediately.` from winget itself.
+// --accept-package-agreements/--accept-source-agreements alone aren't
+// enough to guarantee winget never falls back to trying to prompt.
 type wingetApplier struct{}
 
 // Packages upgrades each named package individually via:
 //
-//	winget upgrade --id <name> --silent --accept-package-agreements --accept-source-agreements
+//	winget upgrade --id <name> --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
 //
 // Winget has no batch form, so packages are applied one at a time.
 // All output is collected; the first failure aborts the loop.
@@ -32,6 +41,7 @@ func (w *wingetApplier) Packages(ctx context.Context, names []string) (string, e
 			"--silent",
 			"--accept-package-agreements",
 			"--accept-source-agreements",
+			"--disable-interactivity",
 		))
 		combined.WriteString(out)
 		if err != nil {
@@ -43,13 +53,14 @@ func (w *wingetApplier) Packages(ctx context.Context, names []string) (string, e
 
 // Upgrade runs:
 //
-//	winget upgrade --all --silent --accept-package-agreements --accept-source-agreements
+//	winget upgrade --all --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
 func (w *wingetApplier) Upgrade(ctx context.Context) (string, error) {
 	return runCapped(ctx, wingetCommand(ctx,
 		"upgrade", "--all",
 		"--silent",
 		"--accept-package-agreements",
 		"--accept-source-agreements",
+		"--disable-interactivity",
 	))
 }
 
