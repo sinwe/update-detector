@@ -100,6 +100,13 @@ type Action struct {
 	// release tag to update it to.
 	Component     string `json:"component,omitempty"`
 	TargetVersion string `json:"target_version,omitempty"`
+
+	// Verbose is only meaningful for ActionRecheck: true streams the real
+	// shell command output the check runs (apt-get/apt-check/winget/
+	// powershell), matching apply/upgrade's own fidelity; false (default)
+	// streams synthetic progress narration lines instead. Ignored for
+	// every other action type, which always stream real output already.
+	Verbose bool `json:"verbose,omitempty"`
 }
 
 // ActionResult is what a companion reports back after attempting an Action.

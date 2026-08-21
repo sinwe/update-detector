@@ -610,7 +610,7 @@ func TestHandleCompanionResultEndsOutputStreamAsDone(t *testing.T) {
 	// before handleCompanionResult ever runs.
 	s.outputHub.Begin("a1", "act1")
 
-	ch, cancel := s.outputHub.Subscribe("a1")
+	_, ch, cancel := s.outputHub.Subscribe("a1")
 	defer cancel()
 
 	rec := doJSON(t, s, http.MethodPost, "/companion/result", companionResultRequest{ActionID: "act1", Success: true}, map[string]string{"X-Agent-ID": "a1", "Authorization": "Bearer tok"})
@@ -1198,7 +1198,7 @@ func TestHandleAdminRecheckWithNoCompanionStillResolvesLiveViewAsDone(t *testing
 		t.Fatal(err)
 	}
 
-	ch, cancel := s.outputHub.Subscribe("a1")
+	_, ch, cancel := s.outputHub.Subscribe("a1")
 	defer cancel()
 
 	resultRec := doJSON(t, s, http.MethodPost, "/companion/result",

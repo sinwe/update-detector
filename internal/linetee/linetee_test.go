@@ -1,4 +1,4 @@
-package companion
+package linetee
 
 import (
 	"bytes"
@@ -6,20 +6,20 @@ import (
 	"testing"
 )
 
-func TestLineTeeEmitsCompleteLinesAcrossArbitraryChunking(t *testing.T) {
+func TestWriterEmitsCompleteLinesAcrossArbitraryChunking(t *testing.T) {
 	var buf bytes.Buffer
 	var lines []string
-	tee := newLineTee(&buf, func(line string) { lines = append(lines, line) })
+	w := New(&buf, func(line string) { lines = append(lines, line) })
 
 	// Deliberately split mid-line across writes, at a boundary that
 	// doesn't align with any line at all.
 	chunks := []string{"first li", "ne\nseco", "nd line\nthir"}
 	for _, c := range chunks {
-		if _, err := tee.Write([]byte(c)); err != nil {
+		if _, err := w.Write([]byte(c)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	tee.flush() // "thir" has no trailing newline yet
+	w.Flush() // "thir" has no trailing newline yet
 
 	want := []string{"first line", "second line", "thir"}
 	if !reflect.DeepEqual(lines, want) {
@@ -30,27 +30,27 @@ func TestLineTeeEmitsCompleteLinesAcrossArbitraryChunking(t *testing.T) {
 	}
 }
 
-func TestLineTeeFlushNoopWhenNoTrailingPartial(t *testing.T) {
+func TestWriterFlushNoopWhenNoTrailingPartial(t *testing.T) {
 	var buf bytes.Buffer
 	var lines []string
-	tee := newLineTee(&buf, func(line string) { lines = append(lines, line) })
-	if _, err := tee.Write([]byte("one\ntwo\n")); err != nil {
+	w := New(&buf, func(line string) { lines = append(lines, line) })
+	if _, err := w.Write([]byte("one\ntwo\n")); err != nil {
 		t.Fatal(err)
 	}
-	tee.flush()
+	w.Flush()
 	want := []string{"one", "two"}
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("got %v, want %v", lines, want)
 	}
 }
 
-func TestLineTeeNilOnLineIsSafe(t *testing.T) {
+func TestWriterNilOnLineIsSafe(t *testing.T) {
 	var buf bytes.Buffer
-	tee := newLineTee(&buf, nil)
-	if _, err := tee.Write([]byte("hello\n")); err != nil {
+	w := New(&buf, nil)
+	if _, err := w.Write([]byte("hello\n")); err != nil {
 		t.Fatal(err)
 	}
-	tee.flush()
+	w.Flush()
 	if buf.String() != "hello\n" {
 		t.Fatalf("got %q", buf.String())
 	}

@@ -559,6 +559,9 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{end}}
 
         <div class="host-actions">
+          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Stream the real apt-get/apt-check/winget output instead of a short progress summary">
+            <input type="checkbox" id="verbose-{{.ID}}"> verbose
+          </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
@@ -766,9 +769,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return false;
     }
     async function forceRecheck(id) {
+      const verboseBox = document.getElementById('verbose-' + id);
+      const verbose = verboseBox ? verboseBox.checked : false;
       const es = openLiveOutput(id);
       try {
-        const resp = await fetch('/admin/agents/' + id + '/recheck', {method: 'POST'});
+        const resp = await fetch('/admin/agents/' + id + '/recheck', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({verbose: verbose}),
+        });
         if (!resp.ok) {
           closeLiveOutput(id, es);
           alert('recheck failed (' + resp.status + '): ' + await resp.text());
