@@ -1,3 +1,11 @@
+//go:build !windows
+
+// These tests fake "apt-get" as a #!/bin/sh script on PATH -- apt-get
+// (and this package generally) is Linux-only in practice anyway, and a
+// POSIX shell script isn't runnable via Windows' exec.LookPath the same
+// way (no shebang support, and PATHEXT-based lookup expects a known
+// executable extension), so there's no meaningful way to run this same
+// fake-script test on windows-latest CI.
 package aptutil
 
 import (
