@@ -397,18 +397,20 @@ func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	// Defense in depth, not just a UI nicety: a stream for an action this
 	// agent doesn't currently have in flight (stale retry, mismatched ID)
-	// must not be allowed to publish anything.
-	if pending, ok := s.hub.Pending(rec.ID); !ok || pending != actionID {
+	// must not be allowed to publish anything. IsPending, not Pending --
+	// this agent's own recheck (agentPending) and a companion's own apply
+	// (pending) can be in flight at the same time, each with its own
+	// actionID, and both need to check out correctly here.
+	if !s.hub.IsPending(rec.ID, actionID) {
 		http.Error(w, "action_id does not match this agent's in-flight action", http.StatusConflict)
 		return
 	}
 
 	// Begin already happened when the action was pushed (handleAdminApply
 	// et al.) -- uniformly, whether or not this stream ever actually
-	// arrives, so an agent-only recheck (never opens this endpoint at
-	// all) and an old companion that predates output streaming entirely
-	// both still resolve to a correct "done" via handleCompanionResult
-	// instead of a live pane that never closes.
+	// arrives, so an old companion that predates output streaming
+	// entirely still resolves to a correct "done" via
+	// handleCompanionResult instead of a live pane that never closes.
 	defer s.outputHub.End(rec.ID, actionID, EventDisconnected)
 
 	scanner := bufio.NewScanner(r.Body)

@@ -535,6 +535,69 @@ func TestHandleCompanionOutputFansOutToAdminStream(t *testing.T) {
 	}
 }
 
+// TestHandleCompanionOutputAcceptsAgentRoutedRecheckAction is the
+// regression test for a real bug: a recheck (agentStreams-routed, no
+// companion involved) never set CompanionHub's in-flight marker, so this
+// exact endpoint always rejected its output-stream POST with 409 --
+// "Force recheck" silently never streamed anything, on every platform.
+func TestHandleCompanionOutputAcceptsAgentRoutedRecheckAction(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+	res := s.hub.Connect("a1", KindAgent, "")
+	defer s.hub.Disconnect("a1", res.Ch)
+	if err := s.hub.Push("a1", Action{ID: "act1", Type: ActionRecheck, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	s.outputHub.Begin("a1", "act1")
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	streamReq, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/admin/agents/a1/output/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(streamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResp.Body.Close()
+	if streamResp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", streamResp.StatusCode)
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		_ = json.NewEncoder(pw).Encode(companionOutputFrame{ActionID: "act1", Line: "Running detection cycle..."})
+		pw.Close()
+	}()
+
+	outputReq, err := http.NewRequest(http.MethodPost, httpSrv.URL+"/companion/output?action_id=act1", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputReq.Header.Set("X-Agent-ID", "a1")
+	outputReq.Header.Set("Authorization", "Bearer tok")
+	outputResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(outputReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outputResp.Body.Close()
+	if outputResp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200 -- this is exactly the 409 regression", outputResp.StatusCode)
+	}
+
+	buf := make([]byte, 4096)
+	n, err := streamResp.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	got := string(buf[:n])
+	if !strings.Contains(got, "event: line") || !strings.Contains(got, "Running detection cycle") {
+		t.Fatalf("expected a line event with the recheck's narration in SSE body, got: %q", got)
+	}
+}
+
 // TestHandleCompanionOutputEndsAsDisconnectedWithoutPriorResult is the
 // regression test for the companion-self-update-restart case: the output
 // stream's body ending with no prior handleCompanionResult call must
