@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
 
 	"update-detector/internal/aptutil"
 	"update-detector/internal/checker"
+	"update-detector/internal/linetee"
 )
 
 // aptCheckPath is Ubuntu's own upgradable-package counter, shipped by the
@@ -45,22 +47,46 @@ func checkUpgradable(ctx context.Context, aptConfigPath string) (packageResult, 
 	return packageResult{Total: total, Security: security, Upgrades: upgrades}, nil
 }
 
+// aptCheckCounts's real content is on stderr (see parseAptCheckCounts) --
+// stdout is unused, so only stderr needs a sink tap; a single tapped
+// writer value is enough (no cross-stream merge, so no risk of a
+// diagnostic line landing where parsing doesn't expect it).
 func aptCheckCounts(ctx context.Context, aptConfigPath string) (total int, security int, err error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, aptCheckPath)
 	cmd.Env = aptutil.Env(aptConfigPath)
-	cmd.Stderr = &stderr
+	var errOut io.Writer = &stderr
+	if sink := checker.LineSinkFromContext(ctx); sink != nil {
+		tee := linetee.New(&stderr, sink)
+		defer tee.Flush()
+		errOut = tee
+	}
+	cmd.Stderr = errOut
 	if err := cmd.Run(); err != nil {
 		return 0, 0, fmt.Errorf("apt-check: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return parseAptCheckCounts(stderr.String())
 }
 
+// Only stdout (the parsed list itself) is tapped when a sink is present --
+// stderr keeps its own independent, un-tapped buffer exactly as before.
+// Tapping both would mean sharing one writer value across both streams
+// (see internal/aptutil.Update's own comment on why), which here would
+// also merge stderr's diagnostic text into the very stdout buffer
+// parseUpgradableList parses -- a real risk of breaking parsing during a
+// verbose recheck specifically, not just a cosmetic trade-off, so it's
+// deliberately avoided.
 func aptListUpgradable(ctx context.Context, aptConfigPath string) ([]checker.PackageUpgrade, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "apt", "list", "--upgradable")
 	cmd.Env = aptutil.Env(aptConfigPath)
-	cmd.Stdout = &stdout
+	var out io.Writer = &stdout
+	if sink := checker.LineSinkFromContext(ctx); sink != nil {
+		tee := linetee.New(&stdout, sink)
+		defer tee.Flush()
+		out = tee
+	}
+	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("apt list --upgradable: %w: %s", err, strings.TrimSpace(stderr.String()))

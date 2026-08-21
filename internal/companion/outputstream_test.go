@@ -41,8 +41,8 @@ func TestStreamOutputDeliversLinesInOrder(t *testing.T) {
 	defer srv.Close()
 
 	sink := NewOutputSink(10)
-	sink.push("line one")
-	sink.push("line two")
+	sink.Push("line one")
+	sink.Push("line two")
 	sink.Close()
 
 	identity := aggregatorclient.Identity{AgentID: "agent1", Token: "tok"}
@@ -76,7 +76,7 @@ func TestStreamOutputReturnsPromptlyWhenAggregatorUnreachable(t *testing.T) {
 
 	sink := NewOutputSink(10)
 	go func() {
-		sink.push("line one")
+		sink.Push("line one")
 		sink.Close()
 	}()
 

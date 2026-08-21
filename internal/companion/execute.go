@@ -15,6 +15,7 @@ import (
 	"update-detector/internal/aggregator"
 	"update-detector/internal/aggregatorclient"
 	"update-detector/internal/checker"
+	"update-detector/internal/linetee"
 )
 
 const outputTruncateLimit = 4000
@@ -145,23 +146,23 @@ func triggerRecheck(ctx context.Context, agentStatusURL string) {
 // live as it's written -- purely additive, the returned string is
 // identical either way. cmd.Stdout and cmd.Stderr are always set to the
 // exact same writer value (whichever one that is), preserving os/exec's
-// single-writer-at-a-time guarantee that lineTee itself relies on.
+// single-writer-at-a-time guarantee that linetee.Writer itself relies on.
 // runCappedImpl is the real implementation used by default. Tests may
 // replace the package-level runCapped variable with a mock to capture and
 // validate executed commands without actually running them.
 func runCappedImpl(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	var buf bytes.Buffer
 	var w io.Writer = &buf
-	var tee *lineTee
+	var tee *linetee.Writer
 	if sink := sinkFromContext(ctx); sink != nil {
-		tee = newLineTee(&buf, sink.push)
+		tee = linetee.New(&buf, sink.Push)
 		w = tee
 	}
 	cmd.Stdout = w
 	cmd.Stderr = w
 	err := cmd.Run()
 	if tee != nil {
-		tee.flush()
+		tee.Flush()
 	}
 	out := buf.String()
 	if len(out) > outputTruncateLimit {

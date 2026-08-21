@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
 
 	"update-detector/internal/aptutil"
 	"update-detector/internal/checker"
+	"update-detector/internal/linetee"
 )
 
 type packageResult struct {
@@ -30,11 +32,22 @@ type packageResult struct {
 // version, group 4: origin/archive/arch info.
 var instLineRE = regexp.MustCompile(`^Inst\s+(\S+)(?:\s+\[([^\]]+)\])?\s+\(([^\s]+)\s+([^)]*)\)`)
 
+// Only stdout (the simulated dist-upgrade output actually parsed) is
+// tapped when a sink is present -- stderr keeps its own independent,
+// un-tapped buffer, same reasoning as ubuntu's aptListUpgradable: merging
+// the two would risk stderr diagnostics landing inside the very text
+// parseDistUpgrade parses, during a verbose recheck specifically.
 func checkUpgradable(ctx context.Context, aptConfigPath string) (packageResult, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "apt-get", "-s", "dist-upgrade")
 	cmd.Env = aptutil.Env(aptConfigPath)
-	cmd.Stdout = &stdout
+	var out io.Writer = &stdout
+	if sink := checker.LineSinkFromContext(ctx); sink != nil {
+		tee := linetee.New(&stdout, sink)
+		defer tee.Flush()
+		out = tee
+	}
+	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return packageResult{}, fmt.Errorf("apt-get -s dist-upgrade: %w: %s", err, strings.TrimSpace(stderr.String()))

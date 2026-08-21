@@ -274,6 +274,70 @@ func TestCompanionHubPushRequiresCompanionForApplyActions(t *testing.T) {
 	}
 }
 
+// TestCompanionHubPushSetsAgentPendingForNonCompanionActions is the
+// regression test for a real bug: Push's agentStreams branch pushed the
+// action but never recorded it as in-flight anywhere, so
+// handleCompanionOutput's authorization check (IsPending) always
+// rejected a recheck's own output-stream POST with 409 -- "Force
+// recheck" silently never streamed anything, on every platform,
+// regardless of the verbose flag.
+func TestCompanionHubPushSetsAgentPendingForNonCompanionActions(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1", KindAgent, "")
+
+	if err := h.Push("a1", Action{ID: "act1", Type: ActionRecheck}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+
+	if !h.IsPending("a1", "act1") {
+		t.Fatal("expected IsPending to report the recheck's action ID as in flight")
+	}
+	if id, ok := h.Pending("a1"); !ok || id != "act1" {
+		t.Fatalf("got Pending()=%q,%v, want act1,true", id, ok)
+	}
+}
+
+// TestCompanionHubRecheckDoesNotClobberInFlightCompanionAction covers the
+// other half of the same fix: a recheck routed via agentStreams must
+// track its own in-flight marker independently of an already in-flight
+// companion action for the same agent, so IsPending can authorize output
+// streaming for *both* without either clobbering the other's tracking
+// (and so RecordResult for either one clears only its own marker).
+func TestCompanionHubRecheckDoesNotClobberInFlightCompanionAction(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1", KindCompanion, "")
+	// Matches real topology: the agent always opens its own KindAgent
+	// stream too, landing in agentStreams alongside the companion's main
+	// slot (see Connect) -- without this, Push's agentStreams branch has
+	// nothing to route the recheck to and it falls through to share the
+	// companion's own pending slot instead, which is Push's documented,
+	// legitimate fallback for a host with no separate agent connection at
+	// all (e.g. an old agent binary), not what this test means to cover.
+	h.Connect("a1", KindAgent, "")
+
+	if err := h.Push("a1", Action{ID: "upgrade1", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("push upgrade failed: %v", err)
+	}
+	if err := h.Push("a1", Action{ID: "recheck1", Type: ActionRecheck}); err != nil {
+		t.Fatalf("push recheck failed: %v", err)
+	}
+
+	if !h.IsPending("a1", "upgrade1") {
+		t.Fatal("expected the in-flight upgrade to still be authorized")
+	}
+	if !h.IsPending("a1", "recheck1") {
+		t.Fatal("expected the in-flight recheck to also be authorized")
+	}
+
+	h.RecordResult("a1", ActionResult{ActionID: "recheck1", Success: true, CompletedAt: time.Now()})
+	if h.IsPending("a1", "recheck1") {
+		t.Fatal("expected the recheck's marker to be cleared after its result")
+	}
+	if !h.IsPending("a1", "upgrade1") {
+		t.Fatal("expected the still-in-flight upgrade to be unaffected by the recheck's own result")
+	}
+}
+
 func TestCompanionHubAgentConnectDoesNotTouchCompanionVersion(t *testing.T) {
 	h := NewCompanionHub()
 	res := h.Connect("a1", KindCompanion, "v1.0.0")

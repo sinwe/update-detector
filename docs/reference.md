@@ -98,55 +98,45 @@ Monitoring the actual Windows or macOS OS needs a native, non-container
 agent — the checker is designed as an interface specifically so that's a
 new implementation, not a rewrite (see
 `docs/plugin-architecture-plan.md`). macOS is still planned; Windows has
-an experimental detection-only implementation (`internal/checker/windows`):
+an experimental implementation (`internal/checker/windows`), with
+detection, `install.bat`, and companion apply/self-update now confirmed
+against a real Windows host. **winget is not supported** — see the
+dedicated bullet below for why — Windows Update is the only signal this
+project relies on for Windows.
 
-- **Windows Update (primary signal)**: queries the Windows Update Agent
-  API — the same COM interface (`Microsoft.Update.Session` /
+- **Windows Update (primary, and only supported, signal)**: queries the
+  Windows Update Agent API — the same COM interface
+  (`Microsoft.Update.Session` /
   `CreateUpdateSearcher().Search("IsInstalled=0 and IsHidden=0")`) the
-  Settings app's own "Check for updates" ultimately goes through —
-  via a `powershell -Command` one-liner emitting JSON, parsed in Go
+  Settings app's own "Check for updates" ultimately goes through — via a
+  `powershell -Command` one-liner emitting JSON, parsed in Go
   (`internal/checker/windows/windowsupdate.go`/`windowsupdate_parse.go`).
   This carries a real **MSRC severity rating** per update (`Critical`/
   `Important`/`Moderate`/`Low`, or empty for a non-security update) —
-  counted as security when non-empty, a genuine signal winget has no
-  equivalent of at all. Expected (not yet confirmed live) to work under
-  `LocalSystem` without the account workaround winget needs below, since
-  the Windows Update service is system-level, not tied to a specific
-  user's own package registration.
-- **Apply, via the companion (⚠️ unverified, actually modifies the
-  system)**: `internal/companion/applier_windows.go` extends the same
-  Windows Update Agent API to *install* updates, not just detect them —
-  a checked "Apply selected" item whose name carries a `(KBnnnnnnn)`
-  marker (every Windows Update title does) is downloaded and installed
-  via `IUpdateDownloader.Download()`/`IUpdateInstaller.Install()`;
-  anything else falls back to winget (`winget upgrade --id <name>`), the
-  same optional/supplementary role it already has for detection. "Upgrade
+  counted as security when non-empty. Expected (not yet separately
+  confirmed live) to work under `LocalSystem`, since the Windows Update
+  service is system-level, not tied to a specific user's own package
+  registration the way winget is (see below).
+- **Apply, via the companion**: `internal/companion/applier_windows.go`
+  extends the same Windows Update Agent API to *install* updates, not
+  just detect them — a checked "Apply selected" item whose name carries
+  a `(KBnnnnnnn)` marker (every Windows Update title does) is downloaded
+  and installed via
+  `IUpdateDownloader.Download()`/`IUpdateInstaller.Install()`. "Upgrade
   all"/"Full upgrade all" install every currently pending Windows Update
-  (no dist-upgrade/upgrade distinction, same real semantic gap winget's
-  own `FullUpgrade` already has). **This is the least-tested code path
-  in this entire Windows implementation** — every other piece here is
-  read-only detection; this one actually installs updates and can
-  require a reboot to take effect. Tested only via fixture tests of the
-  KB-vs-winget name-splitting logic, never against a real Windows Update
-  install. If you try this, start with a single low-stakes update via
-  "Apply selected," not "Upgrade all," and watch the live output pane.
-- **Packages via winget (optional, supplementary)**: shells out to
-  `winget upgrade`, parsing its table output the same best-effort way the
-  Debian checker parses `apt-get -s dist-upgrade`'s text output. Covers
-  separately-managed packages winget itself tracks — the same
-  relationship apt has to Ubuntu/Debian's own release upgrades — merged
-  into the same package list Windows Update above populates. **No
-  security/severity signal exists in winget at all** (unlike apt's
-  `-security` pocket or Windows Update's own MSRC ratings above) — every
-  winget-sourced upgrade reports `security: false`. Winget's own table
-  format has changed across App Installer versions, and winget itself
-  may be entirely absent on locked-down or Server Windows machines, or
-  (see below) simply not runnable from the account the agent/companion
-  happens to run as; none of that is treated as an error
-  since winget is optional here — Windows Update above is what actually
-  matters, and a winget failure only ever means missing out on its
-  supplementary package list, not degraded detection overall. Any other
-  winget failure (bad output, a real winget error) is still surfaced.
+  (no dist-upgrade/upgrade distinction). This actually installs updates
+  and can require a reboot to take effect — start with a single
+  low-stakes update via "Apply selected," not "Upgrade all," and watch
+  the live output pane.
+- **Packages via winget: not supported.** The checker/applier code for
+  it still exists (`winget upgrade`, parsed the same best-effort way the
+  Debian checker parses `apt-get -s dist-upgrade`'s text output) but
+  don't rely on it — see the next bullet for why it doesn't work under
+  this project's own default install, and note that even where it does
+  run, winget has **no security/severity signal at all** (unlike apt's
+  `-security` pocket or Windows Update's own MSRC ratings above); every
+  winget-sourced upgrade would report `security: false`, and its table
+  output format has changed across App Installer versions.
 - **Reboot-required**: reads three well-known `HKLM` registry keys —
   no admin privilege or `winget`/other exec needed, the most reliable
   part of this checker. No OS-upgrade detection at all in v1 (same
@@ -161,39 +151,39 @@ an experimental detection-only implementation (`internal/checker/windows`):
   around to grant an exception. Config is stored in each service's own
   registry `Environment` value (`REG_MULTI_SZ`), the native equivalent of
   systemd's `EnvironmentFile=`.
-- **winget effectively never runs under `install.bat`, by design**: every
-  service `install.bat` creates defaults to running as `LocalSystem`,
-  under which `winget` simply doesn't exist — `winget.exe` is an App
-  Execution Alias registered per-*user* (it lives under that user's own
+- **Why winget isn't supported**: every service `install.bat` creates
+  defaults to running as `LocalSystem`, under which `winget` simply
+  doesn't exist — `winget.exe` is an App Execution Alias registered
+  per-*user* (it lives under that user's own
   `AppData\Local\Microsoft\WindowsApps`, on *that user's* `PATH` only),
   and `SYSTEM` has no such registration at all, confirmed live as
   `exec.LookPath("winget")` failing outright with "executable file not
   found in %PATH%" even though `winget` works fine interactively.
   `install.bat` used to offer to reconfigure a service's logon account
   to work around this; that prompt/offer has been removed (the code
-  behind it is still there, just unreferenced) — since winget is only
-  a supplementary signal (Windows Update above is the real one, and
-  doesn't have this problem), the account-switching complexity wasn't
-  worth it, and the installer no longer prompts for or offers it at
-  all. The winget detection code itself still works if you manually
-  reconfigure a service to run as a real account
-  (`sc config <service> obj= ".\<user>" password= "<password>"`, plus
-  granting it "Log on as a service" via `secpol.msc` if needed) — it's
-  just not something the installer does for you anymore.
-- Also untested against a real Windows machine end-to-end for most of
-  this: only fixture-based parsing tests and a hosted CI runner (no
-  `winget`/real registry/real Windows Service state to exercise) have
-  exercised most of this so far. The Windows Service Control Protocol
-  fix and the winget account/PATH issue above were both found and fixed
-  from one real, live install — everything else here carries the same
-  unverified caveat until it gets the same live exercise.
-- **Roadmap, not started**: Windows Update above covers the OS itself,
-  but this checker's package-manager story is meant to generalize past
-  winget too — Scoop and Chocolatey as alternative/additional Windows
-  package sources, a Homebrew-based macOS checker (see the macOS row
-  above), and Docker image update detection on Linux (tag/digest drift,
-  a different kind of "update" than an OS package manager reports) are
-  all intended future checker plugins, none of them started.
+  behind it is still there, just unreferenced) — since Windows Update
+  above is the real, actually-supported signal and doesn't have this
+  problem, the account-switching complexity wasn't worth carrying, and
+  the installer no longer prompts for or offers it at all. The winget
+  code itself still runs if you manually reconfigure a service to use a
+  real account (`sc config <service> obj= ".\<user>" password=
+  "<password>"`, plus granting it "Log on as a service" via
+  `secpol.msc`), but that's not something this project sets up for you
+  or recommends — treat any winget-sourced result as unsupported even
+  then.
+- Confirmed against a real Windows host this way: `install.bat`
+  install/uninstall, the Windows Service Control Protocol fix, Force
+  recheck's live-streaming output (verbose and narration), and companion
+  self-update. Still only fixture-tested, not yet separately confirmed
+  live: a real Windows Update KB install via "Apply selected"/"Upgrade
+  all".
+- **Roadmap, not started**: Windows Update above covers the OS itself;
+  a genuinely supported Windows package-manager signal (Scoop and
+  Chocolatey are candidates, since winget isn't a viable one — see
+  above), a Homebrew-based macOS checker (see the macOS row above), and
+  Docker image update detection on Linux (tag/digest drift, a different
+  kind of "update" than an OS package manager reports) are all intended
+  future checker plugins, none of them started.
 
 On WSL2 specifically, `docker` being on `PATH` doesn't necessarily mean
 there's a real engine running inside the distro at all — see
