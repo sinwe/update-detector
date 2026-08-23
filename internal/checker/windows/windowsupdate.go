@@ -6,8 +6,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+
+	"update-detector/internal/checker"
+	"update-detector/internal/linetee"
 )
 
 // windowsUpdateScript queries the Windows Update Agent API (the same COM
@@ -58,7 +62,17 @@ ConvertTo-Json -InputObject $updates -Compress
 func checkWindowsUpdates(ctx context.Context) (packageResult, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", windowsUpdateScript)
-	cmd.Stdout = &stdout
+	var out io.Writer = &stdout
+	if sink := checker.LineSinkFromContext(ctx); sink != nil {
+		// -Compress means this is one long single-line JSON blob -- a
+		// verbose stream shows it as one raw line, same "no special-
+		// casing for readability" posture Upgrade's own real-output
+		// streaming already has.
+		tee := linetee.New(&stdout, sink)
+		defer tee.Flush()
+		out = tee
+	}
+	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return packageResult{}, fmt.Errorf("querying Windows Update: %w: %s", err, strings.TrimSpace(stderr.String()))

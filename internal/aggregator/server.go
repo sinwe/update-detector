@@ -322,7 +322,7 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		CompletedAt: time.Now(),
 		Staged:      req.Staged,
 	})
-	s.outputHub.End(rec.ID, req.ActionID, EventDone)
+	s.outputHub.End(rec.ID, req.ActionID, EventDone, req.Staged)
 
 	// When the companion reports a staged self-update (downloaded .exe.new
 	// but can't swap because stopping itself would kill the process),
@@ -397,19 +397,21 @@ func (s *Server) handleCompanionOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	// Defense in depth, not just a UI nicety: a stream for an action this
 	// agent doesn't currently have in flight (stale retry, mismatched ID)
-	// must not be allowed to publish anything.
-	if pending, ok := s.hub.Pending(rec.ID); !ok || pending != actionID {
+	// must not be allowed to publish anything. IsPending, not Pending --
+	// this agent's own recheck (agentPending) and a companion's own apply
+	// (pending) can be in flight at the same time, each with its own
+	// actionID, and both need to check out correctly here.
+	if !s.hub.IsPending(rec.ID, actionID) {
 		http.Error(w, "action_id does not match this agent's in-flight action", http.StatusConflict)
 		return
 	}
 
 	// Begin already happened when the action was pushed (handleAdminApply
 	// et al.) -- uniformly, whether or not this stream ever actually
-	// arrives, so an agent-only recheck (never opens this endpoint at
-	// all) and an old companion that predates output streaming entirely
-	// both still resolve to a correct "done" via handleCompanionResult
-	// instead of a live pane that never closes.
-	defer s.outputHub.End(rec.ID, actionID, EventDisconnected)
+	// arrives, so an old companion that predates output streaming
+	// entirely still resolves to a correct "done" via
+	// handleCompanionResult instead of a live pane that never closes.
+	defer s.outputHub.End(rec.ID, actionID, EventDisconnected, false)
 
 	scanner := bufio.NewScanner(r.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -458,13 +460,25 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	ch, cancel := s.outputHub.Subscribe(id)
+	backlog, ch, cancel := s.outputHub.Subscribe(id)
 	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Replay whatever was already published for the currently in-flight
+	// action before forwarding anything live -- see OutputHub.Subscribe.
+	// A reconnecting browser (e.g. a page refresh mid-recheck/apply) gets
+	// caught up first instead of just missing everything before it
+	// (re)connected.
+	for _, line := range backlog {
+		if err := writeOutputEvent(w, string(EventLine), id, line, false); err != nil {
+			return
+		}
+	}
 	flusher.Flush()
 
 	heartbeat := time.NewTicker(30 * time.Second)
@@ -483,19 +497,31 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 			}
 			flusher.Flush()
 		case event := <-ch:
-			payload, err := json.Marshal(struct {
-				ActionID string `json:"action_id"`
-				Line     string `json:"line,omitempty"`
-			}{ActionID: event.ActionID, Line: event.Line})
-			if err != nil {
-				continue
-			}
-			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Kind, payload); err != nil {
+			if err := writeOutputEvent(w, string(event.Kind), event.ActionID, event.Line, event.Staged); err != nil {
 				return
 			}
 			flusher.Flush()
 		}
 	}
+}
+
+// writeOutputEvent writes one SSE frame in the exact shape a browser's
+// EventSource listener expects (see openLiveOutput in templates.go).
+// Shared by handleAdminOutputStream's backlog replay and its live-forward
+// loop so a replayed line is byte-identical to a live one -- the browser
+// must not be able to tell the difference. staged is only meaningful on
+// a "done" event -- see outputEvent.Staged's own doc comment.
+func writeOutputEvent(w io.Writer, kind, actionID, line string, staged bool) error {
+	payload, err := json.Marshal(struct {
+		ActionID string `json:"action_id"`
+		Line     string `json:"line,omitempty"`
+		Staged   bool   `json:"staged,omitempty"`
+	}{ActionID: actionID, Line: line, Staged: staged})
+	if err != nil {
+		return nil // malformed payload is skipped, not fatal to the stream
+	}
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, payload)
+	return err
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -677,6 +703,13 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }
 
+type recheckRequest struct {
+	// Verbose, if true, asks the agent to stream the recheck's real shell
+	// command output instead of synthetic progress narration -- see
+	// Action.Verbose.
+	Verbose bool `json:"verbose,omitempty"`
+}
+
 // handleAdminRecheck pushes a recheck Action to a connected companion, so
 // the agent runs an out-of-band detection cycle instead of waiting for the
 // next CHECK_INTERVAL -- e.g. after the admin page's data still looks
@@ -684,14 +717,24 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 // no shared secret: it can't change anything on the host, only make it
 // report what's already true sooner, so it gets the same trust model as
 // the rest of /admin (approve/reject/view).
-func (s *Server) handleAdminRecheck(w http.ResponseWriter, _ *http.Request, id string) {
+func (s *Server) handleAdminRecheck(w http.ResponseWriter, r *http.Request, id string) {
 	rec, ok := s.registry.Get(id)
 	if !ok || rec.Status != StatusApproved {
 		http.Error(w, "agent not found or not approved", http.StatusNotFound)
 		return
 	}
 
-	action := Action{ID: newActionID(), Type: ActionRecheck, CreatedAt: time.Now()}
+	// Best-effort decode: an empty/missing body (e.g. a bare POST with no
+	// content) is not an error here, just means verbose=false -- unlike
+	// handleAdminApply's request body, which is mandatory (it selects
+	// which packages to touch), this one's body is purely an optional
+	// preference.
+	var req recheckRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	action := Action{ID: newActionID(), Type: ActionRecheck, Verbose: req.Verbose, CreatedAt: time.Now()}
 	if err := s.hub.Push(id, action); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

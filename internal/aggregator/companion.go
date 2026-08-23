@@ -100,6 +100,13 @@ type Action struct {
 	// release tag to update it to.
 	Component     string `json:"component,omitempty"`
 	TargetVersion string `json:"target_version,omitempty"`
+
+	// Verbose is only meaningful for ActionRecheck: true streams the real
+	// shell command output the check runs (apt-get/apt-check/winget/
+	// powershell), matching apply/upgrade's own fidelity; false (default)
+	// streams synthetic progress narration lines instead. Ignored for
+	// every other action type, which always stream real output already.
+	Verbose bool `json:"verbose,omitempty"`
 }
 
 // ActionResult is what a companion reports back after attempting an Action.
@@ -163,8 +170,17 @@ type CompanionHub struct {
 	// last reported detecting agent running there (natively or as a
 	// Docker container) -- see SetAgentPresent.
 	agentPresent map[string]bool
-	pending      map[string]string // agentID -> in-flight action ID
-	results           map[string][]ActionResult
+	pending      map[string]string // agentID -> in-flight action ID pushed via the main (usually companion) stream
+	// agentPending is agentID -> in-flight action ID pushed via
+	// agentStreams instead (e.g. a recheck) -- tracked separately from
+	// pending, deliberately: a non-companion-required action is never
+	// blocked by (and must never clobber the tracking of) an already
+	// in-flight companion action on the same agent, since Push's own
+	// agentStreams branch skips the ErrActionInFlight check entirely. See
+	// IsPending, which is what actually authorizes output streaming
+	// (handleCompanionOutput) against either map.
+	agentPending map[string]string
+	results      map[string][]ActionResult
 }
 
 func NewCompanionHub() *CompanionHub {
@@ -175,6 +191,7 @@ func NewCompanionHub() *CompanionHub {
 		aggregatorPresent: map[string]bool{},
 		agentPresent:      map[string]bool{},
 		pending:           map[string]string{},
+		agentPending:      map[string]string{},
 		results:           map[string][]ActionResult{},
 	}
 }
@@ -335,6 +352,7 @@ func (h *CompanionHub) Disconnect(agentID string, ch chan Action) {
 	}
 	if cur, ok := h.agentStreams[agentID]; ok && cur.ch == ch {
 		delete(h.agentStreams, agentID)
+		delete(h.agentPending, agentID)
 	}
 }
 
@@ -357,15 +375,21 @@ func (h *CompanionHub) Push(agentID string, action Action) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Agent-only actions (like ActionCompleteCompanionSwap) are routed
-	// to the agent stream, even if a companion holds the main slot.
-	// If no agent stream exists, fall through to the main stream
-	// (companion can handle it too, e.g. ActionRecheck on a host
-	// where only the companion is connected).
+	// Agent-only actions (like ActionCompleteCompanionSwap and
+	// ActionRecheck) are routed to the agent stream, even if a companion
+	// holds the main slot. If no agent stream exists, fall through to the
+	// main stream (companion can handle it too, e.g. ActionRecheck on a
+	// host where only the companion is connected). Tracked in
+	// agentPending, not pending -- deliberately no ErrActionInFlight
+	// check here: these actions are never blocked by (and must never be
+	// mistaken, via a shared marker, for) an already in-flight companion
+	// action on the same agent. See IsPending, which authorizes output
+	// streaming (handleCompanionOutput) against both maps.
 	if !action.Type.requiresCompanion() {
 		if agentEntry, ok := h.agentStreams[agentID]; ok {
 			select {
 			case agentEntry.ch <- action:
+				h.agentPending[agentID] = action.ID
 				return nil
 			default:
 				return errors.New("agent stream busy, action dropped")
@@ -397,12 +421,17 @@ func (h *CompanionHub) Push(agentID string, action Action) error {
 // RecordResult appends result to agentID's capped action log, and clears
 // the in-flight marker Push set for this action -- but only if it's still
 // the current one, so a stale/duplicate result for an already-superseded
-// action can't clobber a newer in-flight marker.
+// action can't clobber a newer in-flight marker. Checks both pending and
+// agentPending since either could hold it, depending on which of Push's
+// two branches originally routed this action.
 func (h *CompanionHub) RecordResult(agentID string, result ActionResult) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.pending[agentID] == result.ActionID {
 		delete(h.pending, agentID)
+	}
+	if h.agentPending[agentID] == result.ActionID {
+		delete(h.agentPending, agentID)
 	}
 	log := append(h.results[agentID], result)
 	if len(log) > actionLogLimit {
@@ -422,12 +451,33 @@ func (h *CompanionHub) Results(agentID string) []ActionResult {
 // Pending returns the action ID currently in flight for agentID, if any --
 // lets a page load/reload notice an already-running action (e.g. triggered
 // from another tab, or before a reload) and resume watching its live
-// output instead of only the tab that started it.
+// output instead of only the tab that started it. Checks pending first,
+// falling back to agentPending -- a companion action (if any) is
+// preferred for this single-slot "what to resume watching" purpose in
+// the rare case both happen to be in flight at once (see IsPending for
+// the authorization check that doesn't have to pick just one).
 func (h *CompanionHub) Pending(agentID string) (string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	id, ok := h.pending[agentID]
+	if id, ok := h.pending[agentID]; ok {
+		return id, true
+	}
+	id, ok := h.agentPending[agentID]
 	return id, ok
+}
+
+// IsPending reports whether actionID is agentID's currently in-flight
+// action, checking both pending and agentPending -- unlike Pending
+// (which returns a single value for the "what should I resume watching"
+// UI case), this is used to authorize output streaming
+// (handleCompanionOutput), where a recheck and a companion action can
+// legitimately be in flight for the same agent at once, and each needs
+// its own actionID to check out correctly regardless of which one
+// Pending itself would have preferred to report.
+func (h *CompanionHub) IsPending(agentID, actionID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.pending[agentID] == actionID || h.agentPending[agentID] == actionID
 }
 
 func newActionID() string {

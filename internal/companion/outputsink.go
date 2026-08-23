@@ -11,8 +11,9 @@ import (
 // absence must never change behavior: runCapped works exactly as it did
 // before this existed when no sink is in context.
 //
-// push is only ever called from the single goroutine os/exec guarantees
-// when Stdout and Stderr are the same writer value (see lineTee) -- so
+// Push is only ever called from the single goroutine os/exec guarantees
+// when Stdout and Stderr are the same writer value (see internal/linetee),
+// or from a single caller-owned goroutine outside this package -- so
 // OutputSink needs no locking of its own.
 type OutputSink struct {
 	ch      chan string
@@ -28,12 +29,16 @@ func NewOutputSink(bufSize int) *OutputSink {
 	return &OutputSink{ch: make(chan string, bufSize)}
 }
 
-// push is non-blocking. While the buffer is full it just counts drops;
+// Push is non-blocking. While the buffer is full it just counts drops;
 // once a slot frees up, one synthetic marker line reports how many were
 // lost before resuming normal lines -- mirrors runCapped's own
 // "...(truncated)..." convention for the same reason (an incomplete live
-// view should say so, not silently skip ahead).
-func (s *OutputSink) push(line string) {
+// view should say so, not silently skip ahead). Exported (not just used
+// via emitFromContext/WithOutputSink from within this package) so a
+// caller outside package companion -- e.g. cmd/update-detector's own
+// recheck handling -- can construct a sink and push directly into it
+// without needing a context indirection of its own.
+func (s *OutputSink) Push(line string) {
 	if s.dropped > 0 {
 		select {
 		case s.ch <- fmt.Sprintf("...(%d line(s) dropped)...", s.dropped):
@@ -90,6 +95,6 @@ func emitFromContext(ctx context.Context) func(string, ...any) {
 		return func(string, ...any) {}
 	}
 	return func(format string, args ...any) {
-		sink.push(fmt.Sprintf(format, args...))
+		sink.Push(fmt.Sprintf(format, args...))
 	}
 }

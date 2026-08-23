@@ -6,10 +6,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -131,58 +133,34 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	if aggClient != nil {
-		// Holds the aggregator's stream connection whenever no companion
-		// is running (or hasn't connected yet) -- the aggregator's
-		// CompanionHub always lets a companion preempt this, since only
-		// it can carry out apply-type actions; this only ever receives
-		// (and can only ever receive, per that same server-side gate)
-		// ActionRecheck. Handled in-process, unlike the companion's own
-		// loopback HTTP call, since the agent already is that process.
-		onAction := func(action aggregator.Action) {
-			switch action.Type {
-			case aggregator.ActionRecheck:
-				srv.TriggerRecheck()
-				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				if err := aggClient.ReportActionResult(resultCtx, action.ID, true, "recheck triggered"); err != nil {
-					log.Printf("aggregator: reporting recheck result for %s: %v", action.ID, err)
-				}
-				cancel()
-			case aggregator.ActionCompleteCompanionSwap:
-				result := companion.CompleteCompanionSwap(ctx, action)
-				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				if err := aggClient.ReportActionResult(resultCtx, action.ID, result.Success, result.Message); err != nil {
-					log.Printf("aggregator: reporting companion swap result for %s: %v", action.ID, err)
-				}
-				cancel()
-			default:
-				log.Printf("aggregator: ignoring unexpected action type %q on agent stream", action.Type)
-			}
-		}
-		// aggregatorPresent is meaningless for a plain agent connection
-		// (only a companion ever runs the aggregator-colocation check --
-		// see CompanionHub.SetAggregatorPresent), so always false here.
-		go agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindAgent, false, false, onAction)
-	}
+	// checkMu serializes every actual detection cycle -- the ticker-driven
+	// background loop below and a synchronous, admin-triggered recheck
+	// (see onAction's ActionRecheck case) must never run concurrently:
+	// they'd otherwise race on `previous` and risk two overlapping
+	// apt-get invocations against the same host state.
+	var checkMu sync.Mutex
 
-	if aggClient != nil {
-		enrollCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		aggStatus, err := aggClient.Enroll(enrollCtx, cfg.Hostname)
-		cancel()
-		if err != nil {
-			log.Printf("aggregator: enroll failed (will retry on next report): %v", err)
-		} else {
-			log.Printf("aggregator: enrollment status: %s", aggStatus)
-		}
-	}
+	// runCheck runs one detection cycle. lineSink, if non-nil, is attached
+	// to the check's own context for the duration of this call only (see
+	// checker.WithLineSink) -- a verbose recheck's real-command-output
+	// tap; the periodic ticker-driven cycle always passes nil, so its
+	// behavior is completely unchanged by this parameter's existence.
+	// Returns the resulting Status and chk.Check's own error, so a caller
+	// invoking this synchronously (onAction's ActionRecheck case) can
+	// build a real ActionResult instead of always claiming success.
+	runCheck := func(first bool, lineSink func(string)) (checker.Status, error) {
+		checkMu.Lock()
+		defer checkMu.Unlock()
 
-	runCheck := func(first bool) {
 		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		if lineSink != nil {
+			checkCtx = checker.WithLineSink(checkCtx, lineSink)
+		}
 		status, err := chk.Check(checkCtx, previous)
 		cancel()
 		if err != nil {
 			log.Printf("check failed: %v", err)
-			return
+			return status, err
 		}
 		if len(status.Errors) > 0 {
 			log.Printf("check completed with errors: %v", status.Errors)
@@ -217,12 +195,116 @@ func run(ctx context.Context) error {
 
 		srv.SetStatus(status)
 		previous = &status
+		return status, nil
 	}
-
-	runCheck(true)
 
 	ticker := time.NewTicker(cfg.CheckInterval)
 	defer ticker.Stop()
+
+	if aggClient != nil {
+		// Holds the aggregator's stream connection whenever no companion
+		// is running (or hasn't connected yet) -- the aggregator's
+		// CompanionHub always lets a companion preempt this, since only
+		// it can carry out apply-type actions; this only ever receives
+		// (and can only ever receive, per that same server-side gate)
+		// ActionRecheck. Handled in-process, unlike the companion's own
+		// loopback HTTP call, since the agent already is that process.
+		onAction := func(action aggregator.Action) {
+			switch action.Type {
+			case aggregator.ActionRecheck:
+				// Streams this recheck's output back to the aggregator
+				// exactly like the companion binary streams an apply's --
+				// same sink/StreamOutput/report-before-close pattern (see
+				// cmd/update-detector-companion/main.go), so "Force
+				// recheck" gets a live console whether or not a companion
+				// is even installed on this host.
+				sink := companion.NewOutputSink(1000)
+				streamCtx, cancelStream := context.WithCancel(ctx)
+				go func() {
+					if err := companion.StreamOutput(streamCtx, cfg.AggregatorURL, identity, action.ID, sink); err != nil {
+						log.Printf("aggregator: streaming recheck output for %s: %v", action.ID, err)
+					}
+				}()
+
+				var lineSink func(string)
+				if action.Verbose {
+					lineSink = sink.Push
+				} else {
+					sink.Push("Running detection cycle...")
+				}
+
+				status, checkErr := runCheck(false, lineSink)
+				ticker.Reset(cfg.CheckInterval) // same as the srv.Recheck() case below
+
+				success := checkErr == nil
+				message := "recheck complete"
+				switch {
+				case checkErr != nil:
+					message = fmt.Sprintf("recheck failed: %v", checkErr)
+				case !action.Verbose:
+					message = fmt.Sprintf("Recheck complete: %d upgradable (%d security)",
+						status.Packages.UpgradableTotal, status.Packages.UpgradableSecurity)
+					sink.Push(message)
+				}
+
+				// Reported *before* closing the sink/stream, deliberately
+				// -- OutputHub.End's "first call wins" race means this
+				// must land as EventDone before the /companion/output
+				// body closing would otherwise mark it EventDisconnected.
+				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if err := aggClient.ReportActionResult(resultCtx, action.ID, success, message); err != nil {
+					log.Printf("aggregator: reporting recheck result for %s: %v", action.ID, err)
+				}
+				cancel()
+
+				sink.Close()
+				cancelStream()
+			case aggregator.ActionCompleteCompanionSwap:
+				// CompleteCompanionSwap already calls emitFromContext(ctx)
+				// and runCapped throughout (stop/swap/start the service) --
+				// it was always ready to stream, it just never had a sink
+				// attached to actually stream to. Same sink/StreamOutput/
+				// report-before-close pattern as ActionRecheck above.
+				sink := companion.NewOutputSink(1000)
+				streamCtx, cancelStream := context.WithCancel(ctx)
+				go func() {
+					if err := companion.StreamOutput(streamCtx, cfg.AggregatorURL, identity, action.ID, sink); err != nil {
+						log.Printf("aggregator: streaming companion-swap output for %s: %v", action.ID, err)
+					}
+				}()
+
+				result := companion.CompleteCompanionSwap(companion.WithOutputSink(ctx, sink), action)
+
+				resultCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if err := aggClient.ReportActionResult(resultCtx, action.ID, result.Success, result.Message); err != nil {
+					log.Printf("aggregator: reporting companion swap result for %s: %v", action.ID, err)
+				}
+				cancel()
+
+				sink.Close()
+				cancelStream()
+			default:
+				log.Printf("aggregator: ignoring unexpected action type %q on agent stream", action.Type)
+			}
+		}
+		// aggregatorPresent is meaningless for a plain agent connection
+		// (only a companion ever runs the aggregator-colocation check --
+		// see CompanionHub.SetAggregatorPresent), so always false here.
+		go agentstream.Run(ctx, cfg.AggregatorURL, identity, aggregator.KindAgent, false, false, onAction)
+	}
+
+	if aggClient != nil {
+		enrollCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		aggStatus, err := aggClient.Enroll(enrollCtx, cfg.Hostname)
+		cancel()
+		if err != nil {
+			log.Printf("aggregator: enroll failed (will retry on next report): %v", err)
+		} else {
+			log.Printf("aggregator: enrollment status: %s", aggStatus)
+		}
+	}
+
+	runCheck(true, nil)
 
 	for {
 		select {
@@ -235,10 +317,10 @@ func run(ctx context.Context) error {
 			defer cancel()
 			return httpSrv.Shutdown(shutdownCtx)
 		case <-ticker.C:
-			runCheck(false)
+			runCheck(false, nil)
 		case <-srv.Recheck():
 			log.Println("out-of-band recheck requested")
-			runCheck(false)
+			runCheck(false, nil)
 			ticker.Reset(cfg.CheckInterval)
 		}
 	}

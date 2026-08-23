@@ -559,6 +559,9 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{end}}
 
         <div class="host-actions">
+          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Stream the real apt-get/apt-check/winget output instead of a short progress summary">
+            <input type="checkbox" id="verbose-{{.ID}}"> verbose
+          </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
@@ -646,11 +649,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return secret;
     }
 
-    function openLiveOutput(id, selfUpdateExpect) {
+    // resume=true keeps the pane's existing content instead of clearing it --
+    // used when re-subscribing after a staged companion self-update's first
+    // phase reports "done" but a follow-up ActionCompleteCompanionSwap is
+    // about to stream on the same agent (see the 'done' handler below).
+    function openLiveOutput(id, selfUpdateExpect, resume) {
       const pane = document.getElementById('output-' + id);
       if (!pane) return null;
       pane.style.display = 'block';
-      pane.textContent = '';
+      if (!resume) pane.textContent = '';
       const baselinePromise = selfUpdateExpect ? null : fetchAgentVersionInfo(id).then(d => d ? d.last_seen : '');
       const es = new EventSource('/admin/agents/' + id + '/output/stream');
       es.addEventListener('line', (e) => {
@@ -658,8 +665,22 @@ const adminTemplateSrc = `<!DOCTYPE html>
         pane.textContent += data.line + '\n';
         pane.scrollTop = pane.scrollHeight;
       });
-      es.addEventListener('done', async () => {
+      es.addEventListener('done', async (e) => {
         es.close();
+        const data = JSON.parse(e.data);
+        if (selfUpdateExpect && data.staged) {
+          // Windows-only case: the companion staged a new binary but
+          // can't restart itself, so the aggregator already pushed
+          // ActionCompleteCompanionSwap to the agent for the same host
+          // (by the time this SSE event reached the browser, that push
+          // -- and its own outputHub.Begin -- already happened
+          // server-side, synchronously, in the same request that ended
+          // this stream). Re-subscribe to keep watching that instead of
+          // treating this as the real end.
+          pane.textContent += '--- staged -- continuing to the restart step ---\n';
+          openLiveOutput(id, selfUpdateExpect, true);
+          return;
+        }
         if (selfUpdateExpect) {
           pane.textContent += '--- done -- waiting for ' + selfUpdateExpect.component +
             ' to report version ' + selfUpdateExpect.targetVersion + ' ---\n';
@@ -766,9 +787,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return false;
     }
     async function forceRecheck(id) {
+      const verboseBox = document.getElementById('verbose-' + id);
+      const verbose = verboseBox ? verboseBox.checked : false;
       const es = openLiveOutput(id);
       try {
-        const resp = await fetch('/admin/agents/' + id + '/recheck', {method: 'POST'});
+        const resp = await fetch('/admin/agents/' + id + '/recheck', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({verbose: verbose}),
+        });
         if (!resp.ok) {
           closeLiveOutput(id, es);
           alert('recheck failed (' + resp.status + '): ' + await resp.text());
