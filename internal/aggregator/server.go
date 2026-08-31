@@ -49,10 +49,15 @@ type Server struct {
 	// outputHub fans a companion's live action output out to browser
 	// subscribers -- never nil (unlike selfUpdate, every server has one).
 	outputHub *OutputHub
+	adminHub  *AdminHub
 	mux       *http.ServeMux
 }
 
 func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
+	return NewServerWithAdminHub(shutdownCtx, registry, hub, notifyMgr, adminApplySecret, selfUpdate, outputHub, NewAdminHub())
+}
+
+func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub, adminHub *AdminHub) *Server {
 	s := &Server{
 		shutdownCtx:      shutdownCtx,
 		registry:         registry,
@@ -61,6 +66,7 @@ func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHu
 		adminApplySecret: adminApplySecret,
 		selfUpdate:       selfUpdate,
 		outputHub:        outputHub,
+		adminHub:         adminHub,
 		mux:              http.NewServeMux(),
 	}
 	s.mux.HandleFunc("/", s.handleRoot)
@@ -72,6 +78,7 @@ func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHu
 	s.mux.HandleFunc("/companion/output", s.handleCompanionOutput)
 	s.mux.HandleFunc("/companion/status", s.handleCompanionStatus)
 	s.mux.HandleFunc("/admin", s.handleAdmin)
+	s.mux.HandleFunc("/admin/events", s.handleAdminEvents)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
@@ -133,6 +140,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent_id already registered with a different token", http.StatusConflict)
 		return
 	}
+	if outcome == EnrollCreatedPending {
+		s.adminHub.Notify()
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": string(status)})
 }
@@ -168,6 +178,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	case ReportNotApproved:
 		http.Error(w, "agent not approved", http.StatusForbidden)
 	default:
+		s.adminHub.Notify()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 	}
 }
@@ -449,6 +460,52 @@ func (s *Server) handleCompanionStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec.LastReport)
 }
 
+// handleAdminEvents is the SSE endpoint the admin page holds open to get
+// live registry updates (enroll/report/approve). Any event means
+// "something changed" - the client reloads. Mirrors handleAdminOutputStream
+// shape (flusher, heartbeat, context-done) but subscribes to adminHub.
+func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	ch, cancel := s.adminHub.Subscribe()
+	defer cancel()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-s.shutdownCtx.Done():
+			return
+		case <-heartbeat.C:
+			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-ch:
+			if _, err := io.WriteString(w, "event: registry\ndata: {}\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 // handleAdminOutputStream is the SSE endpoint a browser holds open to
 // watch one agent's live action output -- mirrors handleCompanionStream's
 // exact shape (flusher, heartbeat, context-done) but subscribes to
@@ -633,6 +690,7 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.adminHub.Notify()
 
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }

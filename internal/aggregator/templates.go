@@ -900,6 +900,76 @@ const adminTemplateSrc = `<!DOCTYPE html>
     document.querySelectorAll('[data-pending-action-id]').forEach((pane) => {
       openLiveOutput(pane.dataset.agentId);
     });
+
+    // Live admin updates: when any agent reports new status behind the
+    // scenes, the server pushes a registry event via SSE. The page reloads
+    // to show the fresh data. Polling + visibility handling covers the
+    // "left the screen / locked computer" case where the SSE was frozen
+    // or dropped while the tab was backgrounded.
+    (function() {
+      let esAdmin = null;
+      let reconnectDelay = 1000;
+      let lastHostsSnapshot = null;
+      let pollingTimer = null;
+
+      async function pollHostsOnce() {
+        try {
+          const resp = await fetch('/widgets/hosts', {cache: 'no-store'});
+          if (!resp.ok) return false;
+          const data = await resp.json();
+          const serialized = JSON.stringify(data);
+          if (lastHostsSnapshot === null) {
+            lastHostsSnapshot = serialized;
+            return false;
+          }
+          if (serialized !== lastHostsSnapshot) {
+            location.reload();
+            return true;
+          }
+        } catch (e) {}
+        return false;
+      }
+
+      function scheduleReconnect() {
+        if (reconnectDelay > 30000) reconnectDelay = 30000;
+        setTimeout(connectAdminStream, reconnectDelay);
+        reconnectDelay *= 2;
+      }
+
+      function connectAdminStream() {
+        if (esAdmin) { try { esAdmin.close(); } catch(e) {} }
+        esAdmin = new EventSource('/admin/events');
+        esAdmin.addEventListener('registry', () => {
+          location.reload();
+        });
+        esAdmin.onopen = () => { reconnectDelay = 1000; };
+        esAdmin.onerror = () => {
+          try { esAdmin.close(); } catch(e) {}
+          scheduleReconnect();
+        };
+      }
+
+      connectAdminStream();
+      // Prime snapshot without triggering reload.
+      pollHostsOnce();
+      // Fallback polling every 30s — catches missed SSE while tab was frozen.
+      pollingTimer = setInterval(pollHostsOnce, 30000);
+
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          // Tab became visible after sleep / lock: reconnect SSE if needed
+          // and immediately check for missed updates.
+          if (!esAdmin || esAdmin.readyState === 2) {
+            connectAdminStream();
+          }
+          pollHostsOnce();
+        }
+      });
+      window.addEventListener('online', () => {
+        connectAdminStream();
+        pollHostsOnce();
+      });
+    })();
   </script>
 </body>
 </html>
