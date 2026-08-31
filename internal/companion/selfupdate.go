@@ -157,7 +157,7 @@ func updateDockerCompose(ctx context.Context, containerID, image, targetVersion 
 	for _, f := range strings.Split(configFiles, ",") {
 		fileArgs = append(fileArgs, "-f", f)
 	}
-	args := append(append([]string{"compose"}, fileArgs...), "up", "-d", service)
+	args := append(append([]string{"compose"}, fileArgs...), "up", "-d", "--force-recreate", service)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = workingDir
 	if out, err := runCapped(ctx, cmd); err != nil {

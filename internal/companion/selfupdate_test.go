@@ -292,8 +292,8 @@ esac
 	if !strings.Contains(calls, "tag ghcr.io/sinwe/update-detector:v0.11.0 ghcr.io/sinwe/update-detector:v0.9.0") {
 		t.Fatalf("expected the target version retagged onto the currently-referenced tag, got log: %q", calls)
 	}
-	if !strings.Contains(calls, "-f "+composeDir+"/docker-compose.yml up -d update-detector") {
-		t.Fatalf("expected an up -d call, got log: %q", calls)
+	if !strings.Contains(calls, "-f "+composeDir+"/docker-compose.yml up -d --force-recreate update-detector") {
+		t.Fatalf("expected an up -d --force-recreate call, got log: %q", calls)
 	}
 	if strings.Contains(calls, "compose pull") {
 		t.Fatalf("must never run `docker compose pull` -- it would undo the local retag, got log: %q", calls)
