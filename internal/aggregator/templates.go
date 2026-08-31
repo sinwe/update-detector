@@ -320,6 +320,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
       box-shadow: var(--shadow); transition: var(--transition);
     }
     .host-card:hover { box-shadow: var(--shadow-md); }
+    .host-offline {
+      border-color: var(--red); border-left-width: 3px;
+      opacity: .92;
+    }
+    .offline-banner {
+      font-size: .75rem; color: var(--red-text); background: var(--red-bg);
+      padding: .35rem .6rem; border-radius: var(--radius-sm); margin-bottom: .5rem;
+      display: flex; align-items: center; gap: .35rem;
+    }
     .host-top {
       display: flex; align-items: center; justify-content: space-between;
       flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem;
@@ -505,7 +514,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </div>
       {{if .Approved}}
       {{range .Approved}}
-      <div class="host-card">
+      <div class="host-card{{if not .AnyStreamConnected}} host-offline{{end}}">
+        {{if not .AnyStreamConnected}}<div class="offline-banner">⚠ Host offline — powered off? No agent or companion connected{{if .LastSeen}} (last seen {{.LastSeen}}){{end}}</div>{{end}}
         <div class="host-top">
           <div>
             <span class="host-name">{{.Hostname}}</span>
@@ -519,16 +529,28 @@ const adminTemplateSrc = `<!DOCTYPE html>
             {{else}}
               <span class="badge badge-muted">No report</span>
             {{end}}
-            {{if .AnyStreamConnected}}<span class="badge badge-info">Agent</span>{{else}}<span class="badge badge-muted">not connected</span>{{end}}
-            {{if .CompanionConnected}}<span class="badge badge-ok">Companion</span>{{end}}
+            {{if .AnyStreamConnected}}
+              {{if .CompanionConnected}}
+                <span class="badge badge-ok">Agent</span>
+                <span class="badge badge-ok">Companion</span>
+              {{else}}
+                <span class="badge badge-ok">Agent</span>
+                <span class="badge badge-bad">Companion offline</span>
+              {{end}}
+            {{else}}
+              <span class="badge badge-bad">Agent offline</span>
+              <span class="badge badge-bad">Companion offline</span>
+              <span class="badge badge-bad">Host offline</span>
+            {{end}}
           </div>
         </div>
 
-        {{if .HasReport}}
         <div class="host-meta">
           {{if .AgentVersion}}<span>Agent {{.AgentVersion}}</span>{{end}}
-          {{if .CompanionConnected}}{{if .CompanionVersion}}<span>Companion {{.CompanionVersion}}</span>{{end}}{{end}}
+          {{if .CompanionVersion}}<span>Companion {{.CompanionVersion}}{{if not .CompanionConnected}} (offline){{end}}</span>{{end}}
+          {{if .LastSeen}}<span>Last seen {{.LastSeen}}</span>{{end}}
         </div>
+        {{if .HasReport}}
         <div class="host-report">
           <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
           <span><strong>{{.UpgradableSecurity}}</strong> security</span>

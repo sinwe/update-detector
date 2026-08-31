@@ -908,16 +908,16 @@ func TestHandleAdminPageShowsCompanionStatus(t *testing.T) {
 	}
 
 	body := adminBody()
-	if !strings.Contains(body, "not connected") || strings.Contains(body, "Upgrade all") {
-		t.Fatalf("expected no apply UI before a companion connects, got: %s", body)
+	if !strings.Contains(body, "Host offline") || !strings.Contains(body, "Agent offline") || strings.Contains(body, "Upgrade all") {
+		t.Fatalf("expected no apply UI and Host offline before a companion connects, got: %s", body)
 	}
 
 	res := s.hub.Connect("a1", KindCompanion, "v0.0.0-test")
 	defer s.hub.Disconnect("a1", res.Ch)
 
 	body = adminBody()
-	if strings.Contains(body, "not connected") || !strings.Contains(body, "Upgrade all") {
-		t.Fatalf("expected apply UI once a companion is connected, got: %s", body)
+	if strings.Contains(body, "Host offline") || !strings.Contains(body, "Upgrade all") {
+		t.Fatalf("expected apply UI and no Host offline once a companion is connected, got: %s", body)
 	}
 
 	s.hub.RecordResult("a1", ActionResult{ActionID: "act1", Success: true, Message: "upgraded curl", CompletedAt: time.Now()})
@@ -944,8 +944,11 @@ func TestHandleAdminPageAgentOnlyShowsRecheckButNotApply(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	body := rec.Body.String()
 
-	if strings.Contains(body, "not connected") {
-		t.Fatalf("expected a connected label for an agent-only stream, got: %s", body)
+	if strings.Contains(body, "Host offline") || strings.Contains(body, "Agent offline") {
+		t.Fatalf("expected no Host/Agent offline for an agent-only stream, got: %s", body)
+	}
+	if !strings.Contains(body, "Companion offline") {
+		t.Fatalf("expected Companion offline for an agent-only stream, got: %s", body)
 	}
 	if !strings.Contains(body, "Force recheck") {
 		t.Fatalf("expected Force recheck to be available for an agent-only stream, got: %s", body)
