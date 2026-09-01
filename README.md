@@ -80,10 +80,14 @@ create — it prints where to `docker compose down` it yourself instead.
 Installing the aggregator (above) on one central host gives every agent
 that points `AGGREGATOR_URL` at it a combined dashboard — open
 `http://<aggregator-host>:9090/admin` and approve each new host under
-"Pending." Installing the companion (also above, on each agent host) adds
-push-button apply and self-update from that same page. Full walkthrough
-— security model, apply mechanics, upgrade-vs-full-upgrade, self-update —
-in [Technical reference](docs/reference.md#triggering-updates-companion).
+"Pending." The dashboard live-reloads via SSE (`GET /admin/events` + 30s
+polling/`visibilitychange` fallback) so agent reports appear without manual
+refresh, and shows `Agent offline`/`Companion offline`/`Host offline`
+(both down → powered off) with last-seen timestamps. Installing the
+companion (also above, on each agent host) adds push-button apply and
+self-update from that same page. Full walkthrough — security model, apply
+mechanics, upgrade-vs-full-upgrade, self-update — in [Technical
+reference](docs/reference.md#triggering-updates-companion).
 
 ## See also
 
