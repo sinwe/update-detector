@@ -704,9 +704,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
           return;
         }
         if (selfUpdateExpect) {
-          pane.textContent += '--- done -- waiting for ' + selfUpdateExpect.component +
-            ' to report version ' + selfUpdateExpect.targetVersion + ' ---\n';
-          watchComponentVersion(id, selfUpdateExpect, pane);
+          if (selfUpdateExpect.component === 'aggregator') {
+            pane.textContent += '--- done -- aggregator is restarting, waiting for it to come back ---\n';
+            // watchAggregatorRestart() is already polling /healthz; no extra poll here
+          } else {
+            pane.textContent += '--- done -- waiting for ' + selfUpdateExpect.component +
+              ' to report version ' + selfUpdateExpect.targetVersion + ' ---\n';
+            watchComponentVersion(id, selfUpdateExpect, pane);
+          }
         } else {
           pane.textContent += '--- done -- waiting for the fresh report to land ---\n';
           watchReportUpdated(id, await baselinePromise, pane);
@@ -867,7 +872,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
     async function postSelfUpdate(id, component, targetVersion) {
       const secret = getAdminApplySecret();
       if (!secret) return;
-      const expect = component === 'aggregator' ? null : {component: component, targetVersion: targetVersion};
+      const expect = {component: component, targetVersion: targetVersion};
       const es = openLiveOutput(id, expect);
       try {
         const resp = await fetch('/admin/agents/' + id + '/self-update', {
