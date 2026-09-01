@@ -49,7 +49,8 @@ jobs:
       # internal/version's own alpha < beta < rc < release convention --
       # kept in sync with it manually since this is bash, not Go. Same
       # regex also decides whether the GitHub Release itself gets marked
-      # prerelease below.
+      # prerelease below. Channel-specific latests (latest-alpha/beta/rc)
+      # allow `docker compose pull` to track a channel without pinning.
       - name: Determine prerelease status
         id: prerelease
         run: |
@@ -58,6 +59,20 @@ jobs:
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          # channel-specific latest mapping:
+          #  alpha -> latest-alpha
+          #  beta  -> latest-alpha + latest-beta
+          #  rc    -> latest-alpha + latest-beta + latest-rc
+          #  release (no suffix) -> latest + latest-alpha + latest-beta + latest-rc
+          if [[ "$TAG" =~ -alpha[0-9]+$ ]]; then
+            echo "channel=alpha" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ -beta[0-9]+$ ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ -rc[0-9]+$ ]]; then
+            echo "channel=rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=release" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: docker/setup-qemu-action@v3
@@ -80,14 +95,24 @@ jobs:
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
+          CHANNEL="${{ steps.prerelease.outputs.channel }}"
           IS_PRERELEASE="${{ steps.prerelease.outputs.is_prerelease }}"
 
           build_and_push() {
             local image="$1" dockerfile="$2"
             local tags=(--tag "ghcr.io/sinwe/$image:$TAG")
-            if [ "$IS_PRERELEASE" = "false" ]; then
-              tags+=(--tag "ghcr.io/sinwe/$image:latest")
-            fi
+            # Channel-specific latests so `docker compose pull` can track a channel:
+            #  release -> latest + latest-alpha/beta/rc (visible on all channels)
+            #  rc      -> latest-rc + latest-beta + latest-alpha
+            #  beta    -> latest-beta + latest-alpha
+            #  alpha   -> latest-alpha
+            # Plain :latest is *only* for real releases (never prerelease).
+            case "$CHANNEL" in
+              alpha)   tags+=(--tag "ghcr.io/sinwe/$image:latest-alpha") ;;
+              beta)    tags+=(--tag "ghcr.io/sinwe/$image:latest-alpha" --tag "ghcr.io/sinwe/$image:latest-beta") ;;
+              rc)      tags+=(--tag "ghcr.io/sinwe/$image:latest-alpha" --tag "ghcr.io/sinwe/$image:latest-beta" --tag "ghcr.io/sinwe/$image:latest-rc") ;;
+              release) tags+=(--tag "ghcr.io/sinwe/$image:latest" --tag "ghcr.io/sinwe/$image:latest-alpha" --tag "ghcr.io/sinwe/$image:latest-beta" --tag "ghcr.io/sinwe/$image:latest-rc") ;;
+            esac
             docker buildx build \
               --platform "linux/amd64,linux/arm64" \
               --file "$dockerfile" \

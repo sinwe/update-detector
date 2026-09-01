@@ -584,12 +584,14 @@ from the same tag, via QEMU emulation since GitHub's hosted runners are
 amd64-only) and pushes them to GHCR:
 
 ```
-ghcr.io/sinwe/update-detector:<tag>    and  :latest
-ghcr.io/sinwe/update-aggregator:<tag>  and  :latest
+ghcr.io/sinwe/update-detector:<tag>    and  :latest            (real releases only)
+ghcr.io/sinwe/update-detector:<tag>    and  :latest-alpha      (-alpha tags)
+ghcr.io/sinwe/update-detector:<tag>    and  :latest-alpha + :latest-beta   (-beta tags)
+ghcr.io/sinwe/update-detector:<tag>    and  :latest-alpha + :latest-beta + :latest-rc (-rc tags)
+ghcr.io/sinwe/update-aggregator likewise
 ```
 
-(`:latest` is skipped for `-alpha`/`-beta`/`-rc` tags — see
-[Self-updating update-detector](#self-updating-update-detector) for why.)
+Real `:latest` is skipped for `-alpha`/`-beta`/`-rc` tags (otherwise fleets tracking `:latest` would silently jump to a prerelease) — use `:latest-alpha` (all prereleases + releases), `:latest-beta` (beta/rc/release), or `:latest-rc` (rc/release) to `docker compose pull` a channel instead. See [Self-updating update-detector](#self-updating-update-detector).
 
 The same tag also cross-compiles all three binaries — `update-detector`,
 `update-aggregator`, and `update-detector-companion` — for `linux/amd64`,
