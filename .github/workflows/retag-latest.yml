@@ -1,0 +1,46 @@
+name: Retag latest channel
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Source tag to retag (e.g. v0.15.2-beta2)"
+        required: true
+        default: "v0.15.2-beta2"
+permissions:
+  contents: read
+  packages: write
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retag channel latests
+        run: |
+          set -eu
+          TAG="${{ inputs.tag }}"
+          echo "Retagging $TAG"
+          # Determine channel like release.yml
+          if [[ "$TAG" =~ -alpha[0-9]+$ ]]; then CH=alpha
+          elif [[ "$TAG" =~ -beta[0-9]+$ ]]; then CH=beta
+          elif [[ "$TAG" =~ -rc[0-9]+$ ]]; then CH=rc
+          else CH=release; fi
+          echo "Channel: $CH"
+          for image in update-detector update-aggregator; do
+            docker pull ghcr.io/sinwe/$image:$TAG
+            case "$CH" in
+              alpha) docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha ;;
+              beta)  docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha
+                     docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-beta; docker push ghcr.io/sinwe/$image:latest-beta ;;
+              rc)    docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha
+                     docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-beta; docker push ghcr.io/sinwe/$image:latest-beta
+                     docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-rc; docker push ghcr.io/sinwe/$image:latest-rc ;;
+              release) docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest; docker push ghcr.io/sinwe/$image:latest
+                       docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha
+                       docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-beta; docker push ghcr.io/sinwe/$image:latest-beta
+                       docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-rc; docker push ghcr.io/sinwe/$image:latest-rc ;;
+            esac
+          done
