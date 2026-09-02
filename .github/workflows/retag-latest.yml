@@ -13,6 +13,7 @@ jobs:
   retag:
     runs-on: ubuntu-latest
     steps:
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -30,17 +31,17 @@ jobs:
           else CH=release; fi
           echo "Channel: $CH"
           for image in update-detector update-aggregator; do
-            docker pull ghcr.io/sinwe/$image:$TAG
+            SRC="ghcr.io/sinwe/$image:$TAG"
             case "$CH" in
-              alpha) docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha ;;
-              beta)  docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha
-                     docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-beta; docker push ghcr.io/sinwe/$image:latest-beta ;;
-              rc)    docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha
-                     docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-beta; docker push ghcr.io/sinwe/$image:latest-beta
-                     docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-rc; docker push ghcr.io/sinwe/$image:latest-rc ;;
-              release) docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest; docker push ghcr.io/sinwe/$image:latest
-                       docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-alpha; docker push ghcr.io/sinwe/$image:latest-alpha
-                       docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-beta; docker push ghcr.io/sinwe/$image:latest-beta
-                       docker tag ghcr.io/sinwe/$image:$TAG ghcr.io/sinwe/$image:latest-rc; docker push ghcr.io/sinwe/$image:latest-rc ;;
+              alpha) docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-alpha $SRC ;;
+              beta)  docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-alpha $SRC
+                     docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-beta $SRC ;;
+              rc)    docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-alpha $SRC
+                     docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-beta $SRC
+                     docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-rc $SRC ;;
+              release) docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest $SRC
+                       docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-alpha $SRC
+                       docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-beta $SRC
+                       docker buildx imagetools create --tag ghcr.io/sinwe/$image:latest-rc $SRC ;;
             esac
           done
