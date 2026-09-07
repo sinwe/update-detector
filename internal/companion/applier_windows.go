@@ -3,7 +3,6 @@
 package companion
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -246,12 +245,10 @@ if ($installResult.ResultCode -eq 4 -or $installResult.ResultCode -eq 5) {
   exit 1
 }
 `
-	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return stdout.String(), fmt.Errorf("windows update install: %w: %s", err, strings.TrimSpace(stderr.String()))
+	out, err := runCapped(ctx, cmd)
+	if err != nil {
+		return out, fmt.Errorf("windows update install: %w", err)
 	}
-	return stdout.String(), nil
+	return out, nil
 }
