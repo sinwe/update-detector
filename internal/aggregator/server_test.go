@@ -344,6 +344,55 @@ func TestHandleCompanionStreamRequiresAuth(t *testing.T) {
 	}
 }
 
+// TestHandleCompanionStreamNotifiesAdminHubOnConnectAndDisconnect is the
+// regression test for the admin page never showing a reconnect live:
+// Connect/Disconnect change the "connected"/"offline" badges independently
+// of any registry mutation (enroll/report/approve), so without this the
+// only existing notify triggers (registry changes) had no reason to fire
+// on their own -- an operator watching the page during, say, a fleet-wide
+// reconnect after an aggregator restart would see nothing update until
+// something else happened to trigger a reload.
+func TestHandleCompanionStreamNotifiesAdminHubOnConnectAndDisconnect(t *testing.T) {
+	s, reg := newTestServer(t)
+	approvedAgent(t, s, reg, "a1", "web01", "tok")
+
+	adminCh, cancel := s.adminHub.Subscribe()
+	defer cancel()
+
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, httpSrv.URL+"/companion/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Agent-ID", "a1")
+	req.Header.Set("Authorization", "Bearer tok")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d, want 200", resp.StatusCode)
+	}
+
+	select {
+	case <-adminCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a notify on connect")
+	}
+
+	resp.Body.Close()
+
+	select {
+	case <-adminCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a notify on disconnect")
+	}
+}
+
 func TestHandleCompanionStreamPushesAction(t *testing.T) {
 	s, reg := newTestServer(t)
 	approvedAgent(t, s, reg, "a1", "web01", "tok")
