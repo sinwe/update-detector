@@ -106,6 +106,57 @@ func TestCompanionHubDisconnectClearsInFlight(t *testing.T) {
 	}
 }
 
+// TestCompanionHubReconnectClearsStalePendingWithoutDisconnect is the
+// regression test for a real stuck-forever bug: if the old connection
+// died uncleanly (crash, network drop -- anything that never delivers a
+// clean TCP close), its own deferred Disconnect either never runs, or
+// runs after Connect already replaced the entry and so no-ops (its
+// cur.ch == ch guard fails). Without Connect itself clearing the stale
+// marker, a fresh reconnect from that same agent would still get
+// ErrActionInFlight forever for an action whose executor no longer
+// exists -- exactly "self-update failed (409): agent already has an
+// action in flight, but nothing happens" observed live.
+func TestCompanionHubReconnectClearsStalePendingWithoutDisconnect(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1", KindCompanion, "")
+
+	if err := h.Push("a1", Action{ID: "act1", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+
+	// Reconnect *without* ever calling Disconnect for the old connection --
+	// simulates the old one having died uncleanly.
+	h.Connect("a1", KindCompanion, "")
+
+	if err := h.Push("a1", Action{ID: "act2", Type: ActionUpgrade}); err != nil {
+		t.Fatalf("expected push to succeed after an unclean reconnect, got: %v", err)
+	}
+}
+
+// TestCompanionHubAgentReconnectClearsStaleAgentPending is the same
+// regression, for the agentStreams slot (e.g. a stuck recheck or
+// companion-swap action) instead of the main companion slot.
+func TestCompanionHubAgentReconnectClearsStaleAgentPending(t *testing.T) {
+	h := NewCompanionHub()
+	h.Connect("a1", KindAgent, "")
+
+	if err := h.Push("a1", Action{ID: "act1", Type: ActionRecheck}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	if !h.IsPending("a1", "act1") {
+		t.Fatal("expected act1 to be tracked as pending")
+	}
+
+	h.Connect("a1", KindAgent, "")
+
+	if h.IsPending("a1", "act1") {
+		t.Fatal("expected the stale agentPending marker to be cleared by the reconnect")
+	}
+	if err := h.Push("a1", Action{ID: "act2", Type: ActionRecheck}); err != nil {
+		t.Fatalf("expected push to succeed after an unclean reconnect, got: %v", err)
+	}
+}
+
 func TestCompanionHubTracksCompanionVersion(t *testing.T) {
 	h := NewCompanionHub()
 

@@ -232,7 +232,17 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "superseded: a companion is already connected for this agent", http.StatusConflict)
 		return
 	}
-	defer s.hub.Disconnect(rec.ID, result.Ch)
+	// Connect/Disconnect change what the admin page's "connected"/"offline"
+	// badges show for this agent, independently of any registry mutation
+	// (enroll/report/approve) -- without notifying here too, a reconnect
+	// (e.g. every agent/companion in the fleet, right after an aggregator
+	// restart) was invisible until something else happened to trigger a
+	// reload, or the operator refreshed manually.
+	s.adminHub.Notify()
+	defer func() {
+		s.hub.Disconnect(rec.ID, result.Ch)
+		s.adminHub.Notify()
+	}()
 	// Only meaningful for a real companion (see SetAggregatorPresent) --
 	// an agent-only connection has never run the aggregator-colocation
 	// check at all, so a missing/unparseable header here (including one

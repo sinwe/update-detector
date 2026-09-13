@@ -58,9 +58,11 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 	fail := func(format string, args ...any) aggregator.ActionResult {
 		return aggregator.ActionResult{ActionID: action.ID, Message: fmt.Sprintf(format, args...), CompletedAt: time.Now()}
 	}
+	emit := emitFromContext(ctx)
 
 	// Resolve the download URL from the GitHub API.
 	assetName := "update-detector-companion-windows-amd64.exe"
+	emit("resolving %s from release %s...", assetName, action.TargetVersion)
 	downloadURL, err := resolveAssetURL(action.TargetVersion, assetName)
 	if err != nil {
 		return fail("resolving download URL: %v", err)
@@ -72,9 +74,11 @@ func stageCompanionUpdate(ctx context.Context, action aggregator.Action) aggrega
 	newPath := companionExePath + ".new"
 	tmpPath := newPath + ".tmp"
 
+	emit("downloading companion %s...", action.TargetVersion)
 	if err := downloadFile(ctx, downloadURL, tmpPath); err != nil {
 		return fail("downloading companion update: %v", err)
 	}
+	emit("download complete, staging...")
 
 	// Atomic rename: tmp → .new
 	if err := os.Rename(tmpPath, newPath); err != nil {
