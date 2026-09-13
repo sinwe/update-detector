@@ -34,10 +34,12 @@ func keyExists(path string) bool {
 }
 
 // pendingFileRenameOperationsSet reports whether Session Manager's
-// PendingFileRenameOperations value is set and non-empty -- a non-empty
-// REG_MULTI_SZ here means the OS has files staged to be renamed/deleted
-// on next boot, the same signal Windows Update and many installers use
-// to indicate a pending reboot.
+// PendingFileRenameOperations value has any entry that isn't routine
+// noise (see isRoutinePendingRename/anyRealPendingRename in
+// reboot_parse.go) -- a real, non-empty REG_MULTI_SZ entry here means
+// the OS has files staged to be renamed/deleted on next boot, the same
+// signal Windows Update and many installers use to indicate a pending
+// reboot.
 func pendingFileRenameOperationsSet() bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager`, registry.QUERY_VALUE)
 	if err != nil {
@@ -48,5 +50,5 @@ func pendingFileRenameOperationsSet() bool {
 	if err != nil {
 		return false
 	}
-	return len(values) > 0
+	return anyRealPendingRename(values)
 }
