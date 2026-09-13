@@ -214,14 +214,30 @@ type ConnectResult struct {
 }
 
 // Connect registers agentID as having a live stream, with the following
-// arbitration (companion always outranks agent -- see ActionType.requiresCompanion):
+// arbitration (companion always outranks agent for the main slot -- see
+// ActionType.requiresCompanion):
 //   - no existing entry: accept unconditionally, either kind.
 //   - existing kind == new kind (a reconnect, e.g. after a restart):
 //     replace as before, no signal fired -- this is not a priority change.
-//   - existing=agent, new=companion: companion preempts. The old entry's
-//     superseded channel is closed so its holder notices and tears down.
-//   - existing=companion, new=agent: rejected outright; the existing
-//     companion stream is left untouched.
+//   - existing=agent, new=companion: companion preempts the main slot.
+//     The old entry's superseded channel is closed so its holder notices
+//     and tears down.
+//   - existing=companion, new=agent: the companion keeps the main slot,
+//     but the agent is still accepted into agentStreams (see below), so
+//     agent-only actions (recheck, ActionCompleteCompanionSwap) can still
+//     reach it even while a companion is connected.
+//
+// Whenever this replaces an existing entry (main slot or agentStreams),
+// it also clears that agentID's corresponding pending/agentPending marker
+// -- confirmed live as a real stuck-forever bug otherwise: if the old
+// connection died uncleanly (crash, network drop, anything that never
+// delivers a clean TCP close), its own deferred Disconnect either never
+// runs at all, or runs too late and no-ops against the channel it's
+// comparing against (already replaced by the time it gets there) -- so
+// without clearing it here too, an action that will now never resolve
+// (its executor is gone) blocks every future Push for that agent with
+// ErrActionInFlight/"agent stream busy", forever, until the whole
+// aggregator process restarts.
 //
 // companionVersion is only recorded when kind is KindCompanion -- it has
 // no meaning for an agent-only connection, and must not clobber the last
@@ -243,6 +259,7 @@ func (h *CompanionHub) Connect(agentID string, kind ClientKind, companionVersion
 		// Close any previous agent stream for this ID
 		if prev, ok := h.agentStreams[agentID]; ok {
 			close(prev.superseded)
+			delete(h.agentPending, agentID)
 		}
 		h.agentStreams[agentID] = agentEntry
 		return ConnectResult{Accepted: true, Ch: agentEntry.ch, Superseded: agentEntry.superseded}
@@ -253,14 +270,18 @@ func (h *CompanionHub) Connect(agentID string, kind ClientKind, companionVersion
 		kind:       kind,
 		superseded: make(chan struct{}),
 	}
-	if hasExisting && existing.kind != kind {
-		close(existing.superseded)
+	if hasExisting {
+		if existing.kind != kind {
+			close(existing.superseded)
+		}
+		delete(h.pending, agentID)
 	}
 	h.streams[agentID] = entry
 	if kind == KindAgent {
 		// Also track in agentStreams for agent-only action routing
 		if prev, ok := h.agentStreams[agentID]; ok {
 			close(prev.superseded)
+			delete(h.agentPending, agentID)
 		}
 		h.agentStreams[agentID] = entry
 	}
