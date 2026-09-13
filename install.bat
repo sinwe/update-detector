@@ -166,7 +166,16 @@ for /l %%i in (1,1,5) do (
     if not errorlevel 1 (
       set "move_ok=1"
     ) else (
-      timeout /t 1 /nobreak >nul
+      rem timeout.exe refuses to run at all without a real console --
+      rem "ERROR: Input redirection is not supported, exiting the
+      rem process immediately." -- confirmed live when this runs
+      rem non-interactively (a Windows Service, e.g. the companion
+      rem re-invoking this script for a self-update has no console
+      rem at all). That failure was silent here (redirected to nul)
+      rem but meant every retry fired back-to-back with zero actual
+      rem delay, defeating this whole workaround. ping needs no
+      rem console at all; -n 2 against localhost gives ~1s.
+      ping -n 2 127.0.0.1 >nul
     )
   )
 )
@@ -227,7 +236,12 @@ if not errorlevel 1 goto :eof
 sc stop "%~1" >nul 2>&1
 set "tries=0"
 :stop_wait_loop
-timeout /t 1 /nobreak >nul
+rem timeout.exe needs a real console (see download_binary's own
+rem comment) -- without one this whole 30-iteration wait would blow
+rem through in milliseconds instead of ~30s, giving up on a service
+rem that's genuinely still stopping and force-killing it far too
+rem early. ping needs no console at all.
+ping -n 2 127.0.0.1 >nul
 sc query "%~1" | find "STOPPED" >nul
 if not errorlevel 1 goto :eof
 set /a tries+=1
@@ -702,7 +716,9 @@ if errorlevel 1 (
 ) else (
   echo install.bat: removing update-detector ^(agent^)...
   sc stop update-detector >nul 2>&1
-  timeout /t 2 /nobreak >nul
+  rem ping, not timeout -- see download_binary's own comment on why
+  rem timeout.exe can't be used here (needs a real console).
+  ping -n 3 127.0.0.1 >nul
   sc delete update-detector >nul 2>&1
   del /f /q "%BIN_DIR%\update-detector.exe" >nul 2>&1
   echo install.bat: removing %ProgramData%\update-detector ^(includes this agent's aggregator identity^)
@@ -722,7 +738,7 @@ if errorlevel 1 (
 ) else (
   echo install.bat: removing update-aggregator...
   sc stop update-aggregator >nul 2>&1
-  timeout /t 2 /nobreak >nul
+  ping -n 3 127.0.0.1 >nul
   sc delete update-aggregator >nul 2>&1
   del /f /q "%BIN_DIR%\update-aggregator.exe" >nul 2>&1
   echo install.bat: removing %ProgramData%\update-aggregator ^(includes the fleet registry -- all enrolled/approved hosts^)
@@ -741,7 +757,7 @@ rem Companion is always native, needs real administrator rights to run
 rem winget -- no Docker case to check here, same as install.sh's own
 rem uninstall_companion.
 sc stop update-detector-companion >nul 2>&1
-timeout /t 2 /nobreak >nul
+ping -n 3 127.0.0.1 >nul
 sc delete update-detector-companion >nul 2>&1
 del /f /q "%BIN_DIR%\update-detector-companion.exe" >nul 2>&1
 del /f /q "%CACHED_INSTALL_BAT%" >nul 2>&1
