@@ -18,7 +18,11 @@ import "strings"
 // reboot-required, never toward hiding one.
 var pendingRenameNoisePatterns = []string{
 	`\gamingservicesproxy`,
-	`\microsoft\edge\temp\`,
+	// No trailing backslash -- confirmed live, Edge's updater queues the
+	// bare Temp *folder* itself as one of the pending entries (not just
+	// files nested inside it), which a `...\temp\` pattern would miss
+	// entirely and report as a real pending change.
+	`\microsoft\edge\temp`,
 }
 
 // isRoutinePendingRename reports whether entry (one raw string from
