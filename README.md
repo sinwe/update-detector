@@ -89,6 +89,13 @@ self-update from that same page. Full walkthrough — security model, apply
 mechanics, upgrade-vs-full-upgrade, self-update — in [Technical
 reference](docs/reference.md#triggering-updates-companion).
 
+Releases move `alpha` → `beta` → `rc` → final (`v0.15.2-beta1`, ...,
+`v0.15.2`). Plain `:latest` images only ever point at final releases;
+to `docker compose pull` a pre-release track instead, pin the compose
+`image:` to `:latest-alpha`, `:latest-beta`, or `:latest-rc` and match it
+with the aggregator's `SELF_UPDATE_CHANNEL` — see
+[Releases](docs/reference.md#releases).
+
 ## See also
 
 - [docs/reference.md](docs/reference.md) — how detection works per OS,

@@ -23,7 +23,7 @@ GOOS=windows GOARCH=amd64 go build -ldflags "-X update-detector/internal/version
 # same pattern for ./cmd/update-aggregator and ./cmd/update-detector-companion (GOARCH=arm64 for Pi 4B)
 ```
 
-CI: GitHub is primary — `.github/workflows/windows-test.yml` (`go build` → `go vet` → `go test` on `1.22`, with `internal/companion` excluded on Windows). `.forgejo/workflows/` is legacy, do not use. Release on `v*` tag builds multi-arch images + 9 binary assets. No Makefile, no golangci-lint, no pre-commit.
+CI: GitHub is primary — `.github/workflows/ci.yml` (`go build` → `go vet` → `go test` on `ubuntu-latest`/`windows-latest`, with `internal/companion` excluded on Windows). `.forgejo/workflows/` is legacy, do not use. `.github/workflows/release.yml` on a `v*` tag builds multi-arch images + 9 binary assets, and pushes channel-specific tags per `internal/version`'s alpha < beta < rc < release convention (`:latest-alpha`/`:latest-beta`/`:latest-rc`, plus plain `:latest` only for a real release) so `docker compose pull` can track a channel without pinning a version; `retag-latest.yml` (manual `workflow_dispatch`) backfills those channel tags for older releases that predate this. No Makefile, no golangci-lint, no pre-commit.
 
 > **Remotes:** `origin` still points to Forgejo (`forgejo.winar.to`), `github` points to `github.com/sinwe/update-detector`. Push/pull and releases are on **GitHub only** — never push to `origin`/Forgejo (no `git push origin`, no Forgejo registry/API).
 
