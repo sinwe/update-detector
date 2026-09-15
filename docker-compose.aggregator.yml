@@ -30,6 +30,9 @@ services:
       # auth (e.g. Authentik) and have it inject this header; the
       # aggregator checks it independently either way. See README.
       - ADMIN_APPLY_SHARED_SECRET=${ADMIN_APPLY_SHARED_SECRET:-}
+      # Offline/recovery Telegram alerts: how long a host must stay
+      # disconnected before notifying (0 disables). Default 5m.
+      - OFFLINE_ALERT_AFTER=${OFFLINE_ALERT_AFTER:-}
     ports:
       - "9090:8080"
     volumes:

@@ -14,9 +14,18 @@ import (
 // Event describes a meaningful change worth notifying about.
 type Event struct {
 	Hostname string
+	// Title overrides the default "update status changed" headline --
+	// used by non-update events (e.g. presence alerts). Empty keeps
+	// the default.
+	Title string
 	Status   checker.Status
 	Previous *checker.Status
 	Changes  []string // human-readable, e.g. "3 new package updates available (1 security)"
+	// Brief skips the update-specific status trailer (upgradable
+	// counts, reboot flag) -- for events like presence alerts where
+	// those numbers would be stale at best and misleading at worst.
+	// False (the default) renders exactly as before.
+	Brief bool
 }
 
 // Notifier delivers an Event to some external channel.

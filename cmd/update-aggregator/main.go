@@ -69,6 +69,12 @@ func run(ctx context.Context) error {
 
 	hub := aggregator.NewCompanionHub()
 	outputHub := aggregator.NewOutputHub()
+	if cfg.OfflineAlertAfter > 0 {
+		log.Printf("offline alerts enabled (after %s of continuous disconnection)", cfg.OfflineAlertAfter)
+		go aggregator.NewPresenceWatcher(registry, hub, notifyMgr, cfg.OfflineAlertAfter).Run(ctx)
+	} else {
+		log.Println("offline alerts disabled (OFFLINE_ALERT_AFTER <= 0)")
+	}
 	srv := aggregator.NewServer(ctx, registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,

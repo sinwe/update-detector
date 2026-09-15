@@ -519,6 +519,22 @@ says on every aggregator restart, same as the version cache itself.
 `SELF_UPDATE_CHANNEL` is unset — `true` maps to `alpha`, `false` to
 `release` — but new setups should use `SELF_UPDATE_CHANNEL` directly.)
 
+## Offline alerts
+
+Since the agent and companion run as services, both being disconnected
+(the same condition `/admin` renders as Host offline) usually means the
+machine is powered off. When `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are
+set on the aggregator, it sends `⚠ <host> went offline` after the host
+stays continuously disconnected for `OFFLINE_ALERT_AFTER` (default `5m`),
+and `✅ <host> is back online` when a stream reconnects. The debounce
+means companion/aggregator restarts and other brief flaps stay silent —
+including the whole fleet reconnecting after an aggregator restart — and
+a flap that recovers before the debounce elapses produces no messages at
+all. Hosts that never reported, and rejected hosts, never alert. Set
+`OFFLINE_ALERT_AFTER=0` to disable both. State is in-memory only, so an
+aggregator restart gives every currently-down host a fresh grace period
+instead of an immediate alert.
+
 ## API reference
 
 Both services have an OpenAPI 3.0 spec — committed at `openapi/update-detector.yaml`
@@ -560,6 +576,7 @@ in `docker-compose.yml`.
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
 | `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
+| `OFFLINE_ALERT_AFTER` | `5m` | How long an approved host must stay continuously disconnected (no agent or companion stream — the same condition `/admin` renders as Host offline) before a Telegram offline alert fires, plus a recovery alert when it comes back. `0` disables both — see [Offline alerts](#offline-alerts) |
 | `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check GitHub for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
 | `SELF_UPDATE_CHANNEL` | `release` | Minimum release stage to surface as "available": `alpha`, `beta`, `rc`, or `release` — see [Self-updating update-detector](#self-updating-update-detector) |
 | `SELF_UPDATE_INCLUDE_PRERELEASE` | `false` | Deprecated: only consulted when `SELF_UPDATE_CHANNEL` is unset; `true` maps to `alpha`, `false` to `release` |
