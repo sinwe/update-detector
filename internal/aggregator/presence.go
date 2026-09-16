@@ -62,6 +62,12 @@ type PresenceWatcher struct {
 	notifyMgr    *notifier.Manager
 	offlineAfter time.Duration
 
+	// alerts, when non-nil, is the live fleet-wide switch + grace period
+	// (/admin editable, persisted by AlertStore). It is re-read every
+	// round: flipping the switch or changing the grace applies within a
+	// minute with no restart. Nil keeps the legacy env-only behavior.
+	alerts *AlertStore
+
 	mu     sync.Mutex
 	states map[string]*presenceState
 
@@ -70,12 +76,13 @@ type PresenceWatcher struct {
 	now func() time.Time
 }
 
-func NewPresenceWatcher(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, offlineAfter time.Duration) *PresenceWatcher {
+func NewPresenceWatcher(registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, offlineAfter time.Duration, alerts *AlertStore) *PresenceWatcher {
 	return &PresenceWatcher{
 		registry:     registry,
 		hub:          hub,
 		notifyMgr:    notifyMgr,
 		offlineAfter: offlineAfter,
+		alerts:       alerts,
 		states:       map[string]*presenceState{},
 		now:          time.Now,
 	}
@@ -98,10 +105,24 @@ func (w *PresenceWatcher) Run(ctx context.Context) {
 }
 
 // checkOnce reconciles one poll round: exactly one alert per offline
-// stretch (after offlineAfter of continuous disconnection), exactly
-// one recovery per alerted stretch, silence otherwise.
+// stretch (after the effective grace period of continuous disconnection),
+// exactly one recovery per alerted stretch, silence otherwise. The grace
+// period and master switch come from the AlertStore when one is attached
+// (re-read every round — /admin edits apply without a restart) and fall
+// back to the constructor's env value otherwise. Tracking continues while
+// the fleet switch is off so re-enabling alerts on the next round for a
+// still-down host instead of restarting its debounce.
 func (w *PresenceWatcher) checkOnce(ctx context.Context) {
-	if w.offlineAfter <= 0 {
+	after := w.offlineAfter
+	alertsOn := true
+	if w.alerts != nil {
+		settings := w.alerts.Get()
+		alertsOn = settings.Enabled
+		if d, ok := settings.AfterDuration(); ok {
+			after = d
+		}
+	}
+	if after <= 0 {
 		return
 	}
 	now := w.now()
@@ -130,7 +151,7 @@ func (w *PresenceWatcher) checkOnce(ctx context.Context) {
 		}
 
 		if w.hub.Connected(rec.ID) {
-			if st.alerted && rec.NotifyDownEffective(now) {
+			if st.alerted && alertsOn && rec.NotifyDownEffective(now) {
 				w.send(ctx, rec, "is back online",
 					fmt.Sprintf("reachable again (was unreachable since %s)", st.offlineSince.Format(time.RFC3339)))
 			}
@@ -149,7 +170,7 @@ func (w *PresenceWatcher) checkOnce(ctx context.Context) {
 		// the debounce), but neither fires while muted nor marks the
 		// stretch alerted. MutedUntil is evaluated against this round's
 		// clock, so a temporary mute lifts itself the moment it expires.
-		if !st.alerted && rec.NotifyDownEffective(now) && !st.offlineSince.IsZero() && now.Sub(st.offlineSince) >= w.offlineAfter {
+		if !st.alerted && alertsOn && rec.NotifyDownEffective(now) && !st.offlineSince.IsZero() && now.Sub(st.offlineSince) >= after {
 			w.send(ctx, rec, "went offline",
 				fmt.Sprintf("no agent or companion connected (last seen %s) — powered off?", rec.LastSeen.Format(time.RFC3339)))
 			st.alerted = true

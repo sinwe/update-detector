@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -48,6 +49,18 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Fleet-wide alert switch + grace period, editable from /admin at
+	// runtime. Seeded from the environment on first start (so upgrading
+	// keeps the old OFFLINE_ALERT_AFTER behavior); the file wins after
+	// that. The watcher always runs now — even with OFFLINE_ALERT_AFTER=0
+	// — and simply stays silent until the switch is turned on in /admin.
+	alertStore := aggregator.NewAlertStore(
+		filepath.Join(filepath.Dir(cfg.RegistryFile), "alert-settings.json"),
+		cfg.OfflineAlertAfter > 0, cfg.OfflineAlertAfter)
+	if err := alertStore.Load(); err != nil {
+		return err
+	}
+
 	var notifiers []notifier.Notifier
 	if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
 		notifiers = append(notifiers, notifier.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID))
@@ -69,14 +82,15 @@ func run(ctx context.Context) error {
 
 	hub := aggregator.NewCompanionHub()
 	outputHub := aggregator.NewOutputHub()
-	if cfg.OfflineAlertAfter > 0 {
-		log.Printf("offline alerts enabled (after %s of continuous disconnection)", cfg.OfflineAlertAfter)
-		go aggregator.NewPresenceWatcher(registry, hub, notifyMgr, cfg.OfflineAlertAfter).Run(ctx)
+	if alertStore.Get().Enabled {
+		log.Printf("offline alerts enabled (after %s of continuous disconnection)", mustAlertAfter(alertStore))
 	} else {
-		log.Println("offline alerts disabled (OFFLINE_ALERT_AFTER <= 0)")
+		log.Println("offline alerts disabled (fleet switch off — toggle in /admin)")
 	}
+	go aggregator.NewPresenceWatcher(registry, hub, notifyMgr, cfg.OfflineAlertAfter, alertStore).Run(ctx)
 	srv := aggregator.NewServer(ctx, registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
 	srv.SetAlertInfo(cfg.OfflineAlertAfter, notifyMgr.Names())
+	srv.SetAlertStore(alertStore)
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: srv.Handler(),
@@ -98,4 +112,14 @@ func run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return httpSrv.Shutdown(shutdownCtx)
+}
+
+// mustAlertAfter resolves the seeded grace period for the startup log:
+// the store's own value (just loaded, so valid unless hand-edited), else
+// the 5m default. Only cosmetic — the watcher re-resolves every round.
+func mustAlertAfter(store *aggregator.AlertStore) time.Duration {
+	if d, ok := store.Get().AfterDuration(); ok {
+		return d
+	}
+	return 5 * time.Minute
 }

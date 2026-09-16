@@ -324,20 +324,51 @@ func TestHandleAdminAlertStrip(t *testing.T) {
 
 	// Default test server: nothing configured, no watcher.
 	s, _ := newTestServer(t)
-	if body := adminBody(s); !strings.Contains(body, "Offline alerts: <strong>Not configured</strong>") {
-		t.Fatalf("expected not-configured strip, got a page without it")
+	body := adminBody(s)
+	for _, want := range []string{`name="alerts-global"`, `value="off" checked`, "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected not-configured strip to contain %q", want)
+		}
 	}
 
 	s2, _ := newTestServer(t)
 	s2.SetAlertInfo(5*time.Minute, []string{"telegram"})
-	if body := adminBody(s2); !strings.Contains(body, "Offline alerts: <strong>On</strong> · via telegram · after 5m down") {
-		t.Fatalf("expected live strip, got a page without it")
+	body = adminBody(s2)
+	for _, want := range []string{`value="on" checked`, `<option value="5m" selected>`, "via telegram · after 5m down"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected live strip to contain %q", want)
+		}
 	}
 
 	s3, _ := newTestServer(t)
 	s3.SetAlertInfo(0, []string{"telegram"})
-	if body := adminBody(s3); !strings.Contains(body, "Offline alerts: <strong>Off</strong> · OFFLINE_ALERT_AFTER=0") {
-		t.Fatalf("expected disabled strip, got a page without it")
+	if body := adminBody(s3); !strings.Contains(body, "OFFLINE_ALERT_AFTER=0") {
+		t.Fatalf("expected disabled strip to name the env var")
+	}
+
+	// Store attached and switched off: detail names the switch, the
+	// grace select keeps the stored value, per-host rows dim.
+	s4, reg := newTestServer(t)
+	if _, _, err := reg.Enroll("a1", "web01", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetStatus("a1", StatusApproved); err != nil {
+		t.Fatal(err)
+	}
+	store := NewAlertStore(filepath.Join(t.TempDir(), "alerts.json"), true, 5*time.Minute)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(false, "15m"); err != nil {
+		t.Fatal(err)
+	}
+	s4.SetAlertInfo(5*time.Minute, []string{"telegram"})
+	s4.SetAlertStore(store)
+	body = adminBody(s4)
+	for _, want := range []string{`value="off" checked`, `<option value="15m" selected>`, "fleet switch is off", "notify-row notify-paused"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected switched-off strip to contain %q", want)
+		}
 	}
 }
 
@@ -1987,5 +2018,66 @@ func TestHandleCompanionResultStagedFailedDoesNotPushSwapAction(t *testing.T) {
 		t.Fatalf("unexpected action pushed to agent: %q", action.Type)
 	case <-time.After(200 * time.Millisecond):
 		// Expected: no action pushed.
+	}
+}
+
+func TestHandleAdminAlertSettings(t *testing.T) {
+	get := func(s *Server) (int, alertSettingsResponse) {
+		rec := doJSON(t, s, http.MethodGet, "/admin/alert-settings", nil, nil)
+		var resp alertSettingsResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		return rec.Code, resp
+	}
+	post := func(s *Server, body any) (int, alertSettingsResponse) {
+		rec := doJSON(t, s, http.MethodPost, "/admin/alert-settings", body, nil)
+		var resp alertSettingsResponse
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		return rec.Code, resp
+	}
+
+	// No store attached: unavailable.
+	s, _ := newTestServer(t)
+	if code, _ := get(s); code != http.StatusNotImplemented {
+		t.Fatalf("got status %d, want 501 without a store", code)
+	}
+
+	store := NewAlertStore(filepath.Join(t.TempDir(), "alerts.json"), true, 5*time.Minute)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	s.SetAlertStore(store)
+
+	if code, resp := get(s); code != http.StatusOK || !resp.Enabled || resp.After != "5m" {
+		t.Fatalf("got status %d resp %#v, want 200 {true 5m}", code, resp)
+	}
+
+	// Partial POSTs apply whichever half is present.
+	if code, resp := post(s, map[string]any{"enabled": false}); code != http.StatusOK || resp.Enabled || resp.After != "5m" {
+		t.Fatalf("got status %d resp %#v, want 200 {false 5m}", code, resp)
+	}
+	if code, resp := post(s, map[string]any{"after": "30m"}); code != http.StatusOK || resp.Enabled || resp.After != "30m" {
+		t.Fatalf("got status %d resp %#v, want 200 {false 30m}", code, resp)
+	}
+	if code, resp := post(s, map[string]any{"enabled": true, "after": "2m"}); code != http.StatusOK || !resp.Enabled || resp.After != "2m" {
+		t.Fatalf("got status %d resp %#v, want 200 {true 2m}", code, resp)
+	}
+	if got := store.Get(); !got.Enabled || got.After != "2m" {
+		t.Fatalf("expected store to hold {true 2m}, got %#v", got)
+	}
+
+	// Empty, unparsable, and out-of-range bodies are rejected...
+	for _, bad := range []any{
+		map[string]any{},
+		map[string]any{"after": "bogus"},
+		map[string]any{"after": "30s"},
+		map[string]any{"after": "25h"},
+	} {
+		if code, _ := post(s, bad); code != http.StatusBadRequest {
+			t.Fatalf("got status %d for %#v, want 400", code, bad)
+		}
+	}
+	// ...as is a wrong method.
+	if rec := doJSON(t, s, http.MethodPut, "/admin/alert-settings", map[string]any{"enabled": true}, nil); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("got status %d, want 405", rec.Code)
 	}
 }

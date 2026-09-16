@@ -54,7 +54,9 @@ func presenceFixture(t *testing.T, id, hostname string, noReport bool) (*Presenc
 	hub := NewCompanionHub()
 	rec := &recordingNotifier{}
 	now := time.Now()
-	w := NewPresenceWatcher(reg, hub, notifier.NewManager(rec), 5*time.Minute)
+	// Nil store: the legacy env-only path. Tests for the live switch
+	// attach w.alerts explicitly.
+	w := NewPresenceWatcher(reg, hub, notifier.NewManager(rec), 5*time.Minute, nil)
 	w.now = func() time.Time { return now }
 	return w, hub, rec, &now
 }
@@ -284,5 +286,44 @@ func TestPresenceTempMuteExpiresOnItsOwn(t *testing.T) {
 	w.checkOnce(ctx)
 	if got := rec.events(); len(got) != 1 {
 		t.Fatalf("expected no repeat alert, got %#v", got)
+	}
+}
+
+func TestPresenceGlobalSwitchOffSilencesAll(t *testing.T) {
+	w, _, rec, now := presenceFixture(t, "a1", "web01", false)
+	w.alerts = NewAlertStore(filepath.Join(t.TempDir(), "alerts.json"), false, 5*time.Minute)
+	ctx := context.Background()
+
+	w.checkOnce(ctx)
+	*now = now.Add(30 * time.Minute)
+	w.checkOnce(ctx)
+	if got := rec.events(); len(got) != 0 {
+		t.Fatalf("expected silence with the fleet switch off, got %#v", got)
+	}
+
+	// Re-enabling mid-outage alerts on the next round: tracking
+	// continued while silent instead of restarting the debounce.
+	if err := w.alerts.Set(true, "5m"); err != nil {
+		t.Fatal(err)
+	}
+	w.checkOnce(ctx)
+	got := rec.events()
+	if len(got) != 1 || got[0].Title != "went offline" {
+		t.Fatalf("expected 1 offline alert after re-enabling, got %#v", got)
+	}
+}
+
+func TestPresenceGlobalGraceOverridesEnv(t *testing.T) {
+	w, _, rec, now := presenceFixture(t, "a1", "web01", false)
+	// Env debounce is 5m; the store says 1m — the store must win.
+	w.alerts = NewAlertStore(filepath.Join(t.TempDir(), "alerts.json"), true, time.Minute)
+	ctx := context.Background()
+
+	w.checkOnce(ctx)
+	*now = now.Add(90 * time.Second)
+	w.checkOnce(ctx)
+	got := rec.events()
+	if len(got) != 1 || got[0].Title != "went offline" {
+		t.Fatalf("expected 1 offline alert after the store grace, got %#v", got)
 	}
 }

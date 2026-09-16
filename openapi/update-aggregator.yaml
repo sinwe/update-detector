@@ -450,6 +450,64 @@ paths:
         "404":
           description: Unknown agent id
 
+  /admin/alert-settings:
+    get:
+      summary: Read the fleet-wide offline-alert switch and grace period
+      operationId: getAlertSettings
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  after:
+                    type: string
+        "501":
+          description: Alert settings unavailable (no store attached)
+    post:
+      summary: Update the fleet-wide offline-alert switch and grace period
+      description: >
+        Partial: whichever of enabled/after is present applies, so the
+        page's switch and grace select share one endpoint. The grace must
+        parse as a Go duration within 1m–24h. Applies within a minute
+        with no restart, persists across restarts, and never touches
+        per-host states (they resume when the switch comes back on).
+        Same trust model as the rest of /admin -- no shared secret needed.
+      operationId: setAlertSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                  description: Fleet-wide master switch
+                after:
+                  type: string
+                  description: Go duration grace period, 1m–24h (e.g. "5m")
+      responses:
+        "200":
+          description: Settings stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  after:
+                    type: string
+        "400":
+          description: Empty body, or grace unparsable / out of range
+        "501":
+          description: Alert settings unavailable (no store attached)
+
   /admin/agents/{id}/self-update:
     post:
       summary: Trigger a self-update of the agent, aggregator, or companion on one host

@@ -545,7 +545,13 @@ muted hosts stay visible at a glance. Stored per host in the registry
 (`POST /admin/agents/{id}/notify-down`), so it survives aggregator
 restarts. The strip under the page header shows the fleet-wide setup —
 `On · via telegram · after 5m down`, `Off`, or `Not configured` when no
-notification channel is set at all.
+notification channel is set at all. That same strip is also the
+fleet-wide control: the `On / Off` switch silences every host at once
+(per-host states are kept and resume when it's back on), and the `after`
+select changes the grace period (1m–24h). Both apply within a minute
+with no restart and persist in `alert-settings.json` next to the
+registry (`GET/POST /admin/alert-settings`). `OFFLINE_ALERT_AFTER` now
+only seeds these two on first start.
 
 ## API reference
 
@@ -588,7 +594,7 @@ in `docker-compose.yml`.
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
 | `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
-| `OFFLINE_ALERT_AFTER` | `5m` | How long an approved host must stay continuously disconnected (no agent or companion stream — the same condition `/admin` renders as Host offline) before a Telegram offline alert fires, plus a recovery alert when it comes back. `0` disables both — see [Offline alerts](#offline-alerts) |
+| `OFFLINE_ALERT_AFTER` | `5m` | Seeds the /admin fleet-wide grace period and switch on first start (`0` seeds switched-off) — afterwards the page is the source of truth, see [Offline alerts](#offline-alerts) |
 | `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check GitHub for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
 | `SELF_UPDATE_CHANNEL` | `release` | Minimum release stage to surface as "available": `alpha`, `beta`, `rc`, or `release` — see [Self-updating update-detector](#self-updating-update-detector) |
 | `SELF_UPDATE_INCLUDE_PRERELEASE` | `false` | Deprecated: only consulted when `SELF_UPDATE_CHANNEL` is unset; `true` maps to `alpha`, `false` to `release` |

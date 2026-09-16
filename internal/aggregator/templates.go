@@ -113,6 +113,12 @@ type adminPageData struct {
 	// template stays free of custom functions.
 	AlertState  string
 	AlertDetail string
+	// AlertsLive dims per-host notify blocks when fleet-wide alerts
+	// can't fire at all; AlertEnabled/AlertAfter drive the global
+	// control row's switch position and grace select.
+	AlertsLive   bool
+	AlertEnabled bool
+	AlertAfter   string
 	Pending                     []agentView
 	Approved                    []agentView
 	Rejected                    []agentView
@@ -306,9 +312,20 @@ const adminTemplateSrc = `<!DOCTYPE html>
 
     /* Offline-alerts strip + per-host notify block */
     .alert-strip {
+      display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
       font-size: .813rem; color: var(--text-secondary); margin-bottom: .75rem;
     }
     .alert-strip strong { color: var(--text); }
+    .alert-strip label {
+      display: inline-flex; align-items: center; gap: .25rem; cursor: pointer;
+      padding: .2rem .5rem; border-radius: var(--radius-sm); transition: var(--transition);
+    }
+    .alert-strip label:hover { background: var(--surface-hover); }
+    .alert-strip input[type=radio] { accent-color: var(--blue); margin: 0; }
+    .alert-strip select {
+      font-size: .75rem; padding: .2rem .35rem; border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    }
     .notify-row {
       display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
       font-size: .813rem; color: var(--text-secondary);
@@ -326,6 +343,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
     }
     .notify-status { font-size: .75rem; color: var(--text-muted); }
+    .notify-paused { opacity: .55; }
 
     /* Links row */
     .links-row {
@@ -503,7 +521,21 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </h1>
     </div>
 
-    <div class="alert-strip">🔔 Offline alerts: <strong>{{.AlertState}}</strong>{{if .AlertDetail}} · {{.AlertDetail}}{{end}}</div>
+    <div class="alert-strip">🔔 Offline alerts:
+      <label><input type="radio" name="alerts-global" value="on" {{if .AlertEnabled}}checked{{end}} onchange="postAlertSettings()"> On</label>
+      <label><input type="radio" name="alerts-global" value="off" {{if not .AlertEnabled}}checked{{end}} onchange="postAlertSettings()"> Off</label>
+      <span>after</span>
+      <select id="alert-after" onchange="postAlertSettings()" title="How long a host must stay disconnected before alerting (1m–24h)">
+        <option value="1m" {{if eq .AlertAfter "1m"}}selected{{end}}>1m</option>
+        <option value="2m" {{if eq .AlertAfter "2m"}}selected{{end}}>2m</option>
+        <option value="5m" {{if eq .AlertAfter "5m"}}selected{{end}}>5m</option>
+        <option value="10m" {{if eq .AlertAfter "10m"}}selected{{end}}>10m</option>
+        <option value="15m" {{if eq .AlertAfter "15m"}}selected{{end}}>15m</option>
+        <option value="30m" {{if eq .AlertAfter "30m"}}selected{{end}}>30m</option>
+        <option value="1h" {{if eq .AlertAfter "1h"}}selected{{end}}>1h</option>
+      </select>
+      <span class="notify-status">{{.AlertDetail}}</span>
+    </div>
 
     {{if .SelfUpdateConfigured}}
     <div class="channel-row">
@@ -624,7 +656,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{end}}
         {{end}}
 
-        <div class="notify-row">
+        <div class="notify-row{{if not $.AlertsLive}} notify-paused{{end}}">
           <span class="notify-title">🔔 Alerts</span>
           <label><input type="radio" name="notify-{{.ID}}" value="on" {{if eq .NotifyMode "on"}}checked{{end}} onchange="postNotifyMode('{{.ID}}')"> On</label>
           <label><input type="radio" name="notify-{{.ID}}" value="snooze" {{if eq .NotifyMode "snooze"}}checked{{end}} onchange="postNotifyMode('{{.ID}}')"> Snooze</label>
@@ -923,6 +955,28 @@ const adminTemplateSrc = `<!DOCTYPE html>
         alert('notify change failed: ' + e);
         location.reload();
       }
+    }
+    // Fleet-wide switch + grace share one endpoint; both controls post
+    // the full pair so a grace change while off (or vice versa) never
+    // clobbers the other half.
+    function postAlertSettings() {
+      const checked = document.querySelector('input[name="alerts-global"]:checked');
+      const sel = document.getElementById('alert-after');
+      const body = {enabled: !checked || checked.value === 'on'};
+      if (sel) body.after = sel.value;
+      fetch('/admin/alert-settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      }).then(async (resp) => {
+        if (!resp.ok) {
+          alert('alert settings failed (' + resp.status + '): ' + await resp.text());
+        }
+        location.reload();
+      }).catch((e) => {
+        alert('alert settings failed: ' + e);
+        location.reload();
+      });
     }
     async function postSelfUpdateChannel(channel) {
       const secret = getAdminApplySecret();

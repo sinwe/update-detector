@@ -56,6 +56,10 @@ type Server struct {
 	// Zero values render as off, which is also what tests get by default.
 	offlineAlertAfter time.Duration
 	notifyChannels    []string
+	// alerts, when non-nil, is the live fleet-wide switch + grace period
+	// (see AlertStore). The strip, the per-host dimming, and the watcher
+	// all read it; nil keeps the env-only behavior (tests).
+	alerts *AlertStore
 }
 
 func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
@@ -85,6 +89,7 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 	s.mux.HandleFunc("/admin", s.handleAdmin)
 	s.mux.HandleFunc("/admin/events", s.handleAdminEvents)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
+	s.mux.HandleFunc("/admin/alert-settings", s.handleAdminAlertSettings)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
 	s.mux.HandleFunc("/widgets/hosts", s.handleWidgetHosts)
@@ -105,19 +110,141 @@ func (s *Server) SetAlertInfo(after time.Duration, channels []string) {
 	s.notifyChannels = channels
 }
 
+// alertState resolves the effective fleet-wide alert setup: the store's
+// live values when attached, else the env-seeded constructor values.
+func (s *Server) alertState() (enabled bool, after time.Duration) {
+	after = s.offlineAlertAfter
+	enabled = after > 0
+	if s.alerts != nil {
+		st := s.alerts.Get()
+		enabled = st.Enabled
+		if d, ok := st.AfterDuration(); ok {
+			after = d
+		}
+	}
+	return enabled, after
+}
+
 // alertSummary renders the admin page's fleet-wide offline-alert strip
 // in plain words: whether alerts can fire at all, through what, and
-// after how long down. Three states: nothing configured, watcher
-// disabled, or live.
+// after how long down. Four states: nothing configured, switched off,
+// env-disabled (no store, e.g. tests), or live.
 func (s *Server) alertSummary() (state, detail string) {
+	enabled, after := s.alertState()
 	if len(s.notifyChannels) == 0 {
 		return "Not configured", "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable"
 	}
-	if s.offlineAlertAfter <= 0 {
+	if !enabled {
+		if s.alerts != nil {
+			return "Off", "fleet switch is off"
+		}
 		return "Off", "OFFLINE_ALERT_AFTER=0"
 	}
 	return "On", fmt.Sprintf("via %s · after %s down",
-		strings.Join(s.notifyChannels, ", "), formatAlertAfter(s.offlineAlertAfter))
+		strings.Join(s.notifyChannels, ", "), formatAlertAfter(after))
+}
+
+// alertsLive reports whether an offline alert could actually fire right
+// now — channels configured, switch on, usable grace. The admin page
+// dims per-host notify blocks when this is false.
+func (s *Server) alertsLive() bool {
+	if len(s.notifyChannels) == 0 {
+		return false
+	}
+	enabled, after := s.alertState()
+	return enabled && after > 0
+}
+
+// alertControls resolves the global control row's current values: the
+// switch position and the grace select's selected option. The stored raw
+// string is preferred over re-formatting so the select keeps matching
+// exactly ("5m", not "5m0s").
+func (s *Server) alertControls() (enabled bool, after string) {
+	enabled, afterDur := s.alertState()
+	after = formatAlertAfter(afterDur)
+	if s.alerts != nil {
+		if raw := s.alerts.Get().After; raw != "" {
+			if d, err := time.ParseDuration(raw); err == nil && d >= alertAfterMin && d <= alertAfterMax {
+				after = raw
+			}
+		}
+	}
+	return enabled, after
+}
+
+type alertSettingsRequest struct {
+	Enabled *bool   `json:"enabled,omitempty"`
+	After   *string `json:"after,omitempty"`
+}
+
+type alertSettingsResponse struct {
+	Enabled bool   `json:"enabled"`
+	After   string `json:"after"`
+}
+
+// handleAdminAlertSettings reads (GET) or updates (POST) the fleet-wide
+// offline-alert switch + grace period. POSTs are partial: whichever of
+// enabled/after is present applies, so the page's switch and grace select
+// can share one endpoint. The grace must parse as a Go duration within
+// [1m, 24h]. Same trust as the rest of /admin: no secret (it can't change
+// anything on a host). Changes persist across restarts and reach the
+// watcher within a minute — no restart needed.
+func (s *Server) handleAdminAlertSettings(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		http.Error(w, "alert settings unavailable", http.StatusNotImplemented)
+		return
+	}
+	if r.Method == http.MethodGet {
+		st := s.alerts.Get()
+		writeJSON(w, http.StatusOK, alertSettingsResponse{Enabled: st.Enabled, After: st.After})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req alertSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Enabled == nil && req.After == nil {
+		http.Error(w, "enabled and/or after are required", http.StatusBadRequest)
+		return
+	}
+	cur := s.alerts.Get()
+	enabled := cur.Enabled
+	after := cur.After
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	if req.After != nil {
+		d, err := time.ParseDuration(*req.After)
+		if err != nil || d < alertAfterMin || d > alertAfterMax {
+			http.Error(w, "after must be a duration between 1m and 24h", http.StatusBadRequest)
+			return
+		}
+		after = *req.After
+	}
+	candidate := AlertSettings{Enabled: enabled, After: after}
+	if _, ok := candidate.AfterDuration(); !ok {
+		// The stored file drifted out of range (hand-edited) while only
+		// the switch is being flipped — reset the grace to default
+		// rather than 500ing a legitimate request.
+		after = formatAlertAfter(defaultAlertAfter)
+	}
+	if err := s.alerts.Set(enabled, after); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.adminHub.Notify()
+	writeJSON(w, http.StatusOK, alertSettingsResponse{Enabled: enabled, After: after})
+}
+
+// SetAlertStore attaches the live fleet-wide alert settings (see
+// AlertStore). Called once at startup alongside SetAlertInfo.
+func (s *Server) SetAlertStore(store *AlertStore) {
+	s.alerts = store
 }
 
 // formatAlertAfter renders a debounce like 5m or 36h without Go's
@@ -640,6 +767,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	data := adminPageData{AggregatorVersion: version.Version}
 	data.AlertState, data.AlertDetail = s.alertSummary()
+	data.AlertsLive = s.alertsLive()
+	data.AlertEnabled, data.AlertAfter = s.alertControls()
 	if s.selfUpdate != nil {
 		data.SelfUpdateConfigured = true
 		data.SelfUpdateChannel = s.selfUpdate.Channel()
