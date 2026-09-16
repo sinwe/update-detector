@@ -397,14 +397,17 @@ paths:
 
   /admin/agents/{id}/notify-down:
     post:
-      summary: Toggle one host's offline/recovery notifications
+      summary: Toggle or snooze one host's offline/recovery notifications
       description: >
         Sets whether the aggregator sends "went offline" / "is back
         online" notifications for this host (the PresenceWatcher's
         OFFLINE_ALERT_AFTER alerts). Defaults to true for every host;
         turning it off only silences that host's down/up messages, never
-        apply-result notifications. Same trust model as the rest of
-        /admin (approve/reject/recheck) -- no shared secret needed.
+        apply-result notifications. With enabled=false plus a mute_for
+        duration (e.g. "8h", max "720h"), the host is only snoozed until
+        then — alerts resume on their own, and re-enabling clears the
+        snooze. Same trust model as the rest of /admin
+        (approve/reject/recheck) -- no shared secret needed.
       operationId: setNotifyDown
       parameters:
         - name: id
@@ -424,6 +427,9 @@ paths:
                 enabled:
                   type: boolean
                   description: Whether offline/recovery notifications fire for this host
+                mute_for:
+                  type: string
+                  description: Go duration (e.g. "8h", max "720h") to snooze instead of toggling off; only valid with enabled=false
       responses:
         "200":
           description: Preference stored
@@ -434,8 +440,13 @@ paths:
                 properties:
                   notify_down:
                     type: boolean
+                    description: Effective state right now (false while a snooze holds)
+                  muted_until:
+                    type: string
+                    format: date-time
+                    description: Snooze expiry, present only while a temporary mute holds
         "400":
-          description: Invalid request body
+          description: Invalid request body, or mute_for with enabled=true / unparsable / out of range
         "404":
           description: Unknown agent id
 

@@ -40,6 +40,28 @@ type AgentRecord struct {
 	// off in /admin only silences that host's down/up messages, never
 	// apply-result notifications.
 	NotifyDown bool `json:"notify_down"`
+	// MutedUntil, when non-nil, temporarily suppresses the same alerts
+	// until that time (the /admin "mute for" control) — after which
+	// alerts resume on their own. Only meaningful while NotifyDown is
+	// true; toggling NotifyDown off clears it, toggling on clears it.
+	// Nil for records written before this field existed (no migration
+	// needed: nil already means "no temporary mute").
+	MutedUntil *time.Time `json:"muted_until,omitempty"`
+}
+
+// NotifyDownEffective reports whether offline/recovery alerts currently
+// fire for this record: the master switch, minus a temporary mute that
+// hasn't expired yet. The expiry is evaluated lazily against now, so a
+// mute lifts itself without any write — an aggregator restart in the
+// middle of a mute just resumes the same evaluation.
+func (r AgentRecord) NotifyDownEffective(now time.Time) bool {
+	if !r.NotifyDown {
+		return false
+	}
+	if r.MutedUntil != nil && now.Before(*r.MutedUntil) {
+		return false
+	}
+	return true
 }
 
 var ErrNotFound = errors.New("agent not found")
@@ -257,7 +279,9 @@ func (r *Registry) Forget(id string) error {
 }
 
 // SetNotifyDown toggles whether this host's offline/recovery alerts
-// fire (see PresenceWatcher). Persists like every other mutation.
+// fire (see PresenceWatcher). Disabling clears any temporary mute;
+// enabling clears it too, so the checkbox is always an explicit,
+// indefinite choice. Persists like every other mutation.
 func (r *Registry) SetNotifyDown(id string, enabled bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -266,6 +290,23 @@ func (r *Registry) SetNotifyDown(id string, enabled bool) error {
 		return ErrNotFound
 	}
 	rec.NotifyDown = enabled
+	rec.MutedUntil = nil
+	return r.saveLocked()
+}
+
+// SetMutedUntil temporarily suppresses this host's offline/recovery
+// alerts until the given time (nil clears the mute). Implies the master
+// switch stays on: a temporary mute replaces an indefinite one, so after
+// the expiry alerts resume without further action.
+func (r *Registry) SetMutedUntil(id string, until *time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	rec.NotifyDown = true
+	rec.MutedUntil = until
 	return r.saveLocked()
 }
 

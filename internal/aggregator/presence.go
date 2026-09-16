@@ -47,8 +47,9 @@ type presenceState struct {
 // entirely out of the stream lifecycle.
 //
 // Each host can additionally opt out via its own NotifyDown registry
-// flag (the /admin toggle) — that only suppresses this watcher's
-// offline/recovery messages, never apply-result notifications.
+// flag (the /admin toggle), or snooze until MutedUntil (the "mute for"
+// control) — either only suppresses this watcher's offline/recovery
+// messages, never apply-result notifications.
 //
 // All state is in-memory only (same trade-off CompanionHub and
 // OutputHub already accept): an aggregator restart resets every host
@@ -129,7 +130,7 @@ func (w *PresenceWatcher) checkOnce(ctx context.Context) {
 		}
 
 		if w.hub.Connected(rec.ID) {
-			if st.alerted && rec.NotifyDown {
+			if st.alerted && rec.NotifyDownEffective(now) {
 				w.send(ctx, rec, "is back online",
 					fmt.Sprintf("reachable again (was unreachable since %s)", st.offlineSince.Format(time.RFC3339)))
 			}
@@ -146,8 +147,9 @@ func (w *PresenceWatcher) checkOnce(ctx context.Context) {
 		// A muted host still advances offlineSince above (so unmuting a
 		// still-down host alerts on the next round instead of restarting
 		// the debounce), but neither fires while muted nor marks the
-		// stretch alerted.
-		if !st.alerted && rec.NotifyDown && !st.offlineSince.IsZero() && now.Sub(st.offlineSince) >= w.offlineAfter {
+		// stretch alerted. MutedUntil is evaluated against this round's
+		// clock, so a temporary mute lifts itself the moment it expires.
+		if !st.alerted && rec.NotifyDownEffective(now) && !st.offlineSince.IsZero() && now.Sub(st.offlineSince) >= w.offlineAfter {
 			w.send(ctx, rec, "went offline",
 				fmt.Sprintf("no agent or companion connected (last seen %s) — powered off?", rec.LastSeen.Format(time.RFC3339)))
 			st.alerted = true

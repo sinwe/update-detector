@@ -79,9 +79,14 @@ type agentView struct {
 	// that originally triggered it.
 	PendingActionID string
 
-	// NotifyDown mirrors the registry's per-host offline-alert switch --
-	// renders the "notify when down" checkbox checked state.
+	// NotifyDown is the EFFECTIVE offline-alert state (master switch
+	// minus an unexpired temporary mute) — renders the "notify when
+	// down" checkbox, so a muted host shows unchecked until the mute
+	// lifts itself.
 	NotifyDown bool
+	// MutedUntil is a temporary mute's expiry as RFC3339, or "" when
+	// none is active — renders the "muted until …" badge.
+	MutedUntil string
 }
 
 type resultView struct {
@@ -134,11 +139,12 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 	// don't offer it at all -- "Update aggregator" is the only real
 	// option until that's no longer true.
 	aggregatorBehind := updateAvailable(latestVersion, version.Version)
+	now := time.Now()
 	v := agentView{
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
 		Hostname:                 rec.Hostname,
-		NotifyDown:               rec.NotifyDown,
+		NotifyDown:               rec.NotifyDownEffective(now),
 		AnyStreamConnected:       connected,
 		CompanionConnected:       connected && kind == KindCompanion,
 		CompanionVersion:         companionVersion,
@@ -148,6 +154,9 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 	}
 	if actionID, ok := hub.Pending(rec.ID); ok {
 		v.PendingActionID = actionID
+	}
+	if rec.MutedUntil != nil && now.Before(*rec.MutedUntil) {
+		v.MutedUntil = rec.MutedUntil.Format(time.RFC3339)
 	}
 	if !rec.FirstSeen.IsZero() {
 		v.FirstSeen = rec.FirstSeen.Format(time.RFC3339)
@@ -592,6 +601,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Send a notification when this host goes offline and when it comes back">
             <input type="checkbox" id="notify-{{.ID}}" {{if .NotifyDown}}checked{{end}} onchange="postNotifyDown('{{.ID}}', this.checked)"> notify when down
           </label>
+          {{if .MutedUntil}}<span class="badge badge-warn" title="Offline alerts resume automatically afterwards">muted until {{.MutedUntil}}</span>{{end}}
+          <select id="mutedur-{{.ID}}" title="Snooze offline alerts for a while instead of turning them off" style="font-size:.75rem">
+            <option value="1h">1h</option>
+            <option value="8h" selected>8h</option>
+            <option value="24h">24h</option>
+            <option value="72h">3d</option>
+            <option value="168h">7d</option>
+          </select>
+          <button class="btn-sm" onclick="muteFor('{{.ID}}')" title="Snooze offline alerts; they resume on their own">mute</button>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
@@ -842,12 +860,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
     }
 
-    async function postNotifyDown(id, enabled) {
+    async function postNotifyDown(id, enabled, muteFor) {
       try {
+        const body = {enabled: enabled};
+        if (muteFor) body.mute_for = muteFor;
         const resp = await fetch('/admin/agents/' + id + '/notify-down', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({enabled: enabled}),
+          body: JSON.stringify(body),
         });
         if (!resp.ok) {
           alert('notify toggle failed (' + resp.status + '): ' + await resp.text());
@@ -859,6 +879,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
         alert('notify toggle failed: ' + e);
         location.reload();
       }
+    }
+    function muteFor(id) {
+      const sel = document.getElementById('mutedur-' + id);
+      postNotifyDown(id, false, sel ? sel.value : '8h');
     }
     async function postSelfUpdateChannel(channel) {
       const secret = getAdminApplySecret();

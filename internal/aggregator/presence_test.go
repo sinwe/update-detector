@@ -253,3 +253,36 @@ func TestPresenceRecoverySuppressedWhenMuted(t *testing.T) {
 		t.Fatalf("expected no recovery for a muted host, got %#v", got)
 	}
 }
+
+func TestPresenceTempMuteExpiresOnItsOwn(t *testing.T) {
+	w, _, rec, now := presenceFixture(t, "a1", "web01", false)
+	ctx := context.Background()
+
+	// Snooze 10m from the fixture clock (not wall time — the watcher
+	// evaluates MutedUntil against its own controllable now).
+	until := now.Add(10 * time.Minute)
+	if err := w.registry.SetMutedUntil("a1", &until); err != nil {
+		t.Fatal(err)
+	}
+
+	w.checkOnce(ctx)
+	*now = now.Add(6 * time.Minute) // past the 5m debounce, still muted
+	w.checkOnce(ctx)
+	if got := rec.events(); len(got) != 0 {
+		t.Fatalf("expected silence while the mute holds, got %#v", got)
+	}
+
+	// 11m total: mute expired, host still down — the alert fires with
+	// no explicit unmute, and no repeat after that.
+	*now = now.Add(5 * time.Minute)
+	w.checkOnce(ctx)
+	got := rec.events()
+	if len(got) != 1 || got[0].Title != "went offline" {
+		t.Fatalf("expected 1 offline alert after the mute expired, got %#v", got)
+	}
+	*now = now.Add(10 * time.Minute)
+	w.checkOnce(ctx)
+	if got := rec.events(); len(got) != 1 {
+		t.Fatalf("expected no repeat alert, got %#v", got)
+	}
+}

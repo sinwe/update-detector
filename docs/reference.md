@@ -534,12 +534,16 @@ a flap that recovers before the debounce elapses produces no messages at
  `OFFLINE_ALERT_AFTER=0` to disable both. State is in-memory only, so an
  aggregator restart gives every currently-down host a fresh grace period
  instead of an immediate alert.
-+
-+Each host card on `/admin` also has its own `notify when down` switch
-+(on by default) — turning it off silences just that host's offline and
-+recovery messages, e.g. for a machine that's expected to be powered off
-+for a while. Stored per host in the registry (`POST
-+/admin/agents/{id}/notify-down`), so it survives aggregator restarts.
+
+Each host card on `/admin` also has its own `notify when down` switch
+(on by default) — turning it off silences just that host's offline and
+recovery messages, e.g. for a machine that's expected to be powered off
+for a while. Stored per host in the registry (`POST
+/admin/agents/{id}/notify-down`), so it survives aggregator restarts.
+Next to the switch, `mute [1h/8h/24h/3d/7d]` snoozes instead: alerts
+resume on their own when the mute expires (even across an aggregator
+restart — the expiry is evaluated lazily), shown as a `muted until …`
+badge; re-enabling the switch clears a snooze early.
 
 ## API reference
 

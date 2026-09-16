@@ -223,6 +223,71 @@ func TestForgetNotFound(t *testing.T) {
 	}
 }
 
+func TestNotifyDownEffective(t *testing.T) {
+	now := time.Now()
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	for _, tc := range []struct {
+		name string
+		rec  AgentRecord
+		want bool
+	}{
+		{"on, no mute", AgentRecord{NotifyDown: true}, true},
+		{"off, no mute", AgentRecord{NotifyDown: false}, false},
+		{"on, mute in future", AgentRecord{NotifyDown: true, MutedUntil: &future}, false},
+		{"on, mute expired", AgentRecord{NotifyDown: true, MutedUntil: &past}, true},
+		{"off, mute in future", AgentRecord{NotifyDown: false, MutedUntil: &future}, false},
+	} {
+		if got := tc.rec.NotifyDownEffective(now); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSetMutedUntilPersistsAcrossLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	r1 := NewRegistry(path)
+	if _, _, err := r1.Enroll("agent-1", "web01", "secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(8 * time.Hour).Truncate(time.Second)
+	if err := r1.SetMutedUntil("agent-1", &until); err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.SetMutedUntil("nope", &until); err != ErrNotFound {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+
+	r2 := NewRegistry(path)
+	if err := r2.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	rec, ok := r2.Get("agent-1")
+	if !ok || rec.MutedUntil == nil || !rec.MutedUntil.Equal(until) {
+		t.Fatalf("expected MutedUntil=%v to survive reload, got %#v", until, rec)
+	}
+	if !rec.NotifyDown {
+		t.Fatalf("expected temporary mute to leave the master switch on, got %#v", rec)
+	}
+
+	// Clearing with nil, and toggling off, both drop the mute.
+	if err := r2.SetMutedUntil("agent-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := r2.Get("agent-1"); rec.MutedUntil != nil {
+		t.Fatalf("expected nil mute to clear, got %#v", rec)
+	}
+	if err := r2.SetMutedUntil("agent-1", &until); err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.SetNotifyDown("agent-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := r2.Get("agent-1"); rec.MutedUntil != nil || rec.NotifyDown {
+		t.Fatalf("expected toggle-off to clear the mute, got %#v", rec)
+	}
+}
+
 func TestForgetPersistsAcrossLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	r1 := NewRegistry(path)

@@ -818,10 +818,19 @@ func (s *Server) handleAdminRecheck(w http.ResponseWriter, r *http.Request, id s
 
 type notifyDownRequest struct {
 	Enabled bool `json:"enabled"`
+	// MuteFor, when non-empty, is a Go duration string ("8h", "72h")
+	// that mutes until now+that instead of toggling off indefinitely.
+	// Only valid together with enabled=false; capped at maxMuteFor.
+	MuteFor string `json:"mute_for,omitempty"`
 }
 
+// maxMuteFor caps a temporary mute at 30 days — beyond that, turn the
+// master switch off instead of pretending a month-long snooze is temporary.
+const maxMuteFor = 720 * time.Hour
+
 // handleAdminNotifyDown toggles one host's offline/recovery alerts (the
-// PresenceWatcher's "went offline"/"is back online" messages). Same trust
+// PresenceWatcher's "went offline"/"is back online" messages), or snoozes
+// them for a duration after which they resume on their own. Same trust
 // model as the rest of /admin (approve/reject/recheck): no shared secret,
 // since it can't change anything on a host — unlike apply/self-update,
 // which stay secret-gated.
@@ -834,7 +843,27 @@ func (s *Server) handleAdminNotifyDown(w http.ResponseWriter, r *http.Request, i
 		}
 	}
 
-	if err := s.registry.SetNotifyDown(id, req.Enabled); err != nil {
+	if req.Enabled && req.MuteFor != "" {
+		http.Error(w, "mute_for is only valid with enabled=false", http.StatusBadRequest)
+		return
+	}
+
+	if !req.Enabled && req.MuteFor != "" {
+		dur, err := time.ParseDuration(req.MuteFor)
+		if err != nil || dur <= 0 || dur > maxMuteFor {
+			http.Error(w, "mute_for must be a positive duration up to 720h", http.StatusBadRequest)
+			return
+		}
+		until := time.Now().Add(dur)
+		if err := s.registry.SetMutedUntil(id, &until); err != nil {
+			if err == ErrNotFound {
+				http.Error(w, "agent not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else if err := s.registry.SetNotifyDown(id, req.Enabled); err != nil {
 		if err == ErrNotFound {
 			http.Error(w, "agent not found", http.StatusNotFound)
 			return
@@ -844,7 +873,12 @@ func (s *Server) handleAdminNotifyDown(w http.ResponseWriter, r *http.Request, i
 	}
 	s.adminHub.Notify()
 
-	writeJSON(w, http.StatusOK, map[string]bool{"notify_down": req.Enabled})
+	rec, _ := s.registry.Get(id)
+	resp := map[string]any{"notify_down": rec.NotifyDownEffective(time.Now())}
+	if rec.MutedUntil != nil {
+		resp["muted_until"] = rec.MutedUntil.Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type selfUpdateRequest struct {
