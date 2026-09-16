@@ -8,12 +8,14 @@
 # companion it pushes agent then companion self-updates; the aggregator
 # itself goes first since the server rejects component updates newer
 # than its own running version. Hosts with no connected companion
-# (offline) are reported and skipped — a 409 from the push means exactly
-# that, or an action already in flight.
+# (offline) are reported and skipped — a 409 from a push means exactly
+# that, or an action already in flight (e.g. from an earlier interrupted
+# run), in which case we just wait for the version to land.
 #
 # Auth: ADMIN_APPLY_SHARED_SECRET env var, or auto-read from the running
 # aggregator container (never printed, never stored). Needs curl + jq +
-# python3 + docker on this host.
+# python3 + docker on this host. Safe to re-run: hosts already at the
+# target are skipped.
 set -eu
 
 TARGET="${1:?usage: scripts/fleet-update.sh <target_version>}"
@@ -25,30 +27,32 @@ if [ -z "$SECRET" ]; then
   exit 1
 fi
 
-api() { # api METHOD PATH [BODY] -> prints body; sets HTTP_CODE
-  local method="$1" path="$2" body="${3:-}"
-  local tmp
-  tmp="$(mktemp)"
+# NOTE: these helpers echo the HTTP code and write the body to the file
+# given as $1 — never the other way round. Capturing a helper's stdout
+# with $(...) runs it in a subshell, so a "global" for the status code
+# would silently keep its previous value (this exact bug once reported a
+# successful push as failed and aborted a run).
+call() { # call OUTFILE METHOD PATH [BODY] — echoes http code
+  local outfile="$1" method="$2" path="$3" body="${4:-}"
+  local args=(-sS --max-time 30 -o "$outfile" -w "%{http_code}" -X "$method"
+    -H 'Content-Type: application/json'
+    -H "X-Admin-Apply-Secret: $SECRET")
   if [ -n "$body" ]; then
-    HTTP_CODE="$(curl -sS --max-time 30 -o "$tmp" -w "%{http_code}" -X "$method" \
-      -H 'Content-Type: application/json' "$AGGREGATOR_URL$path" -d "$body")"
-  else
-    HTTP_CODE="$(curl -sS --max-time 30 -o "$tmp" -w "%{http_code}" -X "$method" \
-      -H 'Content-Type: application/json' "$AGGREGATOR_URL$path")"
+    args+=(-d "$body")
   fi
-  cat "$tmp"
-  rm -f "$tmp"
+  curl "${args[@]}" "$AGGREGATOR_URL$path"
 }
 
-api_secret() { # same, plus the apply-secret header
-  local method="$1" path="$2" body="${3:-}"
-  local tmp
+GET() { # GET PATH — prints body, fails unless 2xx
+  local path="$1" tmp code
   tmp="$(mktemp)"
-  HTTP_CODE="$(curl -sS --max-time 30 -o "$tmp" -w "%{http_code}" -X "$method" \
-    -H 'Content-Type: application/json' -H "X-Admin-Apply-Secret: $SECRET" \
-    "$AGGREGATOR_URL$path" ${body:+-d "$body"})"
+  code="$(call "$tmp" GET "$path")"
   cat "$tmp"
   rm -f "$tmp"
+  case "$code" in
+    2*) return 0 ;;
+    *) echo "GET $path -> http $code" >&2; return 1 ;;
+  esac
 }
 
 wait_for() { # wait_for DESC TIMEOUT_SECS CMD... (succeeds when CMD exits 0)
@@ -66,48 +70,64 @@ wait_for() { # wait_for DESC TIMEOUT_SECS CMD... (succeeds when CMD exits 0)
   return 1
 }
 
-at_version() { # at_version AGENT_ID FIELD -> true when that field == TARGET
-  local id="$1" field="$2"
-  [ "$(api GET "/admin/agents/$id/version" | jq -r --arg f "$field" '.[$f] // ""')" = "$TARGET" ]
+version_field() { # version_field AGENT_ID FIELD — prints the field ("" if unset)
+  local id="$1" field="$2" tmp
+  tmp="$(mktemp)"
+  if [ "$(call "$tmp" GET "/admin/agents/$id/version")" = "200" ]; then
+    jq -r --arg f "$field" '.[$f] // ""' "$tmp"
+  else
+    echo ""
+  fi
+  rm -f "$tmp"
 }
 
-push_update() { # push_update AGENT_ID COMPONENT -> 0 pushed+accepted, 1 skipped/failed
-  local id="$1" component="$2"
-  local resp
-  resp="$(api_secret POST "/admin/agents/$id/self-update" \
+# push_update AGENT_ID COMPONENT — echoes ok|skip|error, always exits 0.
+push_update() {
+  local id="$1" component="$2" tmp code body
+  tmp="$(mktemp)"
+  code="$(call "$tmp" POST "/admin/agents/$id/self-update" \
     "{\"component\":\"$component\",\"target_version\":\"$TARGET\"}")"
-  case "$HTTP_CODE" in
-    202) echo "  pushed $component -> $TARGET"; return 0 ;;
-    409) echo "  skip $component: no companion connected or action in flight"; return 1 ;;
-    *)   echo "  ERROR pushing $component: http $HTTP_CODE $resp" >&2; return 1 ;;
+  body="$(cat "$tmp")"
+  rm -f "$tmp"
+  case "$code" in
+    202) echo "  pushed $component -> $TARGET"; echo ok ;;
+    409) echo "  $component not pushed (http 409: no companion connected or action already in flight)"; echo skip ;;
+    *)   echo "  ERROR pushing $component: http $code $body" >&2; echo error ;;
   esac
+  return 0
 }
 
 echo "== aggregator at $AGGREGATOR_URL -> $TARGET =="
-[ "$(api GET /healthz | jq -r .version)" != "" ] || { echo "error: aggregator not reachable" >&2; exit 1; }
+[ "$(GET /healthz | jq -r .version)" != "" ] || { echo "error: aggregator not reachable" >&2; exit 1; }
 
 # Refresh the release metadata synchronously (re-setting the same channel
 # forces an immediate check) so the dashboard buttons agree with TARGET.
 CHANNEL="$(docker exec "$AGG_CONTAINER" env 2>/dev/null | grep '^SELF_UPDATE_CHANNEL=' | cut -d= -f2-)"
 CHANNEL="${CHANNEL:-release}"
-api_secret POST /admin/self-update-channel "{\"channel\":\"$CHANNEL\"}" >/dev/null || true
+tmp="$(mktemp)"
+call "$tmp" POST /admin/self-update-channel "{\"channel\":\"$CHANNEL\"}" >/dev/null || true
+rm -f "$tmp"
 echo "channel: $CHANNEL (refreshed)"
 
-HOSTS_JSON="$(api GET /widgets/hosts)"
+HOSTS_JSON="$(GET /widgets/hosts)"
 echo "fleet: $(echo "$HOSTS_JSON" | jq -r '.[].hostname' | tr '\n' ' ')"
 
 # Which host runs the aggregator? Only its card renders the aggregator button.
-AGG_HOST_ID="$(api GET /admin | python3 -c \
+AGG_HOST_ID="$(GET /admin | python3 -c \
   "import re,sys; m = re.findall(r\"postSelfUpdate\\('([^']+)', 'aggregator'\", sys.stdin.read()); print(m[0] if m else '')")"
 if [ -n "$AGG_HOST_ID" ]; then
   echo "== aggregator component on $AGG_HOST_ID =="
-  if at_version "$AGG_HOST_ID" agent_version 2>/dev/null && \
-     [ "$(api GET /healthz | jq -r .version)" = "$TARGET" ]; then
+  if [ "$(GET /healthz | jq -r .version)" = "$TARGET" ]; then
     echo "  aggregator already at $TARGET"
   else
-    push_update "$AGG_HOST_ID" aggregator
-    wait_for "aggregator healthy at $TARGET" 900 \
-      bash -c "[ \"\$(curl -sS --max-time 10 $AGGREGATOR_URL/healthz | jq -r .version)\" = \"$TARGET\" ]"
+    case "$(push_update "$AGG_HOST_ID" aggregator | tail -n 1)" in
+      ok|skip) wait_for "aggregator healthy at $TARGET" 900 \
+        bash -c "[ \"\$(curl -sS --max-time 10 $AGGREGATOR_URL/healthz | jq -r .version)\" = \"$TARGET\" ]" || true ;;
+    esac
+    if [ "$(GET /healthz | jq -r .version)" != "$TARGET" ]; then
+      echo "error: aggregator did not reach $TARGET — aborting host updates" >&2
+      exit 1
+    fi
   fi
 else
   echo "warning: no host advertises the aggregator — skipping aggregator update" >&2
@@ -117,9 +137,8 @@ PASS=0; SKIP=0; FAIL=0
 while read -r id name; do
   [ -n "$id" ] || continue
   echo "== host $name ($id) =="
-  info="$(api GET "/admin/agents/$id/version")"
-  agent_v="$(echo "$info" | jq -r '.agent_version // ""')"
-  comp_v="$(echo "$info" | jq -r '.companion_version // ""')"
+  agent_v="$(version_field "$id" agent_version)"
+  comp_v="$(version_field "$id" companion_version)"
   if [ -z "$comp_v" ]; then
     echo "  skip: no companion connected (offline?)"
     SKIP=$((SKIP + 1))
@@ -129,17 +148,30 @@ while read -r id name; do
   if [ "$agent_v" = "$TARGET" ]; then
     echo "  agent already at $TARGET"
   else
-    push_update "$id" agent && wait_for "agent at $TARGET" 600 at_version "$id" agent_version || ok=0
+    case "$(push_update "$id" agent | tail -n 1)" in
+      ok|skip)
+        if ! wait_for "agent at $TARGET" 600 \
+            bash -c "[ \"\$(curl -sS --max-time 10 $AGGREGATOR_URL/admin/agents/$id/version | jq -r .agent_version)\" = \"$TARGET\" ]"; then
+          ok=0
+        fi ;;
+      *) ok=0 ;;
+    esac
   fi
-  # Re-read: the agent update may have taken a while; companion may connect late.
-  comp_v="$(api GET "/admin/agents/$id/version" | jq -r '.companion_version // ""')"
+  comp_v="$(version_field "$id" companion_version)"
   if [ "$comp_v" = "$TARGET" ]; then
     echo "  companion already at $TARGET"
   elif [ -z "$comp_v" ]; then
     echo "  skip companion: no companion connected" >&2
     ok=0
   else
-    push_update "$id" companion && wait_for "companion at $TARGET" 600 at_version "$id" companion_version || ok=0
+    case "$(push_update "$id" companion | tail -n 1)" in
+      ok|skip)
+        if ! wait_for "companion at $TARGET" 600 \
+            bash -c "[ \"\$(curl -sS --max-time 10 $AGGREGATOR_URL/admin/agents/$id/version | jq -r .companion_version)\" = \"$TARGET\" ]"; then
+          ok=0
+        fi ;;
+      *) ok=0 ;;
+    esac
   fi
   if [ "$ok" = 1 ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi
 done < <(echo "$HOSTS_JSON" | jq -r '.[] | "\(.agent_id) \(.hostname)"')
