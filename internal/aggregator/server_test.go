@@ -211,13 +211,16 @@ func TestHandleAdminNotifyDownFlow(t *testing.T) {
 		t.Fatalf("expected registry NotifyDown=false, got %#v", got)
 	}
 
-	// The admin page must render the toggle unchecked for this host.
+	// The admin page must render the notify segment as Off for this host.
 	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
-	if !strings.Contains(body, `id="notify-a1"`) {
-		t.Fatalf("expected notify toggle for a1 on the admin page")
+	if !strings.Contains(body, `name="notify-a1"`) {
+		t.Fatalf("expected notify segment for a1 on the admin page")
 	}
-	if strings.Contains(body, `id="notify-a1" checked`) {
-		t.Fatalf("expected notify toggle for a1 to render unchecked")
+	if !strings.Contains(body, `value="off" checked`) {
+		t.Fatalf("expected notify segment for a1 to render Off checked")
+	}
+	if strings.Contains(body, `value="on" checked`) {
+		t.Fatalf("expected notify segment for a1 to not render On checked")
 	}
 
 	// Back on.
@@ -227,6 +230,9 @@ func TestHandleAdminNotifyDownFlow(t *testing.T) {
 	}
 	if got, _ := reg.Get("a1"); !got.NotifyDown {
 		t.Fatalf("expected registry NotifyDown=true, got %#v", got)
+	}
+	if body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String(); !strings.Contains(body, `value="on" checked`) {
+		t.Fatalf("expected notify segment for a1 to render On checked after re-enable")
 	}
 
 	// Unknown agent 404s; malformed body 400s.
@@ -271,14 +277,17 @@ func TestHandleAdminNotifyDownMuteFor(t *testing.T) {
 		t.Fatalf("expected master switch on with a temporary mute, got %#v", got)
 	}
 
-	// The admin page shows the snooze with its expiry (note: the page is
-	// HTML-escaped, so a non-UTC offset's "+" renders as "&#43;").
+	// The admin page shows the snooze state with its expiry (note: the
+	// page is HTML-escaped, so a non-UTC offset's "+" renders as "&#43;").
 	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
-	if !strings.Contains(body, "muted until "+strings.ReplaceAll(untilStr, "+", "&#43;")) {
-		t.Fatalf("expected muted-until badge on the admin page")
+	if !strings.Contains(body, "Snoozed until "+strings.ReplaceAll(untilStr, "+", "&#43;")) {
+		t.Fatalf("expected snoozed-until status on the admin page")
 	}
-	if strings.Contains(body, `id="notify-a1" checked`) {
-		t.Fatalf("expected notify toggle to render unchecked while muted")
+	if !strings.Contains(body, `value="snooze" checked`) {
+		t.Fatalf("expected notify segment for a1 to render Snooze checked")
+	}
+	if !strings.Contains(body, "🔕 snoozed") {
+		t.Fatalf("expected snoozed header badge on the admin page")
 	}
 
 	// Re-enabling clears the mute entirely.
@@ -305,6 +314,43 @@ func TestHandleAdminNotifyDownMuteFor(t *testing.T) {
 	if rec := doJSON(t, s, http.MethodPost, "/admin/agents/does-not-exist/notify-down",
 		notifyDownRequest{Enabled: false, MuteFor: "1h"}, nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("got status %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleAdminAlertStrip(t *testing.T) {
+	adminBody := func(s *Server) string {
+		return doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	}
+
+	// Default test server: nothing configured, no watcher.
+	s, _ := newTestServer(t)
+	if body := adminBody(s); !strings.Contains(body, "Offline alerts: <strong>Not configured</strong>") {
+		t.Fatalf("expected not-configured strip, got a page without it")
+	}
+
+	s2, _ := newTestServer(t)
+	s2.SetAlertInfo(5*time.Minute, []string{"telegram"})
+	if body := adminBody(s2); !strings.Contains(body, "Offline alerts: <strong>On</strong> · via telegram · after 5m down") {
+		t.Fatalf("expected live strip, got a page without it")
+	}
+
+	s3, _ := newTestServer(t)
+	s3.SetAlertInfo(0, []string{"telegram"})
+	if body := adminBody(s3); !strings.Contains(body, "Offline alerts: <strong>Off</strong> · OFFLINE_ALERT_AFTER=0") {
+		t.Fatalf("expected disabled strip, got a page without it")
+	}
+}
+
+func TestFormatAlertAfter(t *testing.T) {
+	for dur, want := range map[time.Duration]string{
+		5 * time.Minute:  "5m",
+		90 * time.Minute: "90m",
+		36 * time.Hour:   "36h",
+		90 * time.Second: "1m30s",
+	} {
+		if got := formatAlertAfter(dur); got != want {
+			t.Errorf("formatAlertAfter(%v) = %q, want %q", dur, got, want)
+		}
 	}
 }
 

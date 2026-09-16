@@ -17,7 +17,7 @@ type Event struct {
 	// Title overrides the default "update status changed" headline --
 	// used by non-update events (e.g. presence alerts). Empty keeps
 	// the default.
-	Title string
+	Title    string
 	Status   checker.Status
 	Previous *checker.Status
 	Changes  []string // human-readable, e.g. "3 new package updates available (1 security)"
@@ -42,6 +42,17 @@ type Manager struct {
 
 func NewManager(notifiers ...Notifier) *Manager {
 	return &Manager{notifiers: notifiers}
+}
+
+// Names returns the configured channels' names ("telegram", ...) for
+// status displays like the aggregator's admin page strip. Empty means
+// alerts are configured nowhere — events are silently dropped.
+func (m *Manager) Names() []string {
+	names := make([]string, 0, len(m.notifiers))
+	for _, n := range m.notifiers {
+		names = append(names, n.Name())
+	}
+	return names
 }
 
 func (m *Manager) Send(ctx context.Context, ev Event) {

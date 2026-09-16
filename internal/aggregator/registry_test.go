@@ -244,6 +244,27 @@ func TestNotifyDownEffective(t *testing.T) {
 	}
 }
 
+func TestNotifyMode(t *testing.T) {
+	now := time.Now()
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	for _, tc := range []struct {
+		name string
+		rec  AgentRecord
+		want string
+	}{
+		{"on", AgentRecord{NotifyDown: true}, "on"},
+		{"off", AgentRecord{NotifyDown: false}, "off"},
+		{"snooze", AgentRecord{NotifyDown: true, MutedUntil: &future}, "snooze"},
+		{"expired snooze reads on", AgentRecord{NotifyDown: true, MutedUntil: &past}, "on"},
+		{"off wins over snooze", AgentRecord{NotifyDown: false, MutedUntil: &future}, "off"},
+	} {
+		if got := tc.rec.NotifyMode(now); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSetMutedUntilPersistsAcrossLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	r1 := NewRegistry(path)

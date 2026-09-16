@@ -76,6 +76,7 @@ func run(ctx context.Context) error {
 		log.Println("offline alerts disabled (OFFLINE_ALERT_AFTER <= 0)")
 	}
 	srv := aggregator.NewServer(ctx, registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
+	srv.SetAlertInfo(cfg.OfflineAlertAfter, notifyMgr.Names())
 	httpSrv := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: srv.Handler(),

@@ -51,6 +51,11 @@ type Server struct {
 	outputHub *OutputHub
 	adminHub  *AdminHub
 	mux       *http.ServeMux
+	// offlineAlertAfter + notifyChannels describe the fleet-wide offline
+	// alert setup for the admin page's status strip (see SetAlertInfo).
+	// Zero values render as off, which is also what tests get by default.
+	offlineAlertAfter time.Duration
+	notifyChannels    []string
 }
 
 func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
@@ -90,6 +95,43 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 }
 
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// SetAlertInfo tells the admin page how to describe fleet-wide offline
+// alerts: after how long down they fire, and through which channels.
+// Called once at startup (see cmd/update-aggregator/main.go); the zero
+// value renders as off, which is also what test servers get by default.
+func (s *Server) SetAlertInfo(after time.Duration, channels []string) {
+	s.offlineAlertAfter = after
+	s.notifyChannels = channels
+}
+
+// alertSummary renders the admin page's fleet-wide offline-alert strip
+// in plain words: whether alerts can fire at all, through what, and
+// after how long down. Three states: nothing configured, watcher
+// disabled, or live.
+func (s *Server) alertSummary() (state, detail string) {
+	if len(s.notifyChannels) == 0 {
+		return "Not configured", "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable"
+	}
+	if s.offlineAlertAfter <= 0 {
+		return "Off", "OFFLINE_ALERT_AFTER=0"
+	}
+	return "On", fmt.Sprintf("via %s · after %s down",
+		strings.Join(s.notifyChannels, ", "), formatAlertAfter(s.offlineAlertAfter))
+}
+
+// formatAlertAfter renders a debounce like 5m or 36h without Go's
+// unavoidably precise String() ("5m0s", "36h0m0s") — this only ever
+// feeds a human status line, never a decision.
+func formatAlertAfter(d time.Duration) string {
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", d/time.Hour)
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	return d.String()
+}
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -597,6 +639,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := adminPageData{AggregatorVersion: version.Version}
+	data.AlertState, data.AlertDetail = s.alertSummary()
 	if s.selfUpdate != nil {
 		data.SelfUpdateConfigured = true
 		data.SelfUpdateChannel = s.selfUpdate.Channel()

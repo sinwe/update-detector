@@ -79,13 +79,11 @@ type agentView struct {
 	// that originally triggered it.
 	PendingActionID string
 
-	// NotifyDown is the EFFECTIVE offline-alert state (master switch
-	// minus an unexpired temporary mute) — renders the "notify when
-	// down" checkbox, so a muted host shows unchecked until the mute
-	// lifts itself.
-	NotifyDown bool
+	// NotifyMode is this host's offline-alert state for the segmented
+	// control: "on", "snooze", or "off" (see AgentRecord.NotifyMode).
+	NotifyMode string
 	// MutedUntil is a temporary mute's expiry as RFC3339, or "" when
-	// none is active — renders the "muted until …" badge.
+	// none is active — renders the "Snoozed until …" status.
 	MutedUntil string
 }
 
@@ -109,6 +107,12 @@ type adminPageData struct {
 	// (SELF_UPDATE_CHANNEL at startup, or whatever an operator has since
 	// switched it to via the selector below) -- one of version.Channels.
 	SelfUpdateChannel string
+	// AlertState/AlertDetail render the page-level offline-alerts strip
+	// in plain words (see Server.alertSummary): e.g. "On" / "via
+	// telegram · after 5m down". Preformatted server-side so the
+	// template stays free of custom functions.
+	AlertState  string
+	AlertDetail string
 	Pending                     []agentView
 	Approved                    []agentView
 	Rejected                    []agentView
@@ -144,7 +148,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
 		Hostname:                 rec.Hostname,
-		NotifyDown:               rec.NotifyDownEffective(now),
+		NotifyMode:               rec.NotifyMode(now),
 		AnyStreamConnected:       connected,
 		CompanionConnected:       connected && kind == KindCompanion,
 		CompanionVersion:         companionVersion,
@@ -299,6 +303,29 @@ const adminTemplateSrc = `<!DOCTYPE html>
     }
     .channel-row label:hover { background: var(--surface-hover); }
     .channel-row input[type=radio] { accent-color: var(--blue); }
+
+    /* Offline-alerts strip + per-host notify block */
+    .alert-strip {
+      font-size: .813rem; color: var(--text-secondary); margin-bottom: .75rem;
+    }
+    .alert-strip strong { color: var(--text); }
+    .notify-row {
+      display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+      font-size: .813rem; color: var(--text-secondary);
+      margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--border);
+    }
+    .notify-title { font-weight: 600; }
+    .notify-row label {
+      display: inline-flex; align-items: center; gap: .25rem; cursor: pointer;
+      padding: .2rem .5rem; border-radius: var(--radius-sm); transition: var(--transition);
+    }
+    .notify-row label:hover { background: var(--surface-hover); }
+    .notify-row input[type=radio] { accent-color: var(--blue); margin: 0; }
+    .notify-row select {
+      font-size: .75rem; padding: .2rem .35rem; border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    }
+    .notify-status { font-size: .75rem; color: var(--text-muted); }
 
     /* Links row */
     .links-row {
@@ -476,6 +503,8 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </h1>
     </div>
 
+    <div class="alert-strip">🔔 Offline alerts: <strong>{{.AlertState}}</strong>{{if .AlertDetail}} · {{.AlertDetail}}{{end}}</div>
+
     {{if .SelfUpdateConfigured}}
     <div class="channel-row">
       Channel:
@@ -556,6 +585,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
               <span class="badge badge-bad">Companion offline</span>
               <span class="badge badge-bad">Host offline</span>
             {{end}}
+            {{if eq .NotifyMode "off"}}<span class="badge badge-muted">🔕 alerts off</span>{{else if eq .NotifyMode "snooze"}}<span class="badge badge-warn">🔕 snoozed</span>{{end}}
           </div>
         </div>
 
@@ -594,22 +624,25 @@ const adminTemplateSrc = `<!DOCTYPE html>
         {{end}}
         {{end}}
 
-        <div class="host-actions">
-          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Stream the real apt-get/apt-check/winget output instead of a short progress summary">
-            <input type="checkbox" id="verbose-{{.ID}}"> verbose
-          </label>
-          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Send a notification when this host goes offline and when it comes back">
-            <input type="checkbox" id="notify-{{.ID}}" {{if .NotifyDown}}checked{{end}} onchange="postNotifyDown('{{.ID}}', this.checked)"> notify when down
-          </label>
-          {{if .MutedUntil}}<span class="badge badge-warn" title="Offline alerts resume automatically afterwards">muted until {{.MutedUntil}}</span>{{end}}
-          <select id="mutedur-{{.ID}}" title="Snooze offline alerts for a while instead of turning them off" style="font-size:.75rem">
+        <div class="notify-row">
+          <span class="notify-title">🔔 Alerts</span>
+          <label><input type="radio" name="notify-{{.ID}}" value="on" {{if eq .NotifyMode "on"}}checked{{end}} onchange="postNotifyMode('{{.ID}}')"> On</label>
+          <label><input type="radio" name="notify-{{.ID}}" value="snooze" {{if eq .NotifyMode "snooze"}}checked{{end}} onchange="postNotifyMode('{{.ID}}')"> Snooze</label>
+          <select id="mutedur-{{.ID}}" {{if ne .NotifyMode "snooze"}}hidden{{end}} onchange="postNotifyMode('{{.ID}}')" title="Snooze offline alerts for a while; they resume on their own">
             <option value="1h">1h</option>
             <option value="8h" selected>8h</option>
             <option value="24h">24h</option>
             <option value="72h">3d</option>
             <option value="168h">7d</option>
           </select>
-          <button class="btn-sm" onclick="muteFor('{{.ID}}')" title="Snooze offline alerts; they resume on their own">mute</button>
+          <label><input type="radio" name="notify-{{.ID}}" value="off" {{if eq .NotifyMode "off"}}checked{{end}} onchange="postNotifyMode('{{.ID}}')"> Off</label>
+          <span class="notify-status">{{if eq .NotifyMode "snooze"}}Snoozed until {{.MutedUntil}}{{else if eq .NotifyMode "off"}}Off{{else}}On{{end}}</span>
+        </div>
+
+        <div class="host-actions">
+          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Stream the real apt-get/apt-check/winget output instead of a short progress summary">
+            <input type="checkbox" id="verbose-{{.ID}}"> verbose
+          </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
@@ -860,29 +893,36 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
     }
 
-    async function postNotifyDown(id, enabled, muteFor) {
+    // One segmented control per host (On/Snooze/Off) reads its own
+    // radios; the duration select only shows for Snooze, and changing it
+    // re-posts. Immediate apply throughout — the page reloads on success
+    // (or on failure, to resync the control with the stored state).
+    function postNotifyMode(id) {
+      const checked = document.querySelector('input[name="notify-' + id + '"]:checked');
+      const mode = checked ? checked.value : 'on';
+      const sel = document.getElementById('mutedur-' + id);
+      if (sel) sel.hidden = (mode !== 'snooze');
+      const body = {enabled: mode !== 'off'};
+      if (mode === 'snooze') body.mute_for = sel ? sel.value : '8h';
+      postNotifyDown(id, body);
+    }
+    async function postNotifyDown(id, body) {
       try {
-        const body = {enabled: enabled};
-        if (muteFor) body.mute_for = muteFor;
         const resp = await fetch('/admin/agents/' + id + '/notify-down', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(body),
         });
         if (!resp.ok) {
-          alert('notify toggle failed (' + resp.status + '): ' + await resp.text());
+          alert('notify change failed (' + resp.status + '): ' + await resp.text());
           location.reload();
           return;
         }
         location.reload();
       } catch (e) {
-        alert('notify toggle failed: ' + e);
+        alert('notify change failed: ' + e);
         location.reload();
       }
-    }
-    function muteFor(id) {
-      const sel = document.getElementById('mutedur-' + id);
-      postNotifyDown(id, false, sel ? sel.value : '8h');
     }
     async function postSelfUpdateChannel(channel) {
       const secret = getAdminApplySecret();

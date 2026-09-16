@@ -49,6 +49,19 @@ type AgentRecord struct {
 	MutedUntil *time.Time `json:"muted_until,omitempty"`
 }
 
+// NotifyMode classifies this record's offline-alert state for the admin
+// page's segmented control: "on", "snooze" (a temporary mute that hasn't
+// expired yet), or "off".
+func (r AgentRecord) NotifyMode(now time.Time) string {
+	if !r.NotifyDown {
+		return "off"
+	}
+	if r.MutedUntil != nil && now.Before(*r.MutedUntil) {
+		return "snooze"
+	}
+	return "on"
+}
+
 // NotifyDownEffective reports whether offline/recovery alerts currently
 // fire for this record: the master switch, minus a temporary mute that
 // hasn't expired yet. The expiry is evaluated lazily against now, so a
