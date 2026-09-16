@@ -902,7 +902,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       const mode = checked ? checked.value : 'on';
       const sel = document.getElementById('mutedur-' + id);
       if (sel) sel.hidden = (mode !== 'snooze');
-      const body = {enabled: mode !== 'off'};
+      const body = {enabled: mode === 'on'};
       if (mode === 'snooze') body.mute_for = sel ? sel.value : '8h';
       postNotifyDown(id, body);
     }
