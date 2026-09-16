@@ -395,6 +395,50 @@ paths:
         "409":
           description: No companion currently connected for this agent, or this agent already has an unresolved action in flight
 
+  /admin/agents/{id}/notify-down:
+    post:
+      summary: Toggle one host's offline/recovery notifications
+      description: >
+        Sets whether the aggregator sends "went offline" / "is back
+        online" notifications for this host (the PresenceWatcher's
+        OFFLINE_ALERT_AFTER alerts). Defaults to true for every host;
+        turning it off only silences that host's down/up messages, never
+        apply-result notifications. Same trust model as the rest of
+        /admin (approve/reject/recheck) -- no shared secret needed.
+      operationId: setNotifyDown
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - enabled
+              properties:
+                enabled:
+                  type: boolean
+                  description: Whether offline/recovery notifications fire for this host
+      responses:
+        "200":
+          description: Preference stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notify_down:
+                    type: boolean
+        "400":
+          description: Invalid request body
+        "404":
+          description: Unknown agent id
+
   /admin/agents/{id}/self-update:
     post:
       summary: Trigger a self-update of the agent, aggregator, or companion on one host

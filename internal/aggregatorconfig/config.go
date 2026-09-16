@@ -39,6 +39,15 @@ type Config struct {
 	// more stable, and treats a newer one as available even over an older
 	// real release. See internal/selfupdate.New.
 	SelfUpdateChannel string
+
+	// OfflineAlertAfter is how long an approved host must stay
+	// continuously disconnected (no agent or companion stream -- the
+	// same condition the admin page renders as Host offline) before
+	// the presence watcher sends an offline alert, and a recovery
+	// alert when it comes back. Zero or negative disables both.
+	// The debounce exists so companion/aggregator restarts and other
+	// brief flaps stay silent.
+	OfflineAlertAfter time.Duration
 }
 
 func Load() (Config, error) {
@@ -47,6 +56,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	selfUpdateChannel, err := loadSelfUpdateChannel()
+	if err != nil {
+		return Config{}, err
+	}
+	offlineAlertAfter, err := parseDuration("OFFLINE_ALERT_AFTER", "5m")
 	if err != nil {
 		return Config{}, err
 	}
@@ -62,6 +75,8 @@ func Load() (Config, error) {
 
 		SelfUpdateCheckInterval: selfUpdateCheckInterval,
 		SelfUpdateChannel:       selfUpdateChannel,
+
+		OfflineAlertAfter: offlineAlertAfter,
 	}, nil
 }
 

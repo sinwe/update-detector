@@ -65,9 +65,16 @@ func (t *Telegram) Send(ctx context.Context, ev Event) error {
 // FormatMessage renders a human-readable HTML notification for an Event.
 func FormatMessage(ev Event) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "<b>%s</b>: update status changed\n", html.EscapeString(ev.Hostname))
+	title := ev.Title
+	if title == "" {
+		title = "update status changed"
+	}
+	fmt.Fprintf(&b, "<b>%s</b>: %s\n", html.EscapeString(ev.Hostname), html.EscapeString(title))
 	for _, c := range ev.Changes {
 		fmt.Fprintf(&b, "• %s\n", html.EscapeString(c))
+	}
+	if ev.Brief {
+		return b.String()
 	}
 
 	s := ev.Status

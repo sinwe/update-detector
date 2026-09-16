@@ -34,6 +34,12 @@ type AgentRecord struct {
 	FirstSeen  time.Time       `json:"first_seen"`
 	LastSeen   time.Time       `json:"last_seen,omitempty"`
 	LastReport *checker.Status `json:"last_report,omitempty"`
+	// NotifyDown is whether the PresenceWatcher sends offline/recovery
+	// alerts for this host. True by default (set on Enroll, migrated on
+	// Load for records written before this field existed) — toggling it
+	// off in /admin only silences that host's down/up messages, never
+	// apply-result notifications.
+	NotifyDown bool `json:"notify_down"`
 }
 
 var ErrNotFound = errors.New("agent not found")
@@ -64,6 +70,19 @@ func (r *Registry) Load() error {
 	var agents map[string]*AgentRecord
 	if err := json.Unmarshal(data, &agents); err != nil {
 		return fmt.Errorf("registry: parsing %s: %w", r.path, err)
+	}
+	// Records written before NotifyDown existed have no "notify_down"
+	// key (unmarshals to false) but must keep the old behavior — alert.
+	// Detect this with a second pass over the raw JSON rather than a
+	// pointer field, so the in-memory type stays a plain bool.
+	var raw map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("registry: parsing %s: %w", r.path, err)
+	}
+	for id, rec := range agents {
+		if _, ok := raw[id]["notify_down"]; !ok {
+			rec.NotifyDown = true
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -111,11 +130,12 @@ func (r *Registry) Enroll(id, hostname, token string) (EnrollOutcome, Status, er
 	existing, ok := r.agents[id]
 	if !ok {
 		rec := &AgentRecord{
-			ID:        id,
-			Hostname:  hostname,
-			TokenHash: hash,
-			Status:    StatusPending,
-			FirstSeen: time.Now(),
+			ID:         id,
+			Hostname:   hostname,
+			TokenHash:  hash,
+			Status:     StatusPending,
+			FirstSeen:  time.Now(),
+			NotifyDown: true,
 		}
 		r.agents[id] = rec
 		if err := r.saveLocked(); err != nil {
@@ -233,6 +253,19 @@ func (r *Registry) Forget(id string) error {
 		return ErrNotFound
 	}
 	delete(r.agents, id)
+	return r.saveLocked()
+}
+
+// SetNotifyDown toggles whether this host's offline/recovery alerts
+// fire (see PresenceWatcher). Persists like every other mutation.
+func (r *Registry) SetNotifyDown(id string, enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	rec.NotifyDown = enabled
 	return r.saveLocked()
 }
 
