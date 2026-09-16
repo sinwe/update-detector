@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -126,6 +127,65 @@ func TestSetStatusNotFound(t *testing.T) {
 	r := newTestRegistry(t)
 	if err := r.SetStatus("nope", StatusApproved); err != ErrNotFound {
 		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+}
+
+func TestEnrollDefaultsNotifyDownTrue(t *testing.T) {
+	r := newTestRegistry(t)
+	if _, _, err := r.Enroll("agent-1", "web01", "secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := r.Get("agent-1")
+	if !ok || !rec.NotifyDown {
+		t.Fatalf("expected NotifyDown=true on enroll, got %#v", rec)
+	}
+}
+
+func TestSetNotifyDownPersistsAcrossLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	r1 := NewRegistry(path)
+	if _, _, err := r1.Enroll("agent-1", "web01", "secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.SetNotifyDown("agent-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.SetNotifyDown("nope", false); err != ErrNotFound {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+
+	r2 := NewRegistry(path)
+	if err := r2.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	rec, ok := r2.Get("agent-1")
+	if !ok || rec.NotifyDown {
+		t.Fatalf("expected NotifyDown=false to survive reload, got %#v", rec)
+	}
+}
+
+func TestLoadMigratesMissingNotifyDownToTrue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	// Registry file as written before NotifyDown existed: no notify_down key.
+	old := `{"agent-1":{"id":"agent-1","hostname":"web01","token_hash":"x","status":"approved","first_seen":"2026-01-01T00:00:00Z"}}`
+	// Explicit opt-out must survive the same Load untouched.
+	withOptOut := `{"agent-1":{"id":"agent-1","hostname":"web01","token_hash":"x","status":"approved","first_seen":"2026-01-01T00:00:00Z"},"agent-2":{"id":"agent-2","hostname":"web02","token_hash":"y","status":"approved","first_seen":"2026-01-01T00:00:00Z","notify_down":false}}`
+	for name, data := range map[string]string{"legacy": old, "mixed": withOptOut} {
+		r := NewRegistry(path)
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Load(); err != nil {
+			t.Fatalf("%s: Load failed: %v", name, err)
+		}
+		if rec, _ := r.Get("agent-1"); !rec.NotifyDown {
+			t.Fatalf("%s: expected legacy record to migrate to NotifyDown=true, got %#v", name, rec)
+		}
+		if name == "mixed" {
+			if rec, _ := r.Get("agent-2"); rec.NotifyDown {
+				t.Fatalf("expected explicit notify_down=false to survive Load, got %#v", rec)
+			}
+		}
 	}
 }
 

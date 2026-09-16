@@ -78,6 +78,10 @@ type agentView struct {
 	// load/reload auto-resume watching its live output, not just the tab
 	// that originally triggered it.
 	PendingActionID string
+
+	// NotifyDown mirrors the registry's per-host offline-alert switch --
+	// renders the "notify when down" checkbox checked state.
+	NotifyDown bool
 }
 
 type resultView struct {
@@ -134,6 +138,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
 		Hostname:                 rec.Hostname,
+		NotifyDown:               rec.NotifyDown,
 		AnyStreamConnected:       connected,
 		CompanionConnected:       connected && kind == KindCompanion,
 		CompanionVersion:         companionVersion,
@@ -584,6 +589,9 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Stream the real apt-get/apt-check/winget output instead of a short progress summary">
             <input type="checkbox" id="verbose-{{.ID}}"> verbose
           </label>
+          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Send a notification when this host goes offline and when it comes back">
+            <input type="checkbox" id="notify-{{.ID}}" {{if .NotifyDown}}checked{{end}} onchange="postNotifyDown('{{.ID}}', this.checked)"> notify when down
+          </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
@@ -834,6 +842,24 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
     }
 
+    async function postNotifyDown(id, enabled) {
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/notify-down', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({enabled: enabled}),
+        });
+        if (!resp.ok) {
+          alert('notify toggle failed (' + resp.status + '): ' + await resp.text());
+          location.reload();
+          return;
+        }
+        location.reload();
+      } catch (e) {
+        alert('notify toggle failed: ' + e);
+        location.reload();
+      }
+    }
     async function postSelfUpdateChannel(channel) {
       const secret = getAdminApplySecret();
       if (!secret) return;

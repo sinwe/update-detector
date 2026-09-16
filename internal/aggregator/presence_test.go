@@ -201,3 +201,55 @@ func TestPresenceAlertRendersWithoutStatusTrailer(t *testing.T) {
 		t.Fatalf("brief presence alert must not carry the update trailer: %q", msg)
 	}
 }
+
+func TestPresenceMutedHostStaysSilent(t *testing.T) {
+	w, _, rec, now := presenceFixture(t, "a1", "web01", false)
+	ctx := context.Background()
+
+	if err := w.registry.SetNotifyDown("a1", false); err != nil {
+		t.Fatal(err)
+	}
+
+	w.checkOnce(ctx)
+	*now = now.Add(30 * time.Minute)
+	w.checkOnce(ctx)
+	if got := rec.events(); len(got) != 0 {
+		t.Fatalf("expected silence for a muted host, got %#v", got)
+	}
+
+	// Unmuting a still-down host fires on the next round — the watcher
+	// kept tracking offlineSince through the mute instead of restarting
+	// the debounce.
+	if err := w.registry.SetNotifyDown("a1", true); err != nil {
+		t.Fatal(err)
+	}
+	w.checkOnce(ctx)
+	got := rec.events()
+	if len(got) != 1 || got[0].Title != "went offline" {
+		t.Fatalf("expected 1 offline alert after unmuting, got %#v", got)
+	}
+}
+
+func TestPresenceRecoverySuppressedWhenMuted(t *testing.T) {
+	w, hub, rec, now := presenceFixture(t, "a1", "web01", false)
+	ctx := context.Background()
+
+	w.checkOnce(ctx)
+	*now = now.Add(6 * time.Minute)
+	w.checkOnce(ctx)
+	if got := rec.events(); len(got) != 1 {
+		t.Fatalf("expected offline alert first, got %#v", got)
+	}
+
+	// Muted after the offline alert: the recovery must stay silent too.
+	if err := w.registry.SetNotifyDown("a1", false); err != nil {
+		t.Fatal(err)
+	}
+	res := hub.Connect("a1", KindCompanion, "v0.0.0-test")
+	defer hub.Disconnect("a1", res.Ch)
+	*now = now.Add(time.Minute)
+	w.checkOnce(ctx)
+	if got := rec.events(); len(got) != 1 {
+		t.Fatalf("expected no recovery for a muted host, got %#v", got)
+	}
+}

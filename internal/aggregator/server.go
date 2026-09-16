@@ -664,6 +664,10 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminRecheck(w, r, id)
 		return
 	}
+	if action == "notify-down" {
+		s.handleAdminNotifyDown(w, r, id)
+		return
+	}
 	if action == "self-update" {
 		s.handleAdminSelfUpdate(w, r, id)
 		return
@@ -810,6 +814,37 @@ func (s *Server) handleAdminRecheck(w http.ResponseWriter, r *http.Request, id s
 	s.outputHub.Begin(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+}
+
+type notifyDownRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// handleAdminNotifyDown toggles one host's offline/recovery alerts (the
+// PresenceWatcher's "went offline"/"is back online" messages). Same trust
+// model as the rest of /admin (approve/reject/recheck): no shared secret,
+// since it can't change anything on a host — unlike apply/self-update,
+// which stay secret-gated.
+func (s *Server) handleAdminNotifyDown(w http.ResponseWriter, r *http.Request, id string) {
+	var req notifyDownRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := s.registry.SetNotifyDown(id, req.Enabled); err != nil {
+		if err == ErrNotFound {
+			http.Error(w, "agent not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.adminHub.Notify()
+
+	writeJSON(w, http.StatusOK, map[string]bool{"notify_down": req.Enabled})
 }
 
 type selfUpdateRequest struct {

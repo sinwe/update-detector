@@ -530,10 +530,16 @@ and `✅ <host> is back online` when a stream reconnects. The debounce
 means companion/aggregator restarts and other brief flaps stay silent —
 including the whole fleet reconnecting after an aggregator restart — and
 a flap that recovers before the debounce elapses produces no messages at
-all. Hosts that never reported, and rejected hosts, never alert. Set
-`OFFLINE_ALERT_AFTER=0` to disable both. State is in-memory only, so an
-aggregator restart gives every currently-down host a fresh grace period
-instead of an immediate alert.
+ all. Hosts that never reported, and rejected hosts, never alert. Set
+ `OFFLINE_ALERT_AFTER=0` to disable both. State is in-memory only, so an
+ aggregator restart gives every currently-down host a fresh grace period
+ instead of an immediate alert.
++
++Each host card on `/admin` also has its own `notify when down` switch
++(on by default) — turning it off silences just that host's offline and
++recovery messages, e.g. for a machine that's expected to be powered off
++for a while. Stored per host in the registry (`POST
++/admin/agents/{id}/notify-down`), so it survives aggregator restarts.
 
 ## API reference
 

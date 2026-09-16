@@ -187,6 +187,60 @@ func TestHandleAdminForgetUnknownAgent(t *testing.T) {
 	}
 }
 
+func TestHandleAdminNotifyDownFlow(t *testing.T) {
+	s, reg := newTestServer(t)
+	if _, _, err := reg.Enroll("a1", "web01", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetStatus("a1", StatusApproved); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/admin/agents/a1/notify-down", notifyDownRequest{Enabled: false}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["notify_down"] {
+		t.Fatalf("expected notify_down=false in response, got %s", rec.Body.String())
+	}
+	if got, _ := reg.Get("a1"); got.NotifyDown {
+		t.Fatalf("expected registry NotifyDown=false, got %#v", got)
+	}
+
+	// The admin page must render the toggle unchecked for this host.
+	body := doJSON(t, s, http.MethodGet, "/admin", nil, nil).Body.String()
+	if !strings.Contains(body, `id="notify-a1"`) {
+		t.Fatalf("expected notify toggle for a1 on the admin page")
+	}
+	if strings.Contains(body, `id="notify-a1" checked`) {
+		t.Fatalf("expected notify toggle for a1 to render unchecked")
+	}
+
+	// Back on.
+	rec = doJSON(t, s, http.MethodPost, "/admin/agents/a1/notify-down", notifyDownRequest{Enabled: true}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got, _ := reg.Get("a1"); !got.NotifyDown {
+		t.Fatalf("expected registry NotifyDown=true, got %#v", got)
+	}
+
+	// Unknown agent 404s; malformed body 400s.
+	if rec := doJSON(t, s, http.MethodPost, "/admin/agents/does-not-exist/notify-down", notifyDownRequest{Enabled: false}, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404", rec.Code)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/agents/a1/notify-down", strings.NewReader("{bogus"))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400 for malformed body", w.Code)
+	}
+}
+
 func TestHandleAdminPageShowsPackages(t *testing.T) {
 	s, reg := newTestServer(t)
 	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)
