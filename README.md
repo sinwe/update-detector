@@ -101,6 +101,8 @@ with the aggregator's `SELF_UPDATE_CHANNEL` — see
 - [docs/reference.md](docs/reference.md) — how detection works per OS,
   the companion/apply/self-update mechanics, full configuration and API
   reference, and how releases are built.
+- [docs/roadmap.md](docs/roadmap.md) — planned checker plugins and what
+  still needs live verification.
 - [docs/wsl2.md](docs/wsl2.md) — WSL2-specific detail: the Docker Desktop
   shim gotcha, and native config without `.env`.
 - [docs/integrations/gatus.md](docs/integrations/gatus.md) — poll `/status` for uptime-style monitoring.

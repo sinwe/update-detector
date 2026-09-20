@@ -63,8 +63,8 @@ func New(apiBase, channel string) *Client {
 // a transient GitHub/network outage must not erase an otherwise-valid
 // "update available" fact the admin page is showing.
 //
-// Deliberately not GET /releases/latest, even though GitHub's version of
-// that endpoint (unlike Forgejo's) does correctly exclude prereleases:
+// Deliberately not GET /releases/latest, even though that endpoint does
+// correctly exclude prereleases:
 // channel selection (see version.MeetsChannel) needs the *whole* list to
 // find the highest release at or above a given stage, not just the
 // single overall latest -- an alpha/beta/rc channel needs to see

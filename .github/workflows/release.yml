@@ -22,9 +22,9 @@ jobs:
       # Our only GOARCH targets are linux/amd64, linux/arm64, and
       # windows/amd64 -- Go cross-compiles all of these trivially on any
       # host, no per-arch container/QEMU/docker-cp workaround needed here
-      # (that dance existed only because Forgejo's job container couldn't
-      # bind-mount this repo's own source into a sibling container; a
-      # GitHub-hosted runner has no such split).
+      # (an older CI setup needed that dance only because its job container
+      # couldn't bind-mount this repo's own source into a sibling container;
+      # a GitHub-hosted runner has no such split).
       - name: Cross-compile native binaries
         run: |
           set -eu
@@ -79,10 +79,10 @@ jobs:
         with:
           platforms: arm64
 
-      # Default docker-container driver -- unlike Forgejo's registry,
-      # GHCR doesn't 403 its blob-existence check, so a real single-command
-      # multi-platform --push works here (no need for Forgejo's per-arch
-      # build + docker manifest create/push workaround).
+      # Default docker-container driver -- GHCR doesn't 403 its
+      # blob-existence check, so a real single-command multi-platform --push
+      # works here (no need for a per-arch build + docker manifest
+      # create/push workaround).
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -124,12 +124,9 @@ jobs:
           build_and_push update-detector ./Dockerfile
           build_and_push update-aggregator ./Dockerfile.aggregator
 
-      # Replaces ~65 lines of hand-rolled Forgejo REST calls (multipart
-      # asset upload, `token`-style auth header, separate create-or-find-
-      # release logic) -- gh is preinstalled on GitHub-hosted runners and
-      # handles create-or-update, multi-asset upload, and the prerelease
-      # flag natively (Forgejo's own release-creation call never set that
-      # flag at all; GitHub's real one does).
+      # gh is preinstalled on GitHub-hosted runners and handles
+      # create-or-update, multi-asset upload, and the prerelease flag
+      # natively -- no hand-rolled REST needed.
       - name: Publish release with binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

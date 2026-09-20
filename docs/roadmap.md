@@ -1,0 +1,44 @@
+# Roadmap
+
+Status: `v0.15.3-alpha7` — Ubuntu/Debian supported, Windows experimental,
+macOS planned. Items below are the future checker plugins and verification
+gaps stated in `docs/reference.md` (platform-limitations section) and the
+README platform table — nothing here is started.
+
+## New checker plugins (none started)
+
+Each is a new subpackage under `internal/checker/<name>` + blank import in
+the matching `cmd/update-detector/platforms_*.go` (see `AGENTS.md`).
+
+- [ ] **Windows package-manager signal** — Windows Update covers the OS
+  itself; a genuinely supported package-manager signal is still missing.
+  Scoop and Chocolatey are the candidates (winget is not viable: no
+  per-update severity signal, and it doesn't exist under `LocalSystem` —
+  see `docs/reference.md#platform-limitations`).
+- [ ] **macOS checker** — Homebrew-based (plus `softwareupdate` for OS
+  updates, per the README platform table). Same reason as Windows: the
+  container has no visibility into the real host, so this must be a native,
+  non-containerized agent + checker implementation.
+- [ ] **Docker image update detection on Linux** — tag/digest drift, a
+  different kind of "update" than an OS package manager reports.
+
+## Graduating Windows from experimental
+
+Detection, `install.bat` install/uninstall, and companion apply/self-update
+are confirmed against a real Windows host. Remaining:
+
+- [ ] **Live KB install** — a real Windows Update install via "Apply
+  selected" / "Upgrade all" is still only fixture-tested, not yet
+  separately confirmed live. Start with a single low-stakes update and
+  watch the live output pane.
+- [ ] **Under-`LocalSystem` confirmation** — Windows Update detection is
+  *expected* to work under `LocalSystem` (system-level service, unlike
+  winget's per-user registration) but this is not yet separately confirmed
+  live.
+
+## Possible later (extension points, not committed)
+
+- [ ] **More notifier channels** — Telegram is the only implementation;
+  adding one (Slack, email, generic webhook, …) means implementing
+  `Notifier` in `internal/notifier/notifier.go` and wiring it in
+  `cmd/update-detector/main.go:run()` gated by env var.

@@ -127,7 +127,7 @@ func dockerContainerFor(ctx context.Context, name string) (id, image string) {
 
 	// State rides along so a live container always beats a dead leftover
 	// with a matching image (confirmed live: a never-started
-	// Forgejo-era `update-detector` container shadowed the real ghcr.io
+	// pre-migration `update-detector` container shadowed the real ghcr.io
 	// one, sending self-update pulls at a registry that no longer hosts
 	// them). A missing state (older fakes) matches nothing in the first
 	// pass and falls through to the second, preserving old behavior.

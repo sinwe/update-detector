@@ -216,9 +216,9 @@ func TestDockerContainerForDegradesGracefullyOnRealError(t *testing.T) {
 }
 
 // TestDockerContainerForPrefersRunning is the regression test for a real
-// bug caught live on a migrated host: a never-started Forgejo-era
+// bug caught live on a migrated host: a never-started pre-migration
 // `update-detector` container (image
-// forgejo.winar.to/winarto/update-detector:latest) sorted ahead of the
+// legacy-registry.example.com/winarto/update-detector:latest) sorted ahead of the
 // real ghcr.io one in `docker ps -a`, so self-update derived the repo
 // from the dead leftover and pulled a tag the old registry never hosts.
 // A running match must always win; stopped containers are fallback only.
@@ -233,7 +233,7 @@ case "$1" in
     shift 3
     for id in "$@"; do
       case "$id" in
-        dead111) echo "forgejo.winar.to/winarto/update-detector:latest" ;;
+        dead111) echo "legacy-registry.example.com/winarto/update-detector:latest" ;;
         live222) echo "ghcr.io/sinwe/update-detector:latest-beta" ;;
       esac
     done
