@@ -734,7 +734,9 @@ EOF
     sleep 1
   done
   launchctl bootstrap system "$plist_path"
-  echo "install.sh: update-detector installed and started. Check: curl http://localhost:8080/status"
+  check_port="${LISTEN_ADDR:-:8080}"
+  check_port="${check_port##*:}"
+  echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
 }
 
 # install_agent_docker -> Docker Compose equivalent of install_agent_native
