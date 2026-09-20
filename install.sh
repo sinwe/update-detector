@@ -418,6 +418,26 @@ channel_image_tag() {
   esac
 }
 
+# ensure_compose_label FILE SERVICE LABEL -> appends a `labels:` block
+# with LABEL under SERVICE when the file has no wud.watch entry yet, so
+# pre-existing deployments (whose compose files predate the opt-out
+# labels this repo now ships) get the same protection on the next
+# install.sh run. No-op when any wud.watch entry already exists, and
+# when the service isn't in the file at all. awk (not sed) for identical
+# behavior on GNU and BSD.
+ensure_compose_label() {
+  file="$1" service="$2" label="$3"
+  [ -f "$file" ] || return 0
+  if grep -q "wud\\.watch" "$file"; then
+    return 0
+  fi
+  awk -v svc="  $service:" -v lbl="$label" '
+    $0 == svc { print; print "    labels:"; print "      - \"" lbl "\""; next }
+    { print }
+  ' "$file" > "$file.new" && mv "$file.new" "$file"
+  echo "install.sh: added $label opt-out to $service in $file"
+}
+
 # pin_compose_image FILE REPO TAG -> rewrites FILE's `image: REPO:<tag>`
 # line to TAG, leaving the file untouched when no such line exists (a
 # custom registry mirror is never "fixed" into ghcr.io). Called on both
@@ -596,6 +616,7 @@ install_agent_docker() {
 
   agent_tag="$(channel_image_tag "$agent_channel")" # exits on invalid channel
   pin_compose_image "$dir/docker-compose.yml" "ghcr.io/sinwe/update-detector" "$agent_tag"
+  ensure_compose_label "$dir/docker-compose.yml" "update-detector" "wud.watch=false"
 
   ( cd "$dir" && docker compose pull && docker compose up -d )
   echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
@@ -742,6 +763,7 @@ install_aggregator_docker() {
 
   aggregator_tag="$(channel_image_tag "$aggregator_channel")" # exits on invalid channel
   pin_compose_image "$dir/docker-compose.aggregator.yml" "ghcr.io/sinwe/update-aggregator" "$aggregator_tag"
+  ensure_compose_label "$dir/docker-compose.aggregator.yml" "update-aggregator" "wud.watch=false"
 
   ( cd "$dir" && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" pull \
       && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" up -d )

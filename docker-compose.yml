@@ -1,5 +1,12 @@
 services:
   update-detector:
+    # Opt out of What's Up Docker and similar auto-updaters: this
+    # container is updated through the companion (exact pinned versions),
+    # and an external updater "helpfully" recreating it from the moving
+    # channel tag both downgrades pre-release tracks and prunes the pinned
+    # images out from under us. Confirmed live against WUD.
+    labels:
+      - "wud.watch=false"
     # For real deploys: `docker compose pull && docker compose up -d` uses
     # this published image (built by .github/workflows/release.yml on
     # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d

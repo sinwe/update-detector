@@ -11,6 +11,10 @@
 # no way to execute that -- a real, deliberate limitation, not a bug.
 services:
   update-aggregator:
+    # Same opt-out as the agent's own compose file (see docker-compose.yml):
+    # the companion owns updates here, not any external watcher.
+    labels:
+      - "wud.watch=false"
     # For real deploys: `docker compose pull && docker compose up -d` uses
     # this published image (built by .github/workflows/release.yml on
     # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d
