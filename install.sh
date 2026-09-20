@@ -1375,6 +1375,27 @@ prompt_uninstall_components() {
     return
   fi
 
+  if is_macos; then
+    # Only the agent can exist on macOS (no Docker path, no companion
+    # yet), so the numbered multi-component menu below would only ever
+    # offer refused choices -- a straight confirm instead, same /dev/tty
+    # rationale as prompt_components (this script is normally piped via
+    # `curl | sh`, so stdin can't be used for a plain read).
+    echo "Found installed:$found" >&2
+    if [ ! -r /dev/tty ]; then
+      echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
+      echo "  found:$found -- set UNINSTALL_COMPONENTS=agent explicitly to proceed non-interactively." >&2
+      return
+    fi
+    printf "Uninstall the agent? [y/N]: " >&2
+    read -r choice < /dev/tty
+    case "$choice" in
+      y|Y|yes|YES) echo "agent" ;;
+      *) echo "install.sh: cancelled -- nothing uninstalled." >&2; return ;;
+    esac
+    return
+  fi
+
   if [ ! -r /dev/tty ]; then
     echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
     echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly to proceed non-interactively." >&2
