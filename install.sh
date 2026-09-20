@@ -718,7 +718,21 @@ EOF
   # launchd PATH note: its default PATH lacks Homebrew entirely, hence
   # the explicit PATH above -- without it exec.LookPath("brew") fails
   # and every check errors.
+  # bootout is asynchronous: it returns before the job has actually
+  # finished unloading, and an immediate bootstrap then fails (confirmed
+  # live as "Bootstrap failed: 5: Input/output error", leaving the old
+  # daemon dead with nothing replacing it). Wait until the label is
+  # genuinely gone from the system domain before bootstrapping.
   launchctl bootout "system/$plist_label" 2>/dev/null || true
+  i=0
+  while launchctl print "system/$plist_label" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 30 ]; then
+      echo "install.sh: timed out waiting for $plist_label to unload" >&2
+      exit 1
+    fi
+    sleep 1
+  done
   launchctl bootstrap system "$plist_path"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:8080/status"
 }
