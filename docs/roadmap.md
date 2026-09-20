@@ -1,9 +1,11 @@
 # Roadmap
 
 Status: `v0.15.3` — Ubuntu/Debian supported, Windows experimental,
-macOS checker in progress on `feature/macos-checker` (Homebrew packages
-+ `softwareupdate` detection working live; `install.sh` macOS path and
-companion apply still to come). Items below are the remaining future
+macOS checker live on `feature/macos-checker` (Homebrew packages +
+`softwareupdate` detection reporting; agent-only `install.sh` path
+shipped in `v0.15.4-alpha1`). Companion apply (`brew upgrade`) in
+progress on the same branch, targeting `v0.15.4-alpha2`; companion
+self-update on macOS comes after. Items below are the remaining future
 checker plugins and verification gaps stated in `docs/reference.md`.
 
 ## New checker plugins (none started)
