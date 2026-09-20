@@ -3,10 +3,11 @@
 Status: `v0.15.3` — Ubuntu/Debian supported, Windows experimental,
 macOS checker live on `feature/macos-checker` (Homebrew packages +
 `softwareupdate` detection reporting; agent-only `install.sh` path
-shipped in `v0.15.4-alpha1`). Companion apply (`brew upgrade`) in
-progress on the same branch, targeting `v0.15.4-alpha2`; companion
-self-update on macOS comes after. Items below are the remaining future
-checker plugins and verification gaps stated in `docs/reference.md`.
+shipped in `v0.15.4-alpha1`). Companion apply proven live in
+`v0.15.4-alpha2` (single-package apply clears the item fleet-wide;
+`brew upgrade` pulls outdated deps exactly like apt). Still open on
+macOS: companion self-update end-to-end, and the agent "Update"
+button path (needs sidecar discovery in `existingConfigEnv`).
 
 ## New checker plugins (none started)
 
