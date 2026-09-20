@@ -40,8 +40,10 @@
 # On macOS this installs the agent and companion as native LaunchDaemons
 # (no Docker path -- a container has no visibility into the host's
 # Homebrew cellar, so it could never detect anything there -- and no
-# aggregator port). Both daemons run as the Homebrew owner at boot with
-# no login required, keeping everything under that user's
+# aggregator port). The agent runs as the Homebrew owner, the companion
+# as root (like Linux -- so self-update can re-invoke this script; brew
+# itself still runs as the owner via sudo -u), both at boot with no
+# login required, keeping everything under the owner's
 # ~/.update-detector. Homebrew itself must already be installed.
 # The companion pairs through the agent, so install the agent first.
 #
@@ -1155,10 +1157,10 @@ EOF
 }
 
 # install_companion_launchd -> macOS equivalent of install_companion
-# above: a LaunchDaemon running as the Homebrew owner (brew refuses root,
-# same reason the agent itself runs as that user -- unlike Linux, where
-# the companion needs real root for apt-get). Discovery mirrors the
-# Linux path but reads the agent's sidecar env file ($state_dir/
+# above: a LaunchDaemon running as root (like Linux -- it must, so
+# self-update can re-invoke this root-requiring script; brew itself
+# still runs as the Homebrew owner via sudo -u, since brew refuses root
+# outright). Discovery mirrors the Linux path but reads the agent's sidecar env file ($state_dir/
 # agent.env, written by install_agent_launchd) instead of
 # /etc/default/update-detector -- Docker discovery doesn't apply, since
 # a containerized agent could never see this host's Homebrew anyway.
@@ -1217,7 +1219,6 @@ install_companion_launchd() {
 
   bin_path="$state_dir/update-detector-companion"
   download_binary update-detector-companion "$bin_path"
-  chown "$brew_owner" "$bin_path"
   mkdir -p "$state_dir"
   chown "$brew_owner" "$state_dir"
 
@@ -1235,8 +1236,11 @@ install_companion_launchd() {
     <array>
         <string>$bin_path</string>
     </array>
-    <key>UserName</key>
-    <string>$brew_owner</string>
+    <!-- No UserName: the companion runs as root on macOS, same as on
+         Linux -- it must, so self-update can re-invoke this
+         root-requiring script. brew itself still runs as $brew_owner
+         (the companion prefixes sudo -u; root-to-user never prompts),
+         since brew refuses root outright. -->
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -1249,6 +1253,8 @@ install_companion_launchd() {
     <dict>
         <key>PATH</key>
         <string>$brew_dir:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>BREW_OWNER</key>
+        <string>$brew_owner</string>
         <key>COMPANION_SOCKET_PATH</key>
         <string>$socket_path</string>
         <key>AGGREGATOR_URL</key>
