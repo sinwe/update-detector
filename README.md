@@ -78,7 +78,10 @@ curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.
 ```
 
 Homebrew must already be installed; everything lives under that user's
-`~/.update-detector`.
+`~/.update-detector`. Uninstall with the same `--uninstall` pipe (it asks
+for confirmation first). Note: uninstalling removes the state dir
+including the agent's identity, so a later reinstall enrolls as a new
+pending host needing approval — same as a native Linux reinstall.
 
 **To uninstall**, run `install.sh` with `--uninstall` or `install.bat
 --uninstall` — both detect what's actually installed and prompt for what
