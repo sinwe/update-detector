@@ -21,7 +21,7 @@ below.
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](docs/reference.md#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
 | Actual Windows OS (Windows Update) | 🧪 experimental — detection, `install.bat`, and companion apply/self-update confirmed against a real Windows host, see [Limitations](docs/reference.md#platform-limitations); **winget is not supported** |
-| Actual macOS host (`softwareupdate`, `brew`) | 🚧 planned — same reason |
+| Actual macOS host (`softwareupdate`, `brew`) | 🧪 experimental — detection live on `feature/macos-checker`, agent-only `install.sh` path included |
 
 ## Installation
 
@@ -68,6 +68,17 @@ install.bat
 
 Re-running this later detects a previous install and stops its service
 before replacing it, so it's also how you upgrade.
+
+**On macOS** (agent only, no Docker path, no companion yet), same
+pattern — it installs a LaunchDaemon running as the Homebrew owner, so
+the agent starts at boot with no login required:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
+```
+
+Homebrew must already be installed; everything lives under that user's
+`~/.update-detector`.
 
 **To uninstall**, run `install.sh` with `--uninstall` or `install.bat
 --uninstall` — both detect what's actually installed and prompt for what

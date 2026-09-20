@@ -1,9 +1,10 @@
 # Roadmap
 
-Status: `v0.15.3-alpha7` — Ubuntu/Debian supported, Windows experimental,
-macOS planned. Items below are the future checker plugins and verification
-gaps stated in `docs/reference.md` (platform-limitations section) and the
-README platform table — nothing here is started.
+Status: `v0.15.3` — Ubuntu/Debian supported, Windows experimental,
+macOS checker in progress on `feature/macos-checker` (Homebrew packages
++ `softwareupdate` detection working live; `install.sh` macOS path and
+companion apply still to come). Items below are the remaining future
+checker plugins and verification gaps stated in `docs/reference.md`.
 
 ## New checker plugins (none started)
 

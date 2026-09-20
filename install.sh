@@ -37,6 +37,14 @@
 # error. See docs/wsl2.md for the full explanation. A WSL2 distro with a
 # genuine in-distro Docker engine is treated as a normal Docker host.
 #
+# On macOS this installs the agent only, as a native LaunchDaemon (no
+# Docker path -- a container has no visibility into the host's Homebrew
+# cellar, so it could never detect anything there -- and no companion
+# yet). The daemon runs as the Homebrew owner at boot with no login
+# required, keeping everything under that user's ~/.update-detector.
+# Homebrew itself must already be installed; aggregator/companion
+# requests on macOS are refused with a clear error.
+#
 # Set INSTALL_VERSION to pin a release instead of "latest". Set
 # INSTALL_COMPONENTS (comma-separated: aggregator,agent,companion) for a
 # scripted/non-interactive install of any of those three on any host --
@@ -98,6 +106,19 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
+# is_macos -> true on macOS (Darwin), where there is no systemd, no
+# /proc, and no Docker path worth offering (see header).
+is_macos() {
+  [ "$(uname -s)" = "Darwin" ]
+}
+
+# goos_name -> GOOS infix for release asset names (update-detector
+# supports linux/darwin agents; the companion/aggregator stay linux-only
+# for now, so this only ever matters for the agent download below).
+goos_name() {
+  if is_macos; then echo darwin; else echo linux; fi
+}
+
 # Resolved lazily, on first actual native binary download -- a pure
 # Docker install (no native component involved at all) never needs this,
 # and shouldn't fail on an architecture this script has no native build
@@ -131,6 +152,11 @@ is_wsl2() {
 # detect updates for the wrong system (see docs/wsl2.md, "Check which one
 # you actually have" -- the same check reused here).
 docker_available() {
+  # Never on macOS, even with Docker Desktop installed: a container there
+  # sees the Linux VM, never the Mac host's Homebrew, so a containerized
+  # agent would silently detect updates for the wrong system -- same class
+  # of mistake as the WSL2 shim below.
+  is_macos && return 1
   command -v docker >/dev/null 2>&1 || return 1
   docker info >/dev/null 2>&1 || return 1
   if is_wsl2; then
@@ -162,13 +188,13 @@ resolve_asset_url() {
     | sed -E 's/.*"(https[^"]+)"$/\1/'
 }
 
-# download_binary NAME DEST -> downloads NAME-linux-$goarch to DEST,
+# download_binary NAME DEST -> downloads NAME-$goos-$goarch to DEST,
 # atomically (via a .new + mv, so a partial download never replaces a
 # working binary) and executable.
 download_binary() {
   name="$1" dest="$2"
   resolve_goarch
-  asset_name="$name-linux-$goarch"
+  asset_name="$name-$(goos_name)-$goarch"
   echo "install.sh: resolving $asset_name from release $INSTALL_VERSION..."
   download_url=$(resolve_asset_url "$asset_name")
   if [ -z "$download_url" ]; then
@@ -248,11 +274,16 @@ remove_system_user() {
   fi
 }
 
-# native_unit_present NAME -> true if a NAME.service unit file exists on
-# this host, regardless of its enabled/active state -- a stopped unit
-# still counts as "installed" for uninstall purposes.
+# native_unit_present NAME -> true if a native install of NAME exists on
+# this host, regardless of running state. systemd unit file on Linux, a
+# LaunchDaemon plist on macOS (label com.sinwe.NAME, see
+# install_agent_launchd -- only the agent exists on macOS so far).
 native_unit_present() {
-  [ -f "/etc/systemd/system/$1.service" ]
+  if is_macos; then
+    [ -f "/Library/LaunchDaemons/com.sinwe.$1.plist" ]
+  else
+    [ -f "/etc/systemd/system/$1.service" ]
+  fi
 }
 
 # env_value FILE KEY -> prints whatever follows the first "=" on KEY's
@@ -461,6 +492,10 @@ pin_compose_image() {
 }
 
 install_agent_native() {
+  if is_macos; then
+    install_agent_launchd
+    return
+  fi
   echo "install.sh: installing update-detector (agent) natively..."
   bin_path="/usr/local/bin/update-detector"
   download_binary update-detector "$bin_path"
@@ -551,6 +586,141 @@ EOF
 
   install_unit update-detector
   echo "install.sh: update-detector installed and started. Check: systemctl status update-detector"
+}
+
+# install_agent_launchd -> macOS equivalent of install_agent_native
+# above: a LaunchDaemon (runs at boot with no login required, unlike a
+# per-user LaunchAgent) under the Homebrew owner's account -- brew
+# refuses to run as root, and the whole point of this agent is reading
+# that user's Homebrew. Everything lives under that user's
+# ~/.update-detector (binary, state, sidecar env file); only the plist
+# itself lives in /Library/LaunchDaemons, which is why this still needs
+# root despite running the agent unprivileged.
+install_agent_launchd() {
+  echo "install.sh: installing update-detector (agent) as a macOS LaunchDaemon..."
+  brew_bin=""
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [ -x "$candidate" ]; then brew_bin="$candidate"; break; fi
+  done
+  if [ -z "$brew_bin" ] && command -v brew >/dev/null 2>&1; then
+    brew_bin="$(command -v brew)"
+  fi
+  if [ -z "$brew_bin" ]; then
+    echo "install.sh: Homebrew is required for the macOS agent but was not found -- install it from https://brew.sh first." >&2
+    exit 1
+  fi
+  brew_owner="$(stat -f '%Su' "$brew_bin")"
+  owner_home="$(eval echo "~$brew_owner")"
+  if [ -z "$owner_home" ] || [ ! -d "$owner_home" ]; then
+    echo "install.sh: could not resolve a home directory for Homebrew owner $brew_owner" >&2
+    exit 1
+  fi
+
+  state_dir="${STATE_DIR:-$owner_home/.update-detector}"
+  mkdir -p "$state_dir"
+  chown "$brew_owner" "$state_dir"
+
+  bin_path="$state_dir/update-detector"
+  download_binary update-detector "$bin_path"
+  chown "$brew_owner" "$bin_path"
+
+  # Sidecar env file: the single source of truth for the plist's own
+  # EnvironmentVariables below, so a re-run can read back what's already
+  # configured (same reason install_agent_native reads back
+  # /etc/default/update-detector) instead of resetting everything.
+  env_file="$state_dir/agent.env"
+  existing_hostname_override="" existing_bot_token="" existing_chat_id="" existing_agg_url=""
+  if [ -f "$env_file" ]; then
+    existing_hostname_override="$(env_value "$env_file" HOSTNAME_OVERRIDE)"
+    existing_bot_token="$(env_value "$env_file" TELEGRAM_BOT_TOKEN)"
+    existing_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
+    existing_agg_url="$(env_value "$env_file" AGGREGATOR_URL)"
+  fi
+  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
+  if [ -z "$resolved_aggregator_url" ]; then
+    echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
+    exit 1
+  fi
+
+  cat > "$env_file" <<EOF
+LISTEN_ADDR=${LISTEN_ADDR:-:8080}
+HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-$existing_hostname_override}
+CHECK_INTERVAL=${CHECK_INTERVAL:-6h}
+STATE_FILE=$state_dir/state.json
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-$existing_bot_token}
+TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-$existing_chat_id}
+NOTIFY_ON_STARTUP=false
+AGGREGATOR_URL=$resolved_aggregator_url
+AGENT_IDENTITY_FILE=$state_dir/agent-identity.json
+COMPANION_SOCKET_PATH=$state_dir/companion.sock
+EOF
+  chmod 0644 "$env_file"
+  chown "$brew_owner" "$env_file"
+
+  brew_dir="$(dirname "$brew_bin")"
+  plist_label="com.sinwe.update-detector"
+  plist_path="/Library/LaunchDaemons/$plist_label.plist"
+  cat > "$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$plist_label</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$bin_path</string>
+    </array>
+    <key>UserName</key>
+    <string>$brew_owner</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>WorkingDirectory</key>
+    <string>$state_dir</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$brew_dir:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LISTEN_ADDR</key>
+        <string>${LISTEN_ADDR:-:8080}</string>
+        <key>HOSTNAME_OVERRIDE</key>
+        <string>${HOSTNAME_OVERRIDE:-$existing_hostname_override}</string>
+        <key>CHECK_INTERVAL</key>
+        <string>${CHECK_INTERVAL:-6h}</string>
+        <key>STATE_FILE</key>
+        <string>$state_dir/state.json</string>
+        <key>TELEGRAM_BOT_TOKEN</key>
+        <string>${TELEGRAM_BOT_TOKEN:-$existing_bot_token}</string>
+        <key>TELEGRAM_CHAT_ID</key>
+        <string>${TELEGRAM_CHAT_ID:-$existing_chat_id}</string>
+        <key>NOTIFY_ON_STARTUP</key>
+        <string>false</string>
+        <key>AGGREGATOR_URL</key>
+        <string>$resolved_aggregator_url</string>
+        <key>AGENT_IDENTITY_FILE</key>
+        <string>$state_dir/agent-identity.json</string>
+        <key>COMPANION_SOCKET_PATH</key>
+        <string>$state_dir/companion.sock</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>$state_dir/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>$state_dir/launchd.err.log</string>
+</dict>
+</plist>
+EOF
+  chmod 0644 "$plist_path"
+
+  # launchd PATH note: its default PATH lacks Homebrew entirely, hence
+  # the explicit PATH above -- without it exec.LookPath("brew") fails
+  # and every check errors.
+  launchctl bootout "system/$plist_label" 2>/dev/null || true
+  launchctl bootstrap system "$plist_path"
+  echo "install.sh: update-detector installed and started. Check: curl http://localhost:8080/status"
 }
 
 # install_agent_docker -> Docker Compose equivalent of install_agent_native
@@ -990,6 +1160,29 @@ uninstall_agent() {
 
   if [ "$native" = "0" ]; then
     echo "install.sh: no native update-detector (agent) install found"
+  elif is_macos; then
+    echo "install.sh: removing update-detector (agent) LaunchDaemon..."
+    launchctl bootout system/com.sinwe.update-detector 2>/dev/null || true
+    rm -f /Library/LaunchDaemons/com.sinwe.update-detector.plist
+    # Binary and sidecar env live in the state dir on macOS (see
+    # install_agent_launchd), so removing the dir covers both -- same
+    # guards as the Linux path below against a degenerate rm -rf.
+    # NOTE: $HOME is /var/root under sudo, so resolve the state dir from
+    # the Homebrew owner (the account the agent runs as), not $HOME.
+    agent_state_dir="${STATE_DIR:-}"
+    if [ -z "$agent_state_dir" ]; then
+      brew_owner=""
+      for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        if [ -x "$candidate" ]; then brew_owner="$(stat -f '%Su' "$candidate")"; break; fi
+      done
+      if [ -n "$brew_owner" ]; then
+        agent_state_dir="$(eval echo "~$brew_owner")/.update-detector"
+      fi
+    fi
+    if [ -n "$agent_state_dir" ] && [ "$agent_state_dir" != "." ] && [ "$agent_state_dir" != "/" ]; then
+      echo "install.sh: removing $agent_state_dir (includes this agent's aggregator identity)"
+      rm -rf "$agent_state_dir"
+    fi
   else
     echo "install.sh: removing update-detector (agent)..."
     agent_state_dir=$(dirname "$(env_value /etc/default/update-detector AGENT_IDENTITY_FILE)")
@@ -1075,6 +1268,14 @@ uninstall_companion() {
 prompt_components() {
   if [ -n "${INSTALL_COMPONENTS:-}" ]; then
     echo "$INSTALL_COMPONENTS"
+    return
+  fi
+  if is_macos; then
+    # No prompt to offer: the agent is the only component on macOS (no
+    # Docker path, no companion yet -- see header), so non-interactive
+    # and interactive behave identically here.
+    echo "install.sh: macOS supports the agent only -- installing it as a LaunchDaemon." >&2
+    echo "agent"
     return
   fi
   if [ ! -r /dev/tty ]; then
@@ -1184,6 +1385,21 @@ prompt_uninstall_components() {
   esac
 }
 
+# assert_macos_components COMPONENTS -> fatal unless COMPONENTS is
+# agent-only. macOS has no Docker path and no companion yet, so anything
+# else (via INSTALL_COMPONENTS= or UNINSTALL_COMPONENTS=) is a usage
+# error, not something to silently reinterpret.
+assert_macos_components() {
+  if is_macos; then
+    case ",$1," in
+      *,aggregator,*|*,companion,*)
+        echo "install.sh: only the agent is supported on macOS so far (got: $1)" >&2
+        exit 1
+        ;;
+    esac
+  fi
+}
+
 uninstall_requested=0
 if [ "${1:-}" = "--uninstall" ] || [ -n "${UNINSTALL_COMPONENTS:-}" ]; then
   uninstall_requested=1
@@ -1202,6 +1418,7 @@ if [ "$uninstall_requested" = "1" ]; then
     echo "install.sh: nothing to uninstall" >&2
     exit 0
   fi
+  assert_macos_components "$components"
   # Reverse of the install order below -- companion first, so
   # uninstall_agent's "companion still installed" note only fires for the
   # genuinely useful case (removing just the agent while leaving
@@ -1222,6 +1439,7 @@ if [ "$uninstall_requested" = "1" ]; then
 # "just install the companion against it" default still applies.
 elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native" = "0" ] && [ -z "$existing_agent_docker" ]; }; then
   components=$(prompt_components)
+  assert_macos_components "$components"
   case ",$components," in
     *,aggregator,*)
       if docker_available && [ "$(prompt_use_docker aggregator)" = "1" ]; then
@@ -1241,6 +1459,11 @@ elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native"
       ;;
   esac
   case ",$components," in *,companion,*) install_companion ;; esac
+elif is_macos; then
+  # An agent already exists and macOS has no companion: re-running with
+  # no explicit components updates that agent in place (re-download +
+  # restart), mirroring what the Docker path does on Linux.
+  install_agent_native
 else
   install_companion
 fi

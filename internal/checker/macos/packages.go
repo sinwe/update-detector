@@ -31,13 +31,24 @@ type brewOutdatedJSON struct {
 	Casks    []brewOutdatedEntry `json:"casks"`
 }
 
-// checkOutdated runs `brew outdated --json=v2` and parses the result.
-// Everything listed is by definition outdated (brew only lists what has
-// an upgrade available), so no further filtering is needed beyond
-// skipping pinned entries, which brew itself would refuse to upgrade.
+// checkOutdated refreshes Homebrew's own data (`brew update`) and then
+// reports what's upgradable (`brew outdated --json=v2`). The refresh is
+// the brew equivalent of the apt checkers' `apt-get update` prologue:
+// taps go stale the same way apt lists do, and an update failure fails
+// this check (falling back to the previous cycle's list) rather than
+// silently reporting from stale data. `brew update` only refreshes
+// Homebrew itself and its taps -- it never upgrades installed packages,
+// so this checker stays read-only like every other checker.
 func checkOutdated(ctx context.Context) (packageResult, error) {
 	if _, err := exec.LookPath("brew"); err != nil {
 		return packageResult{}, fmt.Errorf("brew not found on PATH: %w", err)
+	}
+	var updateOut, updateErr bytes.Buffer
+	updateCmd := exec.CommandContext(ctx, "brew", "update")
+	updateCmd.Stdout = &updateOut
+	updateCmd.Stderr = &updateErr
+	if err := updateCmd.Run(); err != nil {
+		return packageResult{}, fmt.Errorf("brew update: %w: %s", err, strings.TrimSpace(updateErr.String()))
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "brew", "outdated", "--json=v2")
