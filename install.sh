@@ -46,6 +46,14 @@
 # different path -- see internal/companion/selfupdate.go -- so this reuse
 # only ever targets native installs).
 #
+# Set SELF_UPDATE_CHANNEL (one of alpha/beta/rc/release, default release)
+# to track a pre-release channel instead: Docker installs pin the compose
+# image to the matching :latest-<channel> tag (and the aggregator records
+# it for its own update checks), so a later `docker compose pull` follows
+# that same channel instead of silently downgrading to whatever older tag
+# the file happened to pin before. AGGREGATOR_SELF_UPDATE_CHANNEL
+# overrides it for the aggregator alone.
+#
 # To remove a native install instead, either pipe with an explicit
 # argument --
 #
@@ -394,6 +402,44 @@ set_env_var_if_set() {
   return 0
 }
 
+# channel_image_tag CHANNEL -> the ghcr.io channel tag tracking that
+# release channel: release -> latest, anything else -> latest-<channel>.
+# Fails fast on anything outside version.Channels' own set
+# (alpha/beta/rc/release) so a typo errors here instead of pulling a
+# nonexistent tag three minutes later.
+channel_image_tag() {
+  case "${1:-release}" in
+    release) echo "latest" ;;
+    alpha|beta|rc) echo "latest-$1" ;;
+    *)
+      echo "install.sh: invalid channel '$1' (want one of: alpha, beta, rc, release)" >&2
+      return 1
+      ;;
+  esac
+}
+
+# pin_compose_image FILE REPO TAG -> rewrites FILE's `image: REPO:<tag>`
+# line to TAG, leaving the file untouched when no such line exists (a
+# custom registry mirror is never "fixed" into ghcr.io). Called on both
+# the fresh and the update paths, immediately before pull, so the tag
+# can never drift from the channel the deployment actually follows: a
+# later `docker compose pull` then fetches the channel head, never a
+# stale tag left over from an earlier choice -- which is exactly how a
+# deployment tracking alphas via self-update used to get silently
+# downgraded back to the newest beta on the next manual pull.
+pin_compose_image() {
+  file="$1" repo="$2" tag="$3"
+  [ -f "$file" ] || return 0
+  if grep -q "^[[:space:]]*image: $repo:" "$file"; then
+    # -i.bak (removed right after) rather than bare -i: the latter is
+    # GNU-only, and this script is also piped into sh on macOS where
+    # sed demands a backup suffix.
+    sed -i.bak "s#^\([[:space:]]*image: $repo:\)[^[:space:]]*#\1$tag#" "$file"
+    rm -f "$file.bak"
+    echo "install.sh: pinned $file image to $repo:$tag"
+  fi
+}
+
 install_agent_native() {
   echo "install.sh: installing update-detector (agent) natively..."
   bin_path="/usr/local/bin/update-detector"
@@ -511,6 +557,12 @@ install_agent_docker() {
   dir=$(docker_compose_dir_for '(^|/)update-detector(:|$)') || dir=""
   if [ -n "$dir" ]; then
     echo "install.sh: found an existing update-detector Compose deployment at $dir -- updating it in place"
+    # Never stored for the agent (it reads no channel itself): prefer the
+    # invocation's choice, else the shared .env's (written by an
+    # aggregator install in this same directory), else the default --
+    # same precedence the aggregator's own path below uses.
+    agent_channel="${SELF_UPDATE_CHANNEL:-$(env_value "$dir/.env" SELF_UPDATE_CHANNEL)}"
+    agent_channel="${agent_channel:-release}"
   else
     dir="${DOCKER_DIR:-}"
     if [ -z "$dir" ]; then
@@ -539,7 +591,11 @@ install_agent_docker() {
     set_env_var_if_set "$dir/.env" TELEGRAM_BOT_TOKEN "${TELEGRAM_BOT_TOKEN:-}"
     set_env_var_if_set "$dir/.env" TELEGRAM_CHAT_ID "${TELEGRAM_CHAT_ID:-}"
     set_env_var "$dir/.env" AGGREGATOR_URL "$resolved_aggregator_url"
+    agent_channel="${SELF_UPDATE_CHANNEL:-release}"
   fi
+
+  agent_tag="$(channel_image_tag "$agent_channel")" # exits on invalid channel
+  pin_compose_image "$dir/docker-compose.yml" "ghcr.io/sinwe/update-detector" "$agent_tag"
 
   ( cd "$dir" && docker compose pull && docker compose up -d )
   echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
@@ -645,6 +701,13 @@ install_aggregator_docker() {
   dir=$(docker_compose_dir_for '(^|/)update-aggregator(:|$)') || dir=""
   if [ -n "$dir" ]; then
     echo "install.sh: found an existing update-aggregator Compose deployment at $dir -- updating it in place"
+    # Same precedence as a fresh install below, except a re-run without
+    # re-exporting the channel falls back to the shared .env's stored
+    # value (like the native path's existing_* reads) instead of the
+    # default -- otherwise re-running plain install.sh would yank an
+    # alpha-tracking deployment back to :latest.
+    aggregator_channel="${AGGREGATOR_SELF_UPDATE_CHANNEL:-${SELF_UPDATE_CHANNEL:-$(env_value "$dir/.env" SELF_UPDATE_CHANNEL)}}"
+    aggregator_channel="${aggregator_channel:-release}"
   else
     dir="${AGGREGATOR_DOCKER_DIR:-}"
     if [ -z "$dir" ]; then
@@ -668,7 +731,17 @@ install_aggregator_docker() {
     set_env_var_if_set "$dir/.env" TELEGRAM_BOT_TOKEN "${AGGREGATOR_TELEGRAM_BOT_TOKEN:-}"
     set_env_var_if_set "$dir/.env" TELEGRAM_CHAT_ID "${AGGREGATOR_TELEGRAM_CHAT_ID:-}"
     set_env_var "$dir/.env" ADMIN_APPLY_SHARED_SECRET "${ADMIN_APPLY_SHARED_SECRET:-}"
+    # The channel the aggregator's own update checks follow (see
+    # SELF_UPDATE_CHANNEL in docs/reference.md): persisted only when
+    # explicitly provided, so a re-run never blanks a hand-tuned value.
+    # The image tag below always follows this same channel, so `docker
+    # compose pull` fetches the channel head, never a stale tag.
+    aggregator_channel="${AGGREGATOR_SELF_UPDATE_CHANNEL:-${SELF_UPDATE_CHANNEL:-release}}"
+    set_env_var_if_set "$dir/.env" SELF_UPDATE_CHANNEL "${AGGREGATOR_SELF_UPDATE_CHANNEL:-${SELF_UPDATE_CHANNEL:-}}"
   fi
+
+  aggregator_tag="$(channel_image_tag "$aggregator_channel")" # exits on invalid channel
+  pin_compose_image "$dir/docker-compose.aggregator.yml" "ghcr.io/sinwe/update-aggregator" "$aggregator_tag"
 
   ( cd "$dir" && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" pull \
       && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" up -d )
