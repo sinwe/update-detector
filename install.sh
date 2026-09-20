@@ -1255,6 +1255,15 @@ install_companion_launchd() {
         <string>$brew_dir:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>BREW_OWNER</key>
         <string>$brew_owner</string>
+        <!-- STATE_DIR doubles as the self-update discovery hook: the
+             companion runs as root (so ~/.update-detector can't mean
+             the agent owner's home here), and its own config has no
+             state-dir field -- without this, a later agent self-update
+             can't find the agent's sidecar env and silently resets
+             LISTEN_ADDR etc. to defaults (confirmed live: a :8081
+             agent came back on :8080 after an update). -->
+        <key>STATE_DIR</key>
+        <string>$state_dir</string>
         <key>COMPANION_SOCKET_PATH</key>
         <string>$socket_path</string>
         <key>AGGREGATOR_URL</key>
