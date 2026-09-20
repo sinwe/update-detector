@@ -125,13 +125,27 @@ func dockerContainerFor(ctx context.Context, name string) (id, image string) {
 		return "", ""
 	}
 
-	psCmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}}")
+	// State rides along so a live container always beats a dead leftover
+	// with a matching image (confirmed live: a never-started
+	// Forgejo-era `update-detector` container shadowed the real ghcr.io
+	// one, sending self-update pulls at a registry that no longer hosts
+	// them). A missing state (older fakes) matches nothing in the first
+	// pass and falls through to the second, preserving old behavior.
+	psCmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}} {{.State}}")
 	var psOut bytes.Buffer
 	psCmd.Stdout = &psOut
 	if runErr := psCmd.Run(); runErr != nil {
 		return "", ""
 	}
-	ids := strings.Fields(psOut.String())
+	var ids, states []string
+	for _, line := range strings.Split(strings.TrimRight(psOut.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		id, state, _ := strings.Cut(line, " ")
+		ids = append(ids, id)
+		states = append(states, state)
+	}
 	if len(ids) == 0 {
 		return "", ""
 	}
@@ -145,12 +159,17 @@ func dockerContainerFor(ctx context.Context, name string) (id, image string) {
 	images := strings.Split(strings.TrimRight(inspectOut.String(), "\n"), "\n")
 
 	pattern := regexp.MustCompile(`(^|/)` + regexp.QuoteMeta(name) + `(:|$)`)
-	for i, containerImage := range images {
-		if i >= len(ids) {
-			break
+	matches := func(i int) bool {
+		return i < len(ids) && i < len(images) && images[i] != "" && pattern.MatchString(images[i])
+	}
+	for i := range ids {
+		if states[i] == "running" && matches(i) {
+			return ids[i], images[i]
 		}
-		if containerImage != "" && pattern.MatchString(containerImage) {
-			return ids[i], containerImage
+	}
+	for i := range ids {
+		if matches(i) {
+			return ids[i], images[i]
 		}
 	}
 	return "", ""

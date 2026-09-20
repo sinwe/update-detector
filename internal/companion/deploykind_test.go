@@ -215,6 +215,40 @@ func TestDockerContainerForDegradesGracefullyOnRealError(t *testing.T) {
 	}
 }
 
+// TestDockerContainerForPrefersRunning is the regression test for a real
+// bug caught live on a migrated host: a never-started Forgejo-era
+// `update-detector` container (image
+// forgejo.winar.to/winarto/update-detector:latest) sorted ahead of the
+// real ghcr.io one in `docker ps -a`, so self-update derived the repo
+// from the dead leftover and pulled a tag the old registry never hosts.
+// A running match must always win; stopped containers are fallback only.
+func TestDockerContainerForPrefersRunning(t *testing.T) {
+	writeFakeDocker(t, `
+case "$1" in
+  ps)
+    echo "dead111 created"
+    echo "live222 running"
+    ;;
+  inspect)
+    shift 3
+    for id in "$@"; do
+      case "$id" in
+        dead111) echo "forgejo.winar.to/winarto/update-detector:latest" ;;
+        live222) echo "ghcr.io/sinwe/update-detector:latest-beta" ;;
+      esac
+    done
+    ;;
+esac
+`)
+	id, image := dockerContainerFor(context.Background(), "update-detector")
+	if id != "live222" {
+		t.Fatalf("got id %q, want live222 (running beats created)", id)
+	}
+	if image != "ghcr.io/sinwe/update-detector:latest-beta" {
+		t.Fatalf("got image %q, want the running container's reference", image)
+	}
+}
+
 func TestNativeUnitPresentUsesExactName(t *testing.T) {
 	dir := t.TempDir()
 	withSystemdUnitDir(t, dir)
