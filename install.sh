@@ -37,13 +37,13 @@
 # error. See docs/wsl2.md for the full explanation. A WSL2 distro with a
 # genuine in-distro Docker engine is treated as a normal Docker host.
 #
-# On macOS this installs the agent only, as a native LaunchDaemon (no
-# Docker path -- a container has no visibility into the host's Homebrew
-# cellar, so it could never detect anything there -- and no companion
-# yet). The daemon runs as the Homebrew owner at boot with no login
-# required, keeping everything under that user's ~/.update-detector.
-# Homebrew itself must already be installed; aggregator/companion
-# requests on macOS are refused with a clear error.
+# On macOS this installs the agent and companion as native LaunchDaemons
+# (no Docker path -- a container has no visibility into the host's
+# Homebrew cellar, so it could never detect anything there -- and no
+# aggregator port). Both daemons run as the Homebrew owner at boot with
+# no login required, keeping everything under that user's
+# ~/.update-detector. Homebrew itself must already be installed.
+# The companion pairs through the agent, so install the agent first.
 #
 # Set INSTALL_VERSION to pin a release instead of "latest". Set
 # INSTALL_COMPONENTS (comma-separated: aggregator,agent,companion) for a
@@ -236,6 +236,27 @@ cache_install_sh_for_companion() {
   else
     echo "install.sh: warning: could not cache a copy of install.sh -- self-update via the companion won't work until this succeeds" >&2
   fi
+}
+
+# launchd_reload LABEL PLIST -> bootout (if loaded), wait for the unload
+# to actually complete, then bootstrap. bootout is asynchronous: it
+# returns before the job has finished unloading, and an immediate
+# bootstrap then fails (confirmed live as "Bootstrap failed: 5:
+# Input/output error", leaving the old daemon dead with nothing
+# replacing it).
+launchd_reload() {
+  label="$1" plist="$2"
+  launchctl bootout "system/$label" 2>/dev/null || true
+  i=0
+  while launchctl print "system/$label" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 30 ]; then
+      echo "install.sh: timed out waiting for $label to unload" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  launchctl bootstrap system "$plist"
 }
 
 # install_unit NAME -> daemon-reload + enable + restart. Not `enable --now`
@@ -718,22 +739,9 @@ EOF
   # launchd PATH note: its default PATH lacks Homebrew entirely, hence
   # the explicit PATH above -- without it exec.LookPath("brew") fails
   # and every check errors.
-  # bootout is asynchronous: it returns before the job has actually
-  # finished unloading, and an immediate bootstrap then fails (confirmed
-  # live as "Bootstrap failed: 5: Input/output error", leaving the old
-  # daemon dead with nothing replacing it). Wait until the label is
-  # genuinely gone from the system domain before bootstrapping.
-  launchctl bootout "system/$plist_label" 2>/dev/null || true
-  i=0
-  while launchctl print "system/$plist_label" >/dev/null 2>&1; do
-    i=$((i + 1))
-    if [ "$i" -ge 30 ]; then
-      echo "install.sh: timed out waiting for $plist_label to unload" >&2
-      exit 1
-    fi
-    sleep 1
-  done
-  launchctl bootstrap system "$plist_path"
+  # bootout is asynchronous -- see launchd_reload above for why this
+  # waits instead of bootstrapping immediately.
+  launchd_reload "$plist_label" "$plist_path"
   check_port="${LISTEN_ADDR:-:8080}"
   check_port="${check_port##*:}"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
@@ -967,6 +975,10 @@ install_aggregator_docker() {
 }
 
 install_companion() {
+  if is_macos; then
+    install_companion_launchd
+    return
+  fi
   echo "install.sh: installing update-detector-companion..."
   bin_path="/usr/local/bin/update-detector-companion"
   download_binary update-detector-companion "$bin_path"
@@ -1142,6 +1154,122 @@ EOF
   echo "install.sh: done. Check status with: systemctl status update-detector-companion"
 }
 
+# install_companion_launchd -> macOS equivalent of install_companion
+# above: a LaunchDaemon running as the Homebrew owner (brew refuses root,
+# same reason the agent itself runs as that user -- unlike Linux, where
+# the companion needs real root for apt-get). Discovery mirrors the
+# Linux path but reads the agent's sidecar env file ($state_dir/
+# agent.env, written by install_agent_launchd) instead of
+# /etc/default/update-detector -- Docker discovery doesn't apply, since
+# a containerized agent could never see this host's Homebrew anyway.
+install_companion_launchd() {
+  echo "install.sh: installing update-detector-companion as a macOS LaunchDaemon..."
+  brew_bin=""
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [ -x "$candidate" ]; then brew_bin="$candidate"; break; fi
+  done
+  if [ -z "$brew_bin" ] && command -v brew >/dev/null 2>&1; then
+    brew_bin="$(command -v brew)"
+  fi
+  if [ -z "$brew_bin" ]; then
+    echo "install.sh: Homebrew is required for the macOS companion but was not found -- install it from https://brew.sh first." >&2
+    exit 1
+  fi
+  brew_owner="$(stat -f '%Su' "$brew_bin")"
+  owner_home="$(eval echo "~$brew_owner")"
+  if [ -z "$owner_home" ] || [ ! -d "$owner_home" ]; then
+    echo "install.sh: could not resolve a home directory for Homebrew owner $brew_owner" >&2
+    exit 1
+  fi
+
+  state_dir="${STATE_DIR:-$owner_home/.update-detector}"
+  agent_env_file="$state_dir/agent.env"
+  if [ ! -f "$agent_env_file" ]; then
+    echo "install.sh: no agent install found at $agent_env_file -- install the agent first," >&2
+    echo "  then re-run for the companion (it pairs through the agent)." >&2
+    exit 1
+  fi
+  if ! launchctl print system/com.sinwe.update-detector >/dev/null 2>&1; then
+    echo "install.sh: warning: the agent daemon doesn't look loaded right now -- continuing anyway," >&2
+    echo "  but the companion can't pair until the agent is actually running." >&2
+  fi
+
+  socket_path="$(env_value "$agent_env_file" COMPANION_SOCKET_PATH)"
+  socket_path="${socket_path:-$state_dir/companion.sock}"
+  agg_url="$(env_value "$agent_env_file" AGGREGATOR_URL)"
+  agent_listen_addr="$(env_value "$agent_env_file" LISTEN_ADDR)"
+  agent_status_url="http://localhost:${agent_listen_addr#*:}/status"
+
+  if [ -z "$agg_url" ]; then
+    agg_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+  fi
+  if [ -z "$agg_url" ]; then
+    echo "install.sh: no AGGREGATOR_URL available -- the companion has no purpose without one." >&2
+    echo "  Set AGGREGATOR_URL and re-run, or configure it on the agent first and re-run." >&2
+    exit 1
+  fi
+
+  echo "install.sh: socket=$socket_path aggregator=$agg_url agent_status=$agent_status_url"
+
+  if [ -n "$agg_url" ] && ! curl -fsS -o /dev/null --max-time 5 "$agg_url/openapi.yaml"; then
+    echo "install.sh: warning: $agg_url doesn't look reachable from this host right now -- continuing anyway." >&2
+  fi
+
+  bin_path="$state_dir/update-detector-companion"
+  download_binary update-detector-companion "$bin_path"
+  chown "$brew_owner" "$bin_path"
+  mkdir -p "$state_dir"
+  chown "$brew_owner" "$state_dir"
+
+  brew_dir="$(dirname "$brew_bin")"
+  plist_label="com.sinwe.update-detector-companion"
+  plist_path="/Library/LaunchDaemons/$plist_label.plist"
+  cat > "$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$plist_label</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$bin_path</string>
+    </array>
+    <key>UserName</key>
+    <string>$brew_owner</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>WorkingDirectory</key>
+    <string>$state_dir</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$brew_dir:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>COMPANION_SOCKET_PATH</key>
+        <string>$socket_path</string>
+        <key>AGGREGATOR_URL</key>
+        <string>$agg_url</string>
+        <key>AGENT_STATUS_URL</key>
+        <string>$agent_status_url</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>$state_dir/companion.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>$state_dir/companion.err.log</string>
+</dict>
+</plist>
+EOF
+  chmod 0644 "$plist_path"
+
+  launchd_reload "$plist_label" "$plist_path"
+  cache_install_sh_for_companion
+  echo "install.sh: done. The companion pairs through the agent -- it should show as connected on /admin shortly."
+}
+
 # warn_docker_not_managed NAME PATTERN [COMPOSE_CMD] -> if a Docker
 # container matching PATTERN exists (running or stopped), print a warning
 # that install.sh won't touch it -- it never created that deployment, so
@@ -1252,6 +1380,29 @@ uninstall_aggregator() {
 }
 
 uninstall_companion() {
+  if is_macos; then
+    if [ ! -f /Library/LaunchDaemons/com.sinwe.update-detector-companion.plist ]; then
+      echo "install.sh: no update-detector-companion install found"
+      return
+    fi
+    echo "install.sh: removing update-detector-companion LaunchDaemon..."
+    launchctl bootout system/com.sinwe.update-detector-companion 2>/dev/null || true
+    rm -f /Library/LaunchDaemons/com.sinwe.update-detector-companion.plist
+    # Binary lives in the agent's state dir on macOS (see
+    # install_companion_launchd) -- the dir itself stays: it belongs to
+    # the agent, which may still be installed.
+    brew_bin=""
+    for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+      if [ -x "$candidate" ]; then brew_bin="$candidate"; break; fi
+    done
+    if [ -n "$brew_bin" ]; then
+      brew_owner="$(stat -f '%Su' "$brew_bin")"
+      owner_home="$(eval echo "~$brew_owner")"
+      rm -f "$owner_home/.update-detector/update-detector-companion"
+    fi
+    rm -f "$CACHED_INSTALL_SH"
+    return
+  fi
   if ! native_unit_present update-detector-companion; then
     echo "install.sh: no update-detector-companion install found"
     return
@@ -1287,11 +1438,27 @@ prompt_components() {
     return
   fi
   if is_macos; then
-    # No prompt to offer: the agent is the only component on macOS (no
-    # Docker path, no companion yet -- see header), so non-interactive
-    # and interactive behave identically here.
-    echo "install.sh: macOS supports the agent only -- installing it as a LaunchDaemon." >&2
-    echo "agent"
+    # No Docker choice to offer and no aggregator port on macOS -- just
+    # agent, companion, or both, all as LaunchDaemons.
+    if [ ! -r /dev/tty ]; then
+      echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to agent only" >&2
+      echo "agent"
+      return
+    fi
+    echo "Which of update-detector's pieces would you like to set up on this host? (agent and" >&2
+    echo "companion both run as LaunchDaemons; there is no aggregator or Docker path on macOS)" >&2
+    echo >&2
+    echo "  1) detector (agent) only" >&2
+    echo "  2) companion only (pairs through an already-installed agent)" >&2
+    echo "  3) both" >&2
+    printf "Choose [1-3]: " >&2
+    read -r choice < /dev/tty
+    case "$choice" in
+      1) echo "agent" ;;
+      2) echo "companion" ;;
+      3) echo "agent,companion" ;;
+      *) echo "install.sh: invalid choice: $choice" >&2; exit 1 ;;
+    esac
     return
   fi
   if [ ! -r /dev/tty ]; then
@@ -1378,21 +1545,19 @@ prompt_uninstall_components() {
   fi
 
   if is_macos; then
-    # Only the agent can exist on macOS (no Docker path, no companion
-    # yet), so the numbered multi-component menu below would only ever
-    # offer refused choices -- a straight confirm instead, same /dev/tty
-    # rationale as prompt_components (this script is normally piped via
-    # `curl | sh`, so stdin can't be used for a plain read).
+    # Agent and/or companion at most (no Docker path, no aggregator port
+    # on macOS) -- confirm once for whatever was actually found, same
+    # /dev/tty rationale as above.
     echo "Found installed:$found" >&2
     if [ ! -r /dev/tty ]; then
       echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
-      echo "  found:$found -- set UNINSTALL_COMPONENTS=agent explicitly to proceed non-interactively." >&2
+      echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly (e.g. agent,companion) to proceed non-interactively." >&2
       return
     fi
-    printf "Uninstall the agent? [y/N]: " >&2
+    printf "Uninstall:%s? [y/N]: " "$found" >&2
     read -r choice < /dev/tty
     case "$choice" in
-      y|Y|yes|YES) echo "agent" ;;
+      y|Y|yes|YES) echo "$found" | sed 's/^ *//' ;;
       *) echo "install.sh: cancelled -- nothing uninstalled." >&2; return ;;
     esac
     return
@@ -1423,14 +1588,14 @@ prompt_uninstall_components() {
 }
 
 # assert_macos_components COMPONENTS -> fatal unless COMPONENTS is
-# agent-only. macOS has no Docker path and no companion yet, so anything
-# else (via INSTALL_COMPONENTS= or UNINSTALL_COMPONENTS=) is a usage
-# error, not something to silently reinterpret.
+# agent/companion-only. macOS has no Docker path and no aggregator port,
+# so anything else (via INSTALL_COMPONENTS= or UNINSTALL_COMPONENTS=) is
+# a usage error, not something to silently reinterpret.
 assert_macos_components() {
   if is_macos; then
     case ",$1," in
-      *,aggregator,*|*,companion,*)
-        echo "install.sh: only the agent is supported on macOS so far (got: $1)" >&2
+      *,aggregator,*)
+        echo "install.sh: the aggregator is not supported on macOS (got: $1) -- agent and companion only." >&2
         exit 1
         ;;
     esac
