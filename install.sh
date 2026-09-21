@@ -241,11 +241,12 @@ cache_install_sh_for_companion() {
 }
 
 # launchd_reload LABEL PLIST -> bootout (if loaded), wait for the unload
-# to actually complete, then bootstrap. bootout is asynchronous: it
-# returns before the job has finished unloading, and an immediate
-# bootstrap then fails (confirmed live as "Bootstrap failed: 5:
-# Input/output error", leaving the old daemon dead with nothing
-# replacing it).
+# to actually complete, then bootstrap with the fresh plist definition.
+# bootout is asynchronous: it returns before the job has finished
+# unloading, and an immediate bootstrap then fails (confirmed live as
+# "Bootstrap failed: 5: Input/output error", leaving the old daemon dead
+# with nothing replacing it). Only safe when this script was NOT itself
+# launched by the target daemon -- see launchd_restart below.
 launchd_reload() {
   label="$1" plist="$2"
   launchctl bootout "system/$label" 2>/dev/null || true
@@ -258,6 +259,25 @@ launchd_reload() {
     fi
     sleep 1
   done
+  launchctl bootstrap system "$plist"
+}
+
+# launchd_restart LABEL PLIST -> restart an already-installed daemon in
+# place, or bootstrap fresh when not loaded yet. kickstart -k kills and
+# restarts inside launchd itself -- mandatory for the companion updating
+# ITSELF, where this script's own parent is the target daemon and a
+# bootout-first sequence would kill this script before it ever reaches
+# the bootstrap line (confirmed live: the companion logged "shutting
+# down" and never came back). kickstart on a not-yet-loaded job fails,
+# hence the bootstrap fallback for genuine fresh installs. Note this
+# restarts the LOADED job definition -- a rewritten plist file takes
+# effect on the next full bootout/bootstrap cycle (i.e. a manual
+# reinstall), not here.
+launchd_restart() {
+  label="$1" plist="$2"
+  if launchctl kickstart -k "system/$label" >/dev/null 2>&1; then
+    return 0
+  fi
   launchctl bootstrap system "$plist"
 }
 
@@ -1280,7 +1300,10 @@ install_companion_launchd() {
 EOF
   chmod 0644 "$plist_path"
 
-  launchd_reload "$plist_label" "$plist_path"
+  # launchd_restart, not reload: this same function runs during companion
+  # self-update, where this script's own parent IS this daemon (see
+  # launchd_restart's own comment for why bootout-first would suicide).
+  launchd_restart "$plist_label" "$plist_path"
   cache_install_sh_for_companion
   echo "install.sh: done. The companion pairs through the agent -- it should show as connected on /admin shortly."
 }
