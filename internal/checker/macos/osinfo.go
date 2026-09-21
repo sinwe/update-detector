@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/linetee"
 )
 
 // softwareUpdateTimeout bounds `softwareupdate --list`, which phones home
@@ -82,7 +84,18 @@ func softwareUpdateList(ctx context.Context) (bool, error) {
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "softwareupdate", "--list")
-	cmd.Stdout = &stdout
+	// Same live tap as brew outdated above -- this is the slowest call
+	// in a macOS check (it phones Apple's catalog), so it's the one a
+	// verbose-recheck viewer most wants to watch. sw_vers stays untapped:
+	// instant and three lines, same as the debian checker's own trivial
+	// reads.
+	var out io.Writer = &stdout
+	if sink := checker.LineSinkFromContext(ctx); sink != nil {
+		tee := linetee.New(&stdout, sink)
+		defer tee.Flush()
+		out = tee
+	}
+	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return false, fmt.Errorf("softwareupdate --list: %w: %s", err, strings.TrimSpace(stderr.String()))

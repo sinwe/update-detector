@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/linetee"
 )
 
 type packageResult struct {
@@ -52,7 +54,19 @@ func checkOutdated(ctx context.Context) (packageResult, error) {
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "brew", "outdated", "--json=v2")
-	cmd.Stdout = &stdout
+	// Tap stdout into the check context's own line sink when one is
+	// attached (a verbose, UI-triggered recheck) -- stderr keeps its own
+	// independent buffer, same split as the debian checker's own
+	// apt-get -s dist-upgrade tap. Without this, a macOS verbose
+	// recheck streams nothing at all, while Linux shows the real
+	// command output.
+	var out io.Writer = &stdout
+	if sink := checker.LineSinkFromContext(ctx); sink != nil {
+		tee := linetee.New(&stdout, sink)
+		defer tee.Flush()
+		out = tee
+	}
+	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return packageResult{}, fmt.Errorf("brew outdated: %w: %s", err, strings.TrimSpace(stderr.String()))
