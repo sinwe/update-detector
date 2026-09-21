@@ -59,6 +59,13 @@ func installNative(ctx context.Context, component, targetVersion string) error {
 	cmd.Env = append(append(os.Environ(), existingConfigEnv(component)...),
 		"INSTALL_COMPONENTS="+component,
 		"INSTALL_VERSION="+targetVersion,
+		// SELF_UPDATE_INVOCATION tells install.sh this run was
+		// triggered by the companion updating itself (rather than a
+		// human reinstalling): on macOS the companion install path
+		// uses it to pick the suicide-proof restart (see install.sh's
+		// own launchd_restart), since a bootout-first cycle would kill
+		// this very process before it ever re-bootstraps.
+		"SELF_UPDATE_INVOCATION=1",
 	)
 	out, err := runCapped(ctx, cmd)
 	if err != nil {

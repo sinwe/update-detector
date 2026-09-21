@@ -264,21 +264,26 @@ launchd_reload() {
 
 # launchd_restart LABEL PLIST -> restart an already-installed daemon in
 # place, or bootstrap fresh when not loaded yet. kickstart -k kills and
-# restarts inside launchd itself -- mandatory for the companion updating
-# ITSELF, where this script's own parent is the target daemon and a
-# bootout-first sequence would kill this script before it ever reaches
-# the bootstrap line (confirmed live: the companion logged "shutting
-# down" and never came back). kickstart on a not-yet-loaded job fails,
-# hence the bootstrap fallback for genuine fresh installs. Note this
-# restarts the LOADED job definition -- a rewritten plist file takes
-# effect on the next full bootout/bootstrap cycle (i.e. a manual
-# reinstall), not here.
+# restarts inside launchd itself. Used only for the companion's own
+# self-update path (see the SELF_UPDATE_INVOCATION branch in
+# install_companion_launchd): everywhere else uses launchd_reload's full
+# cycle so rewritten plists take effect immediately. Note this restarts
+# the LOADED job definition -- see that same branch for the staleness
+# flag when the file just changed.
 launchd_restart() {
   label="$1" plist="$2"
   if launchctl kickstart -k "system/$label" >/dev/null 2>&1; then
     return 0
   fi
   launchctl bootstrap system "$plist"
+}
+
+# plist_hash FILE -> shasum of FILE, or "missing"/"unknown" if it can't
+# be read -- both compare unequal to any real hash, so a fresh install
+# (or an unreadable shasum) always counts as "changed", which is exactly
+# right: there is no loaded definition that could already match.
+plist_hash() {
+  if [ -f "$1" ]; then shasum "$1" 2>/dev/null | awk '{print $1}'; else echo missing; fi
 }
 
 # install_unit NAME -> daemon-reload + enable + restart. Not `enable --now`
@@ -1245,6 +1250,7 @@ install_companion_launchd() {
   brew_dir="$(dirname "$brew_bin")"
   plist_label="com.sinwe.update-detector-companion"
   plist_path="/Library/LaunchDaemons/$plist_label.plist"
+  old_plist_hash="$(plist_hash "$plist_path")"
   cat > "$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1300,10 +1306,20 @@ install_companion_launchd() {
 EOF
   chmod 0644 "$plist_path"
 
-  # launchd_restart, not reload: this same function runs during companion
-  # self-update, where this script's own parent IS this daemon (see
-  # launchd_restart's own comment for why bootout-first would suicide).
-  launchd_restart "$plist_label" "$plist_path"
+  if [ -n "${SELF_UPDATE_INVOCATION:-}" ]; then
+    # Same function runs during companion self-update, where this
+    # script's own parent IS this daemon: bootout-first would kill this
+    # script before the bootstrap line (confirmed live). kickstart -k
+    # restarts inside launchd instead -- but only restarts the LOADED
+    # definition, so flag when the file just changed underneath it (it
+    # converges on the next manual reinstall/reboot).
+    if [ "$old_plist_hash" != "$(plist_hash "$plist_path")" ]; then
+      echo "install.sh: note: $plist_label restarted in place; the rewritten service definition applies on the next full reinstall/reboot." >&2
+    fi
+    launchd_restart "$plist_label" "$plist_path"
+  else
+    launchd_reload "$plist_label" "$plist_path"
+  fi
   cache_install_sh_for_companion
   echo "install.sh: done. The companion pairs through the agent -- it should show as connected on /admin shortly."
 }
