@@ -34,6 +34,12 @@ type AgentRecord struct {
 	FirstSeen  time.Time       `json:"first_seen"`
 	LastSeen   time.Time       `json:"last_seen,omitempty"`
 	LastReport *checker.Status `json:"last_report,omitempty"`
+	// LastRemoteAddr is the peer IP the agent last contacted us from
+	// (enroll, report, or stream connect) -- shown on /admin so an
+	// operator can tell where each host is reaching us from (LAN,
+	// tailnet, ...). Empty for records written before this field
+	// existed, until that host next checks in.
+	LastRemoteAddr string `json:"last_remote_addr,omitempty"`
 	// NotifyDown is whether the PresenceWatcher sends offline/recovery
 	// alerts for this host. True by default (set on Enroll, migrated on
 	// Load for records written before this field existed) — toggling it
@@ -320,6 +326,21 @@ func (r *Registry) SetMutedUntil(id string, until *time.Time) error {
 	}
 	rec.NotifyDown = true
 	rec.MutedUntil = until
+	return r.saveLocked()
+}
+
+// NoteContact records addr as id's most recent peer address. Callers
+// must only pass addresses from requests that already passed the token
+// check (enroll, report, stream connect) -- this performs none itself.
+// Persists like every other mutation.
+func (r *Registry) NoteContact(id, addr string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	rec.LastRemoteAddr = addr
 	return r.saveLocked()
 }
 

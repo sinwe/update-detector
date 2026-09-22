@@ -124,6 +124,54 @@ func TestHandleReportFlow(t *testing.T) {
 	}
 }
 
+func TestHandleReportRecordsRemoteAddr(t *testing.T) {
+	s, reg := newTestServer(t)
+	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)
+	if err := reg.SetStatus("a1", StatusApproved); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(checker.Status{Hostname: "web01", OK: true})
+	req := httptest.NewRequest(http.MethodPost, "/report", bytes.NewReader(body))
+	req.RemoteAddr = "203.0.113.7:4567"
+	req.Header.Set("X-Agent-ID", "a1")
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	got, ok := reg.Get("a1")
+	if !ok || got.LastRemoteAddr != "203.0.113.7" {
+		t.Fatalf("got %#v, want LastRemoteAddr 203.0.113.7 (port stripped)", got)
+	}
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	adminRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(adminRec, adminReq)
+	if !strings.Contains(adminRec.Body.String(), "203.0.113.7") {
+		t.Fatal("expected the recorded address to render on /admin")
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	tests := []struct{ remoteAddr, want string }{
+		{"192.168.1.99:54321", "192.168.1.99"},
+		{"100.68.218.115:9090", "100.68.218.115"},
+		{"[::1]:8080", "::1"},
+		{"bare-hostname-no-port", "bare-hostname-no-port"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = tt.remoteAddr
+		if got := clientIP(req); got != tt.want {
+			t.Errorf("clientIP(%q) = %q, want %q", tt.remoteAddr, got, tt.want)
+		}
+	}
+}
+
 func TestHandleAdminApproveRejectFlow(t *testing.T) {
 	s, _ := newTestServer(t)
 	doJSON(t, s, http.MethodPost, "/enroll", enrollRequest{AgentID: "a1", Hostname: "web01", Token: "tok"}, nil)
