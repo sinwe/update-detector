@@ -676,10 +676,20 @@ install_agent_launchd() {
   # EnvironmentVariables below, so a re-run can read back what's already
   # configured (same reason install_agent_native reads back
   # /etc/default/update-detector) instead of resetting everything.
+  # Read back whatever's already configured (a re-install/upgrade of an
+  # existing native agent) so re-running this doesn't reset every value
+  # to blank/default just because the shell re-running it doesn't happen
+  # to have these exported again -- same reason install_agent_native
+  # reads back /etc/default/update-detector on Linux (confirmed live: a
+  # macOS reinstall silently moved a customized :8081 agent back to
+  # :8080).
   env_file="$state_dir/agent.env"
-  existing_hostname_override="" existing_bot_token="" existing_chat_id="" existing_agg_url=""
+  existing_hostname_override="" existing_listen_addr="" existing_check_interval=""
+  existing_bot_token="" existing_chat_id="" existing_agg_url=""
   if [ -f "$env_file" ]; then
     existing_hostname_override="$(env_value "$env_file" HOSTNAME_OVERRIDE)"
+    existing_listen_addr="$(env_value "$env_file" LISTEN_ADDR)"
+    existing_check_interval="$(env_value "$env_file" CHECK_INTERVAL)"
     existing_bot_token="$(env_value "$env_file" TELEGRAM_BOT_TOKEN)"
     existing_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
     existing_agg_url="$(env_value "$env_file" AGGREGATOR_URL)"
@@ -689,11 +699,15 @@ install_agent_launchd() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
+  resolved_listen_addr="${LISTEN_ADDR:-$existing_listen_addr}"
+  resolved_listen_addr="${resolved_listen_addr:-:8080}"
+  resolved_check_interval="${CHECK_INTERVAL:-$existing_check_interval}"
+  resolved_check_interval="${resolved_check_interval:-6h}"
 
   cat > "$env_file" <<EOF
-LISTEN_ADDR=${LISTEN_ADDR:-:8080}
+LISTEN_ADDR=$resolved_listen_addr
 HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-$existing_hostname_override}
-CHECK_INTERVAL=${CHECK_INTERVAL:-6h}
+CHECK_INTERVAL=$resolved_check_interval
 STATE_FILE=$state_dir/state.json
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-$existing_bot_token}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-$existing_chat_id}
@@ -734,11 +748,11 @@ EOF
         <key>PATH</key>
         <string>$brew_dir:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>LISTEN_ADDR</key>
-        <string>${LISTEN_ADDR:-:8080}</string>
+        <string>${resolved_listen_addr}</string>
         <key>HOSTNAME_OVERRIDE</key>
         <string>${HOSTNAME_OVERRIDE:-$existing_hostname_override}</string>
         <key>CHECK_INTERVAL</key>
-        <string>${CHECK_INTERVAL:-6h}</string>
+        <string>${resolved_check_interval}</string>
         <key>STATE_FILE</key>
         <string>$state_dir/state.json</string>
         <key>TELEGRAM_BOT_TOKEN</key>
@@ -769,7 +783,7 @@ EOF
   # bootout is asynchronous -- see launchd_reload above for why this
   # waits instead of bootstrapping immediately.
   launchd_reload "$plist_label" "$plist_path"
-  check_port="${LISTEN_ADDR:-:8080}"
+  check_port="${resolved_listen_addr}"
   check_port="${check_port##*:}"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
 }
