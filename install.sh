@@ -657,7 +657,7 @@ install_agent_launchd() {
     echo "install.sh: Homebrew is required for the macOS agent but was not found -- install it from https://brew.sh first." >&2
     exit 1
   fi
-  brew_owner="$(stat -f '%Su' "$brew_bin")"
+  brew_owner="$(/usr/bin/stat -f '%Su' "$brew_bin")"
   owner_home="$(eval echo "~$brew_owner")"
   if [ -z "$owner_home" ] || [ ! -d "$owner_home" ]; then
     echo "install.sh: could not resolve a home directory for Homebrew owner $brew_owner" >&2
@@ -1216,7 +1216,7 @@ install_companion_launchd() {
     echo "install.sh: Homebrew is required for the macOS companion but was not found -- install it from https://brew.sh first." >&2
     exit 1
   fi
-  brew_owner="$(stat -f '%Su' "$brew_bin")"
+  brew_owner="$(/usr/bin/stat -f '%Su' "$brew_bin")"
   owner_home="$(eval echo "~$brew_owner")"
   if [ -z "$owner_home" ] || [ ! -d "$owner_home" ]; then
     echo "install.sh: could not resolve a home directory for Homebrew owner $brew_owner" >&2
@@ -1385,7 +1385,7 @@ uninstall_agent() {
     if [ -z "$agent_state_dir" ]; then
       brew_owner=""
       for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-        if [ -x "$candidate" ]; then brew_owner="$(stat -f '%Su' "$candidate")"; break; fi
+        if [ -x "$candidate" ]; then brew_owner="$(/usr/bin/stat -f '%Su' "$candidate")"; break; fi
       done
       if [ -n "$brew_owner" ]; then
         agent_state_dir="$(eval echo "~$brew_owner")/.update-detector"
@@ -1464,7 +1464,7 @@ uninstall_companion() {
       if [ -x "$candidate" ]; then brew_bin="$candidate"; break; fi
     done
     if [ -n "$brew_bin" ]; then
-      brew_owner="$(stat -f '%Su' "$brew_bin")"
+      brew_owner="$(/usr/bin/stat -f '%Su' "$brew_bin")"
       owner_home="$(eval echo "~$brew_owner")"
       rm -f "$owner_home/.update-detector/update-detector-companion"
     fi
