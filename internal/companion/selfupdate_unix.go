@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -58,6 +59,13 @@ func installNative(ctx context.Context, component, targetVersion string) error {
 	cmd.Env = append(append(os.Environ(), existingConfigEnv(component)...),
 		"INSTALL_COMPONENTS="+component,
 		"INSTALL_VERSION="+targetVersion,
+		// SELF_UPDATE_INVOCATION tells install.sh this run was
+		// triggered by the companion updating itself (rather than a
+		// human reinstalling): on macOS the companion install path
+		// uses it to pick the suicide-proof restart (see install.sh's
+		// own launchd_restart), since a bootout-first cycle would kill
+		// this very process before it ever re-bootstraps.
+		"SELF_UPDATE_INVOCATION=1",
 	)
 	out, err := runCapped(ctx, cmd)
 	if err != nil {
@@ -83,7 +91,7 @@ func existingConfigEnv(component string) []string {
 		// names 1:1 (no prefix) -- only STATE_DIR needs deriving back
 		// from a file path, the same way install.sh's own
 		// uninstall_agent already does.
-		values := readEnvFile(filepath.Join(envFileDir, "update-detector"))
+		values := readEnvFile(agentEnvFilePath())
 		env := passThrough(values, "LISTEN_ADDR", "HOSTNAME_OVERRIDE", "CHECK_INTERVAL",
 			"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "AGGREGATOR_URL")
 		if dir := filepath.Dir(values["AGENT_IDENTITY_FILE"]); dir != "" && dir != "." && dir != "/" {
@@ -105,6 +113,31 @@ func existingConfigEnv(component string) []string {
 	default:
 		return nil
 	}
+}
+
+// agentEnvFilePath locates the agent's env file for config
+// pass-through. On Linux that's /etc/default/update-detector; on macOS
+// it's the sidecar agent.env inside the agent's state dir (written by
+// install.sh's own install_agent_launchd). The state dir is STATE_DIR
+// when set, else ~/.update-detector of the user this process runs as --
+// the companion's own LaunchDaemon runs as the Homebrew owner by
+// design, which is exactly whose home the agent lives under, so the
+// default resolves correctly with no extra configuration. Empty when
+// unresolvable: readEnvFile treats that as "no prior config", same as
+// a missing file.
+func agentEnvFilePath() string {
+	if runtime.GOOS == "darwin" {
+		dir := os.Getenv("STATE_DIR")
+		if dir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return ""
+			}
+			dir = filepath.Join(home, ".update-detector")
+		}
+		return filepath.Join(dir, "agent.env")
+	}
+	return filepath.Join(envFileDir, "update-detector")
 }
 
 // readEnvFile parses a simple KEY=value-per-line file (exactly what

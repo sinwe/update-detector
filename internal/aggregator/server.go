@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -309,6 +310,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent_id already registered with a different token", http.StatusConflict)
 		return
 	}
+	if err := s.registry.NoteContact(req.AgentID, clientIP(r)); err != nil {
+		log.Printf("aggregator: recording contact address for %s: %v", req.AgentID, err)
+	}
 	if outcome == EnrollCreatedPending {
 		s.adminHub.Notify()
 	}
@@ -347,9 +351,24 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	case ReportNotApproved:
 		http.Error(w, "agent not approved", http.StatusForbidden)
 	default:
+		if err := s.registry.NoteContact(agentID, clientIP(r)); err != nil {
+			log.Printf("aggregator: recording contact address for %s: %v", agentID, err)
+		}
 		s.adminHub.Notify()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 	}
+}
+
+// clientIP returns the peer IP for r with the port stripped. Deliberately
+// RemoteAddr only -- there is no reverse proxy in front of this service
+// to trust an X-Forwarded-For from, and honoring a client-controlled
+// header would let anyone spoof the address shown on /admin.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // authenticateCompanion applies the same X-Agent-ID/Bearer-token trust
@@ -400,6 +419,9 @@ func (s *Server) handleCompanionStream(w http.ResponseWriter, r *http.Request) {
 	if !result.Accepted {
 		http.Error(w, "superseded: a companion is already connected for this agent", http.StatusConflict)
 		return
+	}
+	if err := s.registry.NoteContact(rec.ID, clientIP(r)); err != nil {
+		log.Printf("aggregator: recording contact address for %s: %v", rec.ID, err)
 	}
 	// Connect/Disconnect change what the admin page's "connected"/"offline"
 	// badges show for this agent, independently of any registry mutation

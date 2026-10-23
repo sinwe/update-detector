@@ -1,9 +1,18 @@
 # Roadmap
 
-Status: `v0.15.3-alpha7` — Ubuntu/Debian supported, Windows experimental,
-macOS planned. Items below are the future checker plugins and verification
-gaps stated in `docs/reference.md` (platform-limitations section) and the
-README platform table — nothing here is started.
+Status: `v0.15.3` — Ubuntu/Debian supported, Windows experimental,
+macOS checker live on `feature/macos-checker` (Homebrew packages +
+`softwareupdate` detection reporting; agent-only `install.sh` path
+shipped in `v0.15.4-alpha1`). Companion apply proven live in
+`v0.15.4-alpha2` (single-package apply clears the item fleet-wide;
+`brew upgrade` pulls outdated deps exactly like apt). Self-update
+proven live through `v0.15.4-alpha7`: the "Update agent" button carries
+full config (port, URL, interval) across the update via sidecar
+discovery keyed off the companion plist's `STATE_DIR`, and the root-run
+companion self-updates through the same `install.sh` path (brew itself
+always via `sudo -u`). Companion restarts use kickstart (bootout-first
+suicides the updater mid-run -- confirmed live); rewritten plist
+definitions converge on manual reinstall/reboot.
 
 ## New checker plugins (none started)
 

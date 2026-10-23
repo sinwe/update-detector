@@ -1,1 +1,4 @@
 .claude/
+.aider*
+.idea/
+.DS_Store

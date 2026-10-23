@@ -18,6 +18,10 @@ type agentView struct {
 	ID                 string
 	ShortID            string
 	Hostname           string
+	// RemoteAddr is the peer IP this host last contacted us from (LAN,
+	// tailnet, ...) -- "" until it first checks in after upgrading to a
+	// version that records it.
+	RemoteAddr         string
 	FirstSeen          string
 	LastSeen           string
 	HasReport          bool
@@ -154,6 +158,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
 		Hostname:                 rec.Hostname,
+		RemoteAddr:               rec.LastRemoteAddr,
 		NotifyMode:               rec.NotifyMode(now),
 		AnyStreamConnected:       connected,
 		CompanionConnected:       connected && kind == KindCompanion,
@@ -571,6 +576,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="pending-info">
           <span class="host-name">{{.Hostname}}</span>
           <span class="host-id">{{.ShortID}}</span>
+          {{if .RemoteAddr}}<span class="host-id">{{.RemoteAddr}}</span>{{end}}
           <span class="badge badge-muted">{{.FirstSeen}}</span>
         </div>
         <div class="pending-actions">
@@ -624,6 +630,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="host-meta">
           {{if .AgentVersion}}<span>Agent {{.AgentVersion}}</span>{{end}}
           {{if .CompanionVersion}}<span>Companion {{.CompanionVersion}}{{if not .CompanionConnected}} (offline){{end}}</span>{{end}}
+          {{if .RemoteAddr}}<span>{{.RemoteAddr}}</span>{{end}}
           {{if .LastSeen}}<span>Last seen {{.LastSeen}}</span>{{end}}
         </div>
         {{if .HasReport}}

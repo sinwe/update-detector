@@ -1,0 +1,42 @@
+{
+  "formulae": [
+    {
+      "name": "deno",
+      "installed_versions": [
+        "2.9.6"
+      ],
+      "current_version": "2.9.7",
+      "pinned": false,
+      "pinned_version": null
+    },
+    {
+      "name": "ffmpeg",
+      "installed_versions": [
+        "9.0.1_1"
+      ],
+      "current_version": "9.0.2",
+      "pinned": false,
+      "pinned_version": null
+    },
+    {
+      "name": "old-pinned",
+      "installed_versions": [
+        "1.0"
+      ],
+      "current_version": "2.0",
+      "pinned": true,
+      "pinned_version": "1.0"
+    }
+  ],
+  "casks": [
+    {
+      "name": "github-copilot",
+      "installed_versions": [
+        "1.1.14"
+      ],
+      "current_version": "1.1.22",
+      "pinned": false,
+      "pinned_version": null
+    }
+  ]
+}

@@ -6,9 +6,10 @@
 #            convention in internal/version; must not exist yet)
 #   [branch] branch to merge (default: current branch)
 #
-# Pushes via the `github` remote, automatically falling back to the SSH
-# URL when HTTPS is blocked (e.g. behind a proxy that can't reach
-# github.com — SSH often still works). Pushing the tag is what triggers
+# Pushes via the GitHub remote (`origin`, or a legacy `github` alias),
+# automatically falling back to the SSH URL when HTTPS is blocked (e.g.
+# behind a proxy that can't reach github.com — SSH often still works).
+# Pushing the tag is what triggers
 # .github/workflows/release.yml (multi-arch images + binaries + release).
 #
 # Next step after this: scripts/monitor-release.sh <tag>
@@ -29,9 +30,14 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 git rev-parse --verify --quiet "$BRANCH" >/dev/null || { echo "error: no branch $BRANCH" >&2; exit 1; }
 
-# Resolve a pushable URL for the github remote: prefer it as configured,
-# fall back to SSH (derived from the configured URL) when HTTPS is blocked.
-PUSH_URL="$(git remote get-url github)"
+# Resolve a pushable URL for the GitHub remote. Accept either `origin`
+# (GitHub is canonical) or a legacy `github` alias, then fall back to SSH
+# (derived from the configured URL) when HTTPS is blocked.
+PUSH_URL="$(git remote get-url origin 2>/dev/null || true)"
+case "$PUSH_URL" in
+  *github.com*) ;;
+  *) PUSH_URL="$(git remote get-url github 2>/dev/null || echo "$PUSH_URL")" ;;
+esac
 if ! git ls-remote "$PUSH_URL" HEAD >/dev/null 2>&1; then
   echo "note: $PUSH_URL unreachable, falling back to SSH"
   PUSH_URL="$(echo "$PUSH_URL" | sed -E 's#https://([^/]+)/#git@\1:#')"

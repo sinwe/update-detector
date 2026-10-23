@@ -13,6 +13,36 @@ func newTestRegistry(t *testing.T) *Registry {
 	return NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
 }
 
+func TestNoteContactRecordsAndPersists(t *testing.T) {
+	r := newTestRegistry(t)
+	if _, _, err := r.Enroll("agent-1", "web01", "secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.NoteContact("agent-1", "192.168.1.99"); err != nil {
+		t.Fatalf("NoteContact: %v", err)
+	}
+	rec, ok := r.Get("agent-1")
+	if !ok || rec.LastRemoteAddr != "192.168.1.99" {
+		t.Fatalf("got %#v, want LastRemoteAddr 192.168.1.99", rec)
+	}
+	// Must survive the JSON round-trip like every other mutation.
+	r2 := NewRegistry(r.path)
+	if err := r2.Load(); err != nil {
+		t.Fatal(err)
+	}
+	rec2, ok := r2.Get("agent-1")
+	if !ok || rec2.LastRemoteAddr != "192.168.1.99" {
+		t.Fatalf("after reload got %#v, want LastRemoteAddr 192.168.1.99", rec2)
+	}
+}
+
+func TestNoteContactUnknownAgent(t *testing.T) {
+	r := newTestRegistry(t)
+	if err := r.NoteContact("nope", "10.0.0.1"); err != ErrNotFound {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+}
+
 func TestEnrollNewAgentIsPending(t *testing.T) {
 	r := newTestRegistry(t)
 	outcome, status, err := r.Enroll("agent-1", "web01", "secret-token")

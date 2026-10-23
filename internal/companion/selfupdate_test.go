@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build linux
 
 package companion
 
@@ -6,31 +6,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"update-detector/internal/aggregator"
 )
-
-// writeFakeInstallSh puts a fake install.sh at installShPath for the
-// duration of the test, logging INSTALL_COMPONENTS/INSTALL_VERSION to
-// callLog (one line per invocation) and exiting with exitCode.
-func writeFakeInstallSh(t *testing.T, callLog string, exitCode int) {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "install.sh")
-	script := `#!/bin/sh
-echo "$INSTALL_COMPONENTS $INSTALL_VERSION" >> "` + callLog + `"
-exit ` + strconv.Itoa(exitCode) + `
-`
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	orig := installShPath
-	installShPath = path
-	t.Cleanup(func() { installShPath = orig })
-}
 
 func TestInstallNativeSetsEnvAndSucceeds(t *testing.T) {
 	callLog := filepath.Join(t.TempDir(), "calls.log")

@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 // Package hostflavor picks which checker implementation to run based on the
 // host's own OS, not the container's — the agent runs inside an
