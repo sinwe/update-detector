@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"update-detector/internal/telegrambot"
 )
 
 const telegramAPIBase = "https://api.telegram.org"
@@ -34,18 +36,42 @@ func NewTelegram(botToken, chatID string) *Telegram {
 
 func (t *Telegram) Name() string { return "telegram" }
 
+// inlineKeyboard is Telegram's reply_markup shape. Declared here rather
+// than in internal/telegrambot (which owns the callback protocol) because
+// this is a sendMessage concern, not a receiver concern.
+type inlineKeyboard struct {
+	InlineKeyboard [][]inlineButton `json:"inline_keyboard"`
+}
+
+type inlineButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
 func (t *Telegram) Send(ctx context.Context, ev Event) error {
-	payload, err := json.Marshal(map[string]string{
+	// A map, not a struct: reply_markup must be absent entirely on plain
+	// events -- the Bot API rejects a null/empty keyboard.
+	payload := map[string]any{
 		"chat_id":    t.chatID,
 		"text":       FormatMessage(ev),
 		"parse_mode": "HTML",
-	})
+	}
+	if ev.ApplyAgentID != "" {
+		payload["reply_markup"] = inlineKeyboard{InlineKeyboard: [][]inlineButton{{
+			{
+				Text:         "Apply all updates",
+				CallbackData: telegrambot.ApplyAllCallbackData(ev.ApplyAgentID),
+			},
+		}}}
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("telegram: encoding payload: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/bot%s/sendMessage", t.apiBase, t.botToken)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("telegram: building request: %w", err)
 	}

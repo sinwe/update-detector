@@ -26,6 +26,15 @@ type Event struct {
 	// those numbers would be stale at best and misleading at worst.
 	// False (the default) renders exactly as before.
 	Brief bool
+
+	// ApplyAgentID, when non-empty, identifies the host this event is
+	// about so action-capable channels can offer an inline "apply all
+	// updates" control. The agent sets it only when it has an
+	// aggregator identity for that control to target (see
+	// cmd/update-detector/main.go) -- empty (the default) renders a
+	// plain, non-interactive message, exactly as before, so presence
+	// alerts and apply-result notices are unaffected.
+	ApplyAgentID string
 }
 
 // Notifier delivers an Event to some external channel.

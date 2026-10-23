@@ -33,6 +33,13 @@ type Config struct {
 	TelegramBotToken string
 	TelegramChatID   string
 
+	// TelegramApplyButtons attaches an "Apply all updates" inline button
+	// to update notifications. It only takes effect when this agent also
+	// has an aggregator identity (AGGREGATOR_URL set): the button's press
+	// is handled by the aggregator, which is the only process polling the
+	// bot. Defaults to true.
+	TelegramApplyButtons bool
+
 	NotifyOnStartup bool
 
 	// AggregatorURL enables push mode when set: this agent will enroll with
@@ -66,6 +73,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	telegramApplyButtons, err := parseBool("TELEGRAM_APPLY_BUTTONS", true)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		ListenAddr: getEnv("LISTEN_ADDR", ":8080"),
 		Hostname:   getEnv("HOSTNAME_OVERRIDE", hostname),
@@ -83,8 +95,9 @@ func Load() (Config, error) {
 
 		StateFile: getEnv("STATE_FILE", "/var/lib/update-detector/state.json"),
 
-		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
+		TelegramBotToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:       os.Getenv("TELEGRAM_CHAT_ID"),
+		TelegramApplyButtons: telegramApplyButtons,
 
 		NotifyOnStartup: notifyOnStartup,
 

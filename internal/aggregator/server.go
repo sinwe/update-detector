@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -929,44 +930,71 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	rec, ok := s.registry.Get(id)
-	if !ok || rec.Status != StatusApproved {
-		http.Error(w, "agent not found or not approved", http.StatusNotFound)
-		return
-	}
-
 	var req applyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	// Deliberately not req.Type.valid() -- that also accepts ActionRecheck,
-	// which has its own no-secret-required endpoint (handleAdminRecheck)
-	// specifically so it doesn't need to go through this secret-gated one.
-	switch req.Type {
+
+	actionID, _, err := s.PushApply(id, req.Type, req.Packages)
+	switch {
+	case errors.Is(err, ErrAgentNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, ErrInvalidAction):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]string{"action_id": actionID})
+	}
+}
+
+// Sentinel errors PushApply returns so each caller can map them onto its
+// own protocol (HTTP status codes here, an alert popup in telegrambot).
+var (
+	// ErrAgentNotFound means the id isn't a known, approved agent.
+	ErrAgentNotFound = errors.New("agent not found or not approved")
+	// ErrInvalidAction means the request names an action type this
+	// endpoint doesn't accept (notably ActionRecheck, which deliberately
+	// has its own no-secret-required endpoint -- handleAdminRecheck).
+	ErrInvalidAction = errors.New("invalid action")
+)
+
+// PushApply validates and pushes an upgrade action down to a connected
+// companion, returning the new action's ID and the host's display name.
+//
+// This is the shared core of the secret-gated HTTP endpoint and the
+// Telegram "apply all updates" button (see cmd/update-aggregator): the
+// Telegram path is authenticated by the bot (configured chat plus an
+// optional user allowlist) rather than the shared secret, so it must not
+// be able to skip any of the checks here.
+func (s *Server) PushApply(id string, t ActionType, packages []string) (actionID, hostname string, err error) {
+	rec, ok := s.registry.Get(id)
+	if !ok || rec.Status != StatusApproved {
+		return "", "", ErrAgentNotFound
+	}
+
+	switch t {
 	case ActionPackages, ActionUpgrade, ActionFullUpgrade:
 	default:
-		http.Error(w, "type must be one of: packages, upgrade, full-upgrade", http.StatusBadRequest)
-		return
+		return "", "", fmt.Errorf("%w: type must be one of: packages, upgrade, full-upgrade", ErrInvalidAction)
 	}
-	if req.Type == ActionPackages && len(req.Packages) == 0 {
-		http.Error(w, "packages must be non-empty for type=packages", http.StatusBadRequest)
-		return
+	if t == ActionPackages && len(packages) == 0 {
+		return "", "", fmt.Errorf("%w: packages must be non-empty for type=packages", ErrInvalidAction)
 	}
 
 	action := Action{
 		ID:        newActionID(),
-		Type:      req.Type,
-		Packages:  req.Packages,
+		Type:      t,
+		Packages:  packages,
 		CreatedAt: time.Now(),
 	}
 	if err := s.hub.Push(id, action); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
+		return "", "", err
 	}
 	s.outputHub.Begin(id, action.ID)
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+	return action.ID, rec.Hostname, nil
 }
 
 type recheckRequest struct {

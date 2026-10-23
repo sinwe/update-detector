@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"update-detector/internal/version"
@@ -17,6 +18,21 @@ type Config struct {
 
 	TelegramBotToken string
 	TelegramChatID   string
+
+	// TelegramApplyButtons turns an agent's "Apply all updates" inline
+	// button into a working action here. The aggregator is the only
+	// process that long-polls the bot (Telegram allows one getUpdates
+	// consumer per token), so this must be on for any such button to do
+	// anything. Defaults to true; it additionally requires the bot to be
+	// configured and ADMIN_APPLY_SHARED_SECRET to be set, since pressing
+	// it triggers a real package upgrade.
+	TelegramApplyButtons bool
+
+	// TelegramApplyUserIDs is an optional allowlist of Telegram user IDs
+	// permitted to press the apply button. Empty accepts any member of
+	// TELEGRAM_CHAT_ID (fine for a private chat; set this in a group so
+	// pressing apply stays an admin action).
+	TelegramApplyUserIDs []int64
 
 	// AdminApplySharedSecret gates POST /admin/agents/{id}/apply. Empty
 	// (the default) disables the endpoint entirely (501) -- triggering an
@@ -63,6 +79,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	telegramApplyButtons, err := parseBool("TELEGRAM_APPLY_BUTTONS", true)
+	if err != nil {
+		return Config{}, err
+	}
+	telegramApplyUserIDs, err := parseIDList("TELEGRAM_APPLY_USER_IDS")
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ListenAddr:   getEnv("LISTEN_ADDR", ":8080"),
@@ -70,6 +94,9 @@ func Load() (Config, error) {
 
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
+
+		TelegramApplyButtons: telegramApplyButtons,
+		TelegramApplyUserIDs: telegramApplyUserIDs,
 
 		AdminApplySharedSecret: os.Getenv("ADMIN_APPLY_SHARED_SECRET"),
 
@@ -117,6 +144,28 @@ func parseDuration(key, fallback string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid %s %q: %w", key, raw, err)
 	}
 	return d, nil
+}
+
+// parseIDList reads a comma-separated list of numeric IDs, e.g.
+// TELEGRAM_APPLY_USER_IDS=123456789,987654321. Blank means "no allowlist".
+func parseIDList(key string) ([]int64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil, nil
+	}
+	var ids []int64
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s value %q: %w", key, part, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func parseBool(key string, fallback bool) (bool, error) {

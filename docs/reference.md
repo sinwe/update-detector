@@ -581,6 +581,7 @@ in `docker-compose.yml`.
 | `REBOOT_REQUIRED_FILE` | `/host/var/run/reboot-required` | Host-mounted |
 | `STATE_FILE` | `/var/lib/update-detector/state.json` | Container-owned, writable |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Enables Telegram notifications when both are set |
+| `TELEGRAM_APPLY_BUTTONS` | `true` | Attaches an *Apply all updates* button to update notifications when `AGGREGATOR_URL` is set — the aggregator handles the press, see [Telegram notifications](integrations/telegram.md#applying-updates-from-the-notification) |
 | `NOTIFY_ON_STARTUP` | `false` | Also send a notification on the very first check after startup |
 | `AGGREGATOR_URL` | unset | Enables pushing to a central `update-aggregator` when set (e.g. `http://aggregator-host:9090`) |
 | `AGENT_IDENTITY_FILE` | `/var/lib/update-detector/agent-identity.json` | Container-owned, writable — this agent's self-generated ID + token |
@@ -593,6 +594,8 @@ in `docker-compose.yml`.
 | `LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `REGISTRY_FILE` | `/var/lib/update-aggregator/registry.json` | Container-owned, writable — agent records, approval state, last reports |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | unset | Alerts on companion apply results when both are set (independent of each agent's own Telegram config) |
+| `TELEGRAM_APPLY_BUTTONS` | `true` | Long-polls the bot for *Apply all updates* button presses; also needs `ADMIN_APPLY_SHARED_SECRET` and the same bot/chat as the agents |
+| `TELEGRAM_APPLY_USER_IDS` | unset | Comma-separated Telegram user IDs allowed to press the apply button (empty: any member of `TELEGRAM_CHAT_ID`) |
 | `ADMIN_APPLY_SHARED_SECRET` | unset | Enables `POST /admin/agents/{id}/apply` when set (disabled/`501` otherwise) — see [Triggering updates](#triggering-updates-companion) |
 | `OFFLINE_ALERT_AFTER` | `5m` | Seeds the /admin fleet-wide grace period and switch on first start (`0` seeds switched-off) — afterwards the page is the source of truth, see [Offline alerts](#offline-alerts) |
 | `SELF_UPDATE_CHECK_INTERVAL` | `24h` | How often to check GitHub for a newer update-detector release — see [Self-updating update-detector](#self-updating-update-detector) |
