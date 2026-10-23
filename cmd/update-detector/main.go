@@ -173,11 +173,22 @@ func run(ctx context.Context) error {
 			if first && cfg.NotifyOnStartup {
 				notifyChanges = append([]string{"agent started"}, changes...)
 			}
+			// Offer the Telegram "apply all" button only when pressing
+			// it can do something: real pending updates, the operator
+			// hasn't switched buttons off, and this agent has an
+			// aggregator identity for the press to target (the
+			// aggregator is what pushes the apply back down).
+			applyID := ""
+			if cfg.TelegramApplyButtons && identity.AgentID != "" &&
+				(status.Packages.UpgradableTotal > 0 || status.OS.UpdateAvailable) {
+				applyID = identity.AgentID
+			}
 			notifyMgr.Send(ctx, notifier.Event{
-				Hostname: cfg.Hostname,
-				Status:   status,
-				Previous: previous,
-				Changes:  notifyChanges,
+				Hostname:     cfg.Hostname,
+				Status:       status,
+				Previous:     previous,
+				Changes:      notifyChanges,
+				ApplyAgentID: applyID,
 			})
 		}
 

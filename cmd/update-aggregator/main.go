@@ -17,6 +17,7 @@ import (
 	"update-detector/internal/aggregatorconfig"
 	"update-detector/internal/notifier"
 	"update-detector/internal/selfupdate"
+	"update-detector/internal/telegrambot"
 	"update-detector/internal/version"
 )
 
@@ -89,6 +90,24 @@ func run(ctx context.Context) error {
 	}
 	go aggregator.NewPresenceWatcher(registry, hub, notifyMgr, cfg.OfflineAlertAfter, alertStore).Run(ctx)
 	srv := aggregator.NewServer(ctx, registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
+
+	// The agents attach the button to their own update alerts, but only
+	// this process polls the bot for presses (Telegram delivers each
+	// update to exactly one getUpdates caller). Without an apply secret
+	// there is nothing the press could legally do, so don't offer it.
+	if cfg.TelegramApplyButtons && cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
+		if cfg.AdminApplySharedSecret == "" {
+			log.Println("telegram apply buttons disabled (ADMIN_APPLY_SHARED_SECRET is not set)")
+		} else {
+			bot := telegrambot.New(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.TelegramApplyUserIDs)
+			go bot.Run(ctx, func(ctx context.Context, agentID string) (string, error) {
+				_, hostname, err := srv.PushApply(agentID, aggregator.ActionUpgrade, nil)
+				return hostname, err
+			})
+			log.Printf("telegram apply buttons enabled (chat %s, %d allowed user(s))",
+				cfg.TelegramChatID, len(cfg.TelegramApplyUserIDs))
+		}
+	}
 	srv.SetAlertInfo(cfg.OfflineAlertAfter, notifyMgr.Names())
 	srv.SetAlertStore(alertStore)
 	httpSrv := &http.Server{
