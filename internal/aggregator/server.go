@@ -685,6 +685,13 @@ func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
+	// Defense in depth for reverse proxies (the updater.winar.to vhost
+	// already sets proxy_buffering off for this server): nginx and friends
+	// buffer proxy responses by default, which would hold SSE frames back
+	// until a buffer fills or the connection ends -- the browser would
+	// then only ever see pushes via its fallback polling instead of the
+	// immediate push this endpoint exists for.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
@@ -752,6 +759,10 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
+	// Same proxy-buffering rationale as handleAdminEvents: this console
+	// stream must reach the browser as lines happen, not whenever a proxy
+	// buffer happens to fill.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
