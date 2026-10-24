@@ -555,26 +555,67 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.notifyMgr != nil {
-		outcome := "failed"
-		if req.Success {
-			outcome = "applied"
-		}
-		msg := fmt.Sprintf("update %s on %s", outcome, rec.Hostname)
-		if req.Message != "" {
-			msg += ": " + req.Message
-		}
-		status := checker.Status{Hostname: rec.Hostname}
-		if rec.LastReport != nil {
-			status = *rec.LastReport
-		}
-		s.notifyMgr.Send(r.Context(), notifier.Event{
-			Hostname: rec.Hostname,
-			Status:   status,
-			Changes:  []string{msg},
-		})
+		actionType, known := s.hub.PendingType(rec.ID, req.ActionID)
+		s.notifyMgr.Send(r.Context(), resultEvent(rec, actionType, known, req.Success, req.Message))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
+// resultEvent turns a completed action into a notifier event. The action
+// type comes from the hub's in-flight record (see PendingType) rather than
+// the result payload, so older agents/companions that only report an
+// action ID still get the right wording.
+//
+// Deliberately Brief, with no Status attached: rec.LastReport is the last
+// *reported* status, which can predate the action by hours. A recheck on
+// the companion path is fire-and-forget -- its result lands before the new
+// report does -- so echoing the old counts (a "12 upgradable" that had
+// really been 24) is worse than omitting them. The next regular change
+// alert carries accurate numbers.
+func resultEvent(rec AgentRecord, actionType ActionType, known, success bool, detail string) notifier.Event {
+	ev := notifier.Event{
+		Hostname: rec.Hostname,
+		Title:    resultTitle(actionType, known, success),
+		Brief:    true,
+	}
+	if detail != "" {
+		ev.Changes = []string{detail}
+	}
+	return ev
+}
+
+// resultTitle names what actually happened. Any successful action used to
+// be announced as "update applied", which mislabelled rechecks (their
+// message really says "recheck triggered") and failed actions.
+func resultTitle(t ActionType, known, success bool) string {
+	if !known {
+		// A result can arrive after an aggregator restart, which drops
+		// the in-memory pending maps -- fall back to the old wording.
+		if success {
+			return "update applied"
+		}
+		return "update failed"
+	}
+	if t == ActionRecheck {
+		if success {
+			return "recheck"
+		}
+		return "recheck failed"
+	}
+	if !success {
+		return "update failed"
+	}
+	switch t {
+	case ActionPackages:
+		return "package update applied"
+	case ActionSelfUpdate:
+		return "self-update applied"
+	case ActionCompleteCompanionSwap:
+		return "companion update applied"
+	default:
+		return "update applied"
+	}
 }
 
 type companionOutputFrame struct {

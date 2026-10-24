@@ -180,7 +180,14 @@ type CompanionHub struct {
 	// IsPending, which is what actually authorizes output streaming
 	// (handleCompanionOutput) against either map.
 	agentPending map[string]string
-	results      map[string][]ActionResult
+	// pendingType and agentPendingType record what kind of action each
+	// slot's in-flight ID refers to. handleCompanionResult only ever
+	// sees the ID back, and how a result should be described depends on
+	// the action (a recheck is not an apply), so remember it at push time
+	// rather than widening the agent->aggregator result protocol.
+	pendingType      map[string]ActionType
+	agentPendingType map[string]ActionType
+	results          map[string][]ActionResult
 }
 
 func NewCompanionHub() *CompanionHub {
@@ -192,6 +199,8 @@ func NewCompanionHub() *CompanionHub {
 		agentPresent:      map[string]bool{},
 		pending:           map[string]string{},
 		agentPending:      map[string]string{},
+		pendingType:       map[string]ActionType{},
+		agentPendingType:  map[string]ActionType{},
 		results:           map[string][]ActionResult{},
 	}
 }
@@ -411,6 +420,7 @@ func (h *CompanionHub) Push(agentID string, action Action) error {
 			select {
 			case agentEntry.ch <- action:
 				h.agentPending[agentID] = action.ID
+				h.agentPendingType[agentID] = action.Type
 				return nil
 			default:
 				return errors.New("agent stream busy, action dropped")
@@ -433,6 +443,7 @@ func (h *CompanionHub) Push(agentID string, action Action) error {
 	select {
 	case entry.ch <- action:
 		h.pending[agentID] = action.ID
+		h.pendingType[agentID] = action.Type
 		return nil
 	default:
 		return errors.New("companion stream busy, action dropped")
@@ -450,9 +461,11 @@ func (h *CompanionHub) RecordResult(agentID string, result ActionResult) {
 	defer h.mu.Unlock()
 	if h.pending[agentID] == result.ActionID {
 		delete(h.pending, agentID)
+		delete(h.pendingType, agentID)
 	}
 	if h.agentPending[agentID] == result.ActionID {
 		delete(h.agentPending, agentID)
+		delete(h.agentPendingType, agentID)
 	}
 	log := append(h.results[agentID], result)
 	if len(log) > actionLogLimit {
@@ -499,6 +512,25 @@ func (h *CompanionHub) IsPending(agentID, actionID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.pending[agentID] == actionID || h.agentPending[agentID] == actionID
+}
+
+// PendingType returns the type of actionID when it is still agentID's
+// in-flight action. A result only carries the ID, so handleCompanionResult
+// uses this to describe the action correctly ("recheck" vs "update
+// applied"). Returns false for a stale/duplicate/unknown ID, and after an
+// aggregator restart, when the in-memory tracking is gone.
+func (h *CompanionHub) PendingType(agentID, actionID string) (ActionType, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pending[agentID] == actionID {
+		t, ok := h.pendingType[agentID]
+		return t, ok
+	}
+	if h.agentPending[agentID] == actionID {
+		t, ok := h.agentPendingType[agentID]
+		return t, ok
+	}
+	return "", false
 }
 
 func newActionID() string {
