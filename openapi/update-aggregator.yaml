@@ -213,6 +213,32 @@ paths:
         "409":
           description: action_id doesn't match this agent's currently in-flight action
 
+  /admin/events:
+    get:
+      summary: SSE stream of admin-page push events
+      description: >
+        Long-lived Server-Sent-Events response the admin page holds open
+        (same shape as GET /admin/agents/{id}/output/stream). "registry"
+        events (empty JSON body) mean fleet state changed -- the client
+        reloads. "action" events carry {"agent_id","action_id"} for an
+        action now in flight on a host, pushed from any source (Telegram
+        apply-all button, the apply endpoint, a self-update, another
+        admin tab) -- the client opens that host's live output console
+        immediately instead of waiting for its next reload to notice.
+      operationId: adminEvents
+      responses:
+        "200":
+          description: text/event-stream of registry/action events
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                properties:
+                  agent_id:
+                    type: string
+                  action_id:
+                    type: string
+
   /admin/agents/{id}/output/stream:
     get:
       summary: SSE stream of one agent's live action output, for the admin page

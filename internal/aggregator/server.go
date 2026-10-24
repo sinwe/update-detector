@@ -550,7 +550,7 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		if err := s.hub.Push(rec.ID, swapAction); err != nil {
 			log.Printf("handleCompanionResult: failed to push ActionCompleteCompanionSwap for %s: %v", rec.ID, err)
 		} else {
-			s.outputHub.Begin(rec.ID, swapAction.ID)
+			s.beginAgentOutput(rec.ID, swapAction.ID)
 		}
 	}
 
@@ -663,9 +663,14 @@ func (s *Server) handleCompanionStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminEvents is the SSE endpoint the admin page holds open to get
-// live registry updates (enroll/report/approve). Any event means
-// "something changed" - the client reloads. Mirrors handleAdminOutputStream
-// shape (flusher, heartbeat, context-done) but subscribes to adminHub.
+// push events. Two event shapes flow through it: "registry" means
+// "something changed -- reload" (enroll/report/approve, friend/foe
+// presence), while "action" carries {agent_id, action_id} for an action
+// now in flight whose push source was outside the page (Telegram
+// apply-all button, apply API, self-update, another tab) -- openLiveOutput
+// in templates.go opens that host's live console instead of reloading.
+// Mirrors handleAdminOutputStream's shape (flusher, heartbeat,
+// context-done) but subscribes to adminHub.
 func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -699,12 +704,36 @@ func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case <-ch:
-			if _, err := io.WriteString(w, "event: registry\ndata: {}\n\n"); err != nil {
+		case ch_event := <-ch:
+			if err := writeAdminEvent(w, ch_event); err != nil {
 				return
 			}
 			flusher.Flush()
 		}
+	}
+}
+
+// writeAdminEvent writes one SSE frame on the admin events stream, in the
+// exact shape a browser's EventSource listeners expect (see
+// connectAdminStream in templates.go): "event: registry" (empty JSON body)
+// means reload; "event: action" carries {agent_id, action_id} for an
+// action now in flight, handled by opening that host's live console.
+// Split from handleAdminEvents so the frame format is unit-testable.
+func writeAdminEvent(w io.Writer, ev adminEvent) error {
+	switch ev.Kind {
+	case adminEventAction:
+		data, err := json.Marshal(struct {
+			AgentID  string `json:"agent_id"`
+			ActionID string `json:"action_id"`
+		}{ev.AgentID, ev.ActionID})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(w, "event: action\ndata: %s\n\n", data)
+		return err
+	default:
+		_, err := io.WriteString(w, "event: registry\ndata: {}\n\n")
+		return err
 	}
 }
 
@@ -992,9 +1021,24 @@ func (s *Server) PushApply(id string, t ActionType, packages []string) (actionID
 	if err := s.hub.Push(id, action); err != nil {
 		return "", "", err
 	}
-	s.outputHub.Begin(id, action.ID)
+	s.beginAgentOutput(id, action.ID)
 
 	return action.ID, rec.Hostname, nil
+}
+
+// beginAgentOutput marks actionID as agentID's in-flight live output and
+// tells every open admin page a new action just started -- including ones
+// pushed from outside the browser (Telegram apply-all button, the
+// secret-gated apply endpoint, self-updates, another tab): an open page
+// can open that host's live console the moment the action is pushed,
+// instead of waiting for its next reload to re-derive the pane state.
+// Every outputHub.Begin call site goes through this so no push source can
+// forget the notification half.
+func (s *Server) beginAgentOutput(agentID, actionID string) {
+	s.outputHub.Begin(agentID, actionID)
+	if s.adminHub != nil {
+		s.adminHub.NotifyAction(agentID, actionID)
+	}
 }
 
 type recheckRequest struct {
@@ -1033,7 +1077,7 @@ func (s *Server) handleAdminRecheck(w http.ResponseWriter, r *http.Request, id s
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.outputHub.Begin(id, action.ID)
+	s.beginAgentOutput(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }
@@ -1182,7 +1226,7 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.outputHub.Begin(id, action.ID)
+	s.beginAgentOutput(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }

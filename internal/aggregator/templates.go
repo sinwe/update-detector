@@ -769,6 +769,13 @@ const adminTemplateSrc = `<!DOCTYPE html>
       return secret;
     }
 
+    // Streams currently open for an agent's console. openLiveOutput keys
+    // on this so it's idempotent: opening when a stream is already live
+    // (e.g. an admin-events push arriving while the operator is already
+    // watching that host) returns the existing EventSource instead of
+    // double-subscribing and interleaving duplicated lines.
+    const liveStreams = {};
+
     // resume=true keeps the pane's existing content instead of clearing it --
     // used when re-subscribing after a staged companion self-update's first
     // phase reports "done" but a follow-up ActionCompleteCompanionSwap is
@@ -776,10 +783,12 @@ const adminTemplateSrc = `<!DOCTYPE html>
     function openLiveOutput(id, selfUpdateExpect, resume) {
       const pane = document.getElementById('output-' + id);
       if (!pane) return null;
+      if (liveStreams[id] && liveStreams[id].readyState !== 2) return liveStreams[id];
       pane.style.display = 'block';
       if (!resume) pane.textContent = '';
       const baselinePromise = selfUpdateExpect ? null : fetchAgentVersionInfo(id).then(d => d ? d.last_seen : '');
       const es = new EventSource('/admin/agents/' + id + '/output/stream');
+      liveStreams[id] = es;
       es.addEventListener('line', (e) => {
         const data = JSON.parse(e.data);
         pane.textContent += data.line + '\n';
@@ -787,6 +796,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       });
       es.addEventListener('done', async (e) => {
         es.close();
+        delete liveStreams[id];
         const data = JSON.parse(e.data);
         if (selfUpdateExpect && data.staged) {
           // Windows-only case: the companion staged a new binary but
@@ -818,12 +828,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
       es.addEventListener('disconnected', () => {
         pane.textContent += '--- companion disconnected -- waiting for it to come back ---\n';
         es.close();
+        delete liveStreams[id];
       });
       return es;
     }
 
     function closeLiveOutput(id, es) {
       if (es) es.close();
+      delete liveStreams[id];
       const pane = document.getElementById('output-' + id);
       if (pane) pane.style.display = 'none';
     }
@@ -1119,6 +1131,24 @@ const adminTemplateSrc = `<!DOCTYPE html>
         esAdmin = new EventSource('/admin/events');
         esAdmin.addEventListener('registry', () => {
           location.reload();
+        });
+        esAdmin.addEventListener('action', (e) => {
+          // An action was pushed to a host from outside this tab's click
+          // -- Telegram apply-all button, the apply API, a self-update,
+          // another tab. Open its console right now instead of waiting
+          // for the next reload; openLiveOutput replays whatever the
+          // host already streamed, and returns the existing stream
+          // untouched if a console is already open for that host.
+          try {
+            const data = JSON.parse(e.data);
+            const pane = document.getElementById('output-' + data.agent_id);
+            if (!pane) return;
+            const wasOpen = pane.style.display === 'block';
+            const esAction = openLiveOutput(data.agent_id);
+            if (esAction && !wasOpen) {
+              pane.textContent += '--- action pushed (e.g. via Telegram) -- streaming live ---\n';
+            }
+          } catch (err) {}
         });
         esAdmin.onopen = () => { reconnectDelay = 1000; };
         esAdmin.onerror = () => {
