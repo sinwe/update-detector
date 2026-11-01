@@ -151,9 +151,10 @@ func TestInstallNativePreservesExistingSecret(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	origPath := installShPath
+	origPath, origRefresh := installShPath, refreshInstallShFunc
 	installShPath = scriptPath
-	t.Cleanup(func() { installShPath = origPath })
+	refreshInstallShFunc = func(context.Context, string) error { return nil }
+	t.Cleanup(func() { installShPath, refreshInstallShFunc = origPath, origRefresh })
 
 	if err := installNative(context.Background(), "aggregator", "v2.0.0"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -468,6 +468,18 @@ against the exact compose file/working directory Docker Compose itself
 recorded when the container was created (so it respects whatever `.env`,
 volumes, etc. you're actually running).
 
+Native components are updated by re-running `install.sh`, so a companion
+keeps a cached copy of that script under
+`/usr/local/lib/update-detector/`. Before invoking it, the companion
+fetches the copy from the release tag it is installing and swaps it in,
+falling back to the cached one if that download fails. This matters
+because that script is what writes the systemd unit / launchd plist and
+the env file: a cache frozen at an old revision silently re-applies old
+settings on every self-update — confirmed live, where hosts that had
+never re-cached kept rewriting pre-shim launchd plists (and two hosts
+were still running an `install.sh` from months earlier). Hence the
+refresh is pinned to the target tag, not to `main`.
+
 **The aggregator is always the dependency root.** Agent/companion can
 never be updated past the aggregator's own currently-running version —
 enforced server-side (not just hidden in the UI), specifically to avoid
