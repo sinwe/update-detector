@@ -553,6 +553,23 @@ with no restart and persist in `alert-settings.json` next to the
 registry (`GET/POST /admin/alert-settings`). `OFFLINE_ALERT_AFTER` now
 only seeds these two on first start.
 
+### Per-host notification bots
+
+Everything above assumes one Telegram bot for the whole fleet. If hosts
+belong to different people, `/admin/notifications` (linked as
+**🔔 Notifications** from the dashboard) gives each approved host its own
+bot token and chat ID, so an owner's alerts land in their chat and nobody
+else has to hand out the aggregator's bot. A host with an active own bot
+sends both its update and offline/recovery alerts there; a host without
+one falls back to the fleet-wide pair, and the aggregator stays silent
+about its *updates* so the agent's own diff-based notification is never
+duplicated. Config is keyed by agent ID (renaming a host keeps it), stored
+in `notify.json` beside the registry with mode `0600` because a bot token
+has to remain readable to be usable, and masked in the UI. Acquisition
+steps (BotFather for the token, `getUpdates` for the chat ID, negative IDs
+for groups) and the no-login caveat are on the page itself and in
+[Telegram notifications](integrations/telegram.md#per-host-bots-aggregator-notification-page).
+
 ## API reference
 
 Both services have an OpenAPI 3.0 spec — committed at `openapi/update-detector.yaml`

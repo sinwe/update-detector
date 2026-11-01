@@ -560,6 +560,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
     {{end}}
 
     <div class="links-row">
+      <a href="/admin/notifications">🔔 Notifications</a>
       <a href="/widgets/packages">All packages</a>
       <a href="/widgets/packages?security=true">Security only</a>
       <a href="/widgets/summary">Summary</a>

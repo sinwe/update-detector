@@ -62,6 +62,14 @@ type Server struct {
 	// (see AlertStore). The strip, the per-host dimming, and the watcher
 	// all read it; nil keeps the env-only behavior (tests).
 	alerts *AlertStore
+	// notifyStore, when non-nil, holds per-host Telegram targets (see
+	// NotifyStore) — the /admin/notifications page edits it and NotifyHost
+	// consults it before falling back to notifyMgr. Nil means every host
+	// uses the fleet-wide bot, exactly as before.
+	notifyStore *NotifyStore
+	// newTelegram builds the notifier for one token/chat pair. Swappable
+	// so tests can assert delivery without touching the network.
+	newTelegram func(botToken, chatID string) notifier.Notifier
 }
 
 func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
@@ -79,6 +87,9 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 		outputHub:        outputHub,
 		adminHub:         adminHub,
 		mux:              http.NewServeMux(),
+		newTelegram: func(botToken, chatID string) notifier.Notifier {
+			return notifier.NewTelegram(botToken, chatID)
+		},
 	}
 	s.mux.HandleFunc("/", s.handleRoot)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
@@ -92,6 +103,7 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 	s.mux.HandleFunc("/admin/events", s.handleAdminEvents)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/alert-settings", s.handleAdminAlertSettings)
+	s.mux.HandleFunc("/admin/notifications", s.handleAdminNotifications)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
 	s.mux.HandleFunc("/widgets/hosts", s.handleWidgetHosts)
@@ -339,6 +351,18 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the previous report before Report() overwrites it -- the diff
+	// for per-host update alerts needs both sides.
+	prevRec, hadPrev := s.registry.Get(agentID)
+	var previous *checker.Status
+	// Only a genuinely older report counts as "previous": an agent
+	// retrying the same report (identical CheckedAt) must not be diffed
+	// against itself, which would be a no-op anyway, and a replayed stale
+	// report must not become the baseline.
+	if hadPrev && prevRec.LastReport != nil && prevRec.LastReport.CheckedAt.Before(status.CheckedAt) {
+		previous = prevRec.LastReport
+	}
+
 	outcome, err := s.registry.Report(agentID, token, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -356,6 +380,11 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 			log.Printf("aggregator: recording contact address for %s: %v", agentID, err)
 		}
 		s.adminHub.Notify()
+		// Per-host update alerts, if this host has its own bot (see
+		// maybeNotifyUpdate) -- the diff runs off the request path.
+		if rec, ok := s.registry.Get(agentID); ok {
+			s.maybeNotifyUpdate(rec, previous, status)
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 	}
 }

@@ -81,6 +81,16 @@ func run(ctx context.Context) error {
 	log.Printf("self-update check enabled (channel=%s, interval=%s)",
 		cfg.SelfUpdateChannel, cfg.SelfUpdateCheckInterval)
 
+	// Per-host Telegram targets, editable from /admin/notifications. A
+	// missing file is fine (every host falls back to the fleet-wide bot
+	// above); the file holds live bot tokens, hence 0600 (see
+	// NotifyStore).
+	notifyStore := aggregator.NewNotifyStore(
+		filepath.Join(filepath.Dir(cfg.RegistryFile), "notify.json"))
+	if err := notifyStore.Load(); err != nil {
+		return err
+	}
+
 	hub := aggregator.NewCompanionHub()
 	outputHub := aggregator.NewOutputHub()
 	if alertStore.Get().Enabled {
@@ -88,8 +98,17 @@ func run(ctx context.Context) error {
 	} else {
 		log.Println("offline alerts disabled (fleet switch off — toggle in /admin)")
 	}
-	go aggregator.NewPresenceWatcher(registry, hub, notifyMgr, cfg.OfflineAlertAfter, alertStore).Run(ctx)
 	srv := aggregator.NewServer(ctx, registry, hub, notifyMgr, cfg.AdminApplySharedSecret, selfUpdateClient, outputHub)
+	srv.SetNotifyStore(notifyStore)
+	if n := len(notifyStore.Snapshot()); n > 0 {
+		log.Printf("per-host telegram: %d host(s) configured (see /admin/notifications)", n)
+	}
+
+	// The watcher routes each alert through the server so a host with its
+	// own bot gets its own message; set before Run to avoid racing it.
+	watcher := aggregator.NewPresenceWatcher(registry, hub, notifyMgr, cfg.OfflineAlertAfter, alertStore)
+	watcher.SetHostNotifier(srv)
+	go watcher.Run(ctx)
 
 	// The agents attach the button to their own update alerts, but only
 	// this process polls the bot for presses (Telegram delivers each

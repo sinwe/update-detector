@@ -277,8 +277,10 @@ paths:
       summary: Approval dashboard (HTML)
       description: >
         Lists agents by Pending/Approved/Rejected with Approve/Reject/Revoke
-        form actions. No authentication of its own — keep on a private
-        network or behind your own reverse-proxy auth.
+        form actions, a fleet-wide alert strip, and a 🔔 Notifications link
+        to the per-host Telegram settings page. No authentication of its
+        own — keep on a private network or behind your own reverse-proxy
+        auth.
       operationId: getAdminPage
       responses:
         "200":
@@ -533,6 +535,88 @@ paths:
           description: Empty body, or grace unparsable / out of range
         "501":
           description: Alert settings unavailable (no store attached)
+
+  /admin/notifications:
+    get:
+      summary: Per-host Telegram notification settings (HTML)
+      description: >
+        Lists every approved host with its own bot token and chat id, or a
+        "fleet default" badge when it has none. Also renders the
+        instructions for acquiring both values: the bot token comes from
+        @BotFather (an aggregator-admin job), the chat id from the bot's
+        getUpdates response after the host's own user presses Start (a
+        per-user job). Tokens are stored in a 0600 JSON file beside the
+        registry and are never rendered back in full — only the non-secret
+        bot id and the last four characters are shown. Same trust model as
+        the rest of /admin: no authentication of its own, so anyone who
+        can reach it can repoint a host's alerts.
+      operationId: getNotificationSettings
+      responses:
+        "200":
+          description: HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      summary: Save, test, or clear one host's Telegram target
+      description: >
+        Form-encoded (application/x-www-form-urlencoded) and
+        redirect-after-post, so the page works without JavaScript and a
+        reload never resubmits a token. A host with an active target gets
+        its own update and presence alerts through that bot; a host
+        without one keeps the fleet-wide TELEGRAM_BOT_TOKEN /
+        TELEGRAM_CHAT_ID delivery (or nothing, if those are unset). Each
+        event is delivered to exactly one place, never both.
+      operationId: setNotificationSettings
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [agent_id, action]
+              properties:
+                agent_id:
+                  type: string
+                  description: Agent id of an approved host (not the hostname)
+                action:
+                  type: string
+                  enum: [save, test, clear]
+                  description: >
+                    save stores the pair and persists the file; test sends a
+                    message right now through it and surfaces Telegram's own
+                    error; clear forgets it, returning the host to the
+                    fleet-wide bot.
+                bot_token:
+                  type: string
+                  description: >
+                    BotFather token, "<bot-id>:<secret>". Blank on save keeps
+                    the stored token, since the page only ever shows a mask.
+                chat_id:
+                  type: string
+                  description: >
+                    Numeric chat id; negative for groups, supergroups, and
+                    channels (e.g. -1001234567890).
+                enabled:
+                  type: string
+                  description: >
+                    Present when checked. An unchecked save keeps the token
+                    and chat id but pauses delivery, so the host falls back to
+                    the fleet-wide bot.
+      responses:
+        "303":
+          description: >
+            Redirect back to /admin/notifications, carrying the outcome as
+            ?ok= (success) or ?err= (validation or Telegram failure).
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description: Unparsable form body
+        "501":
+          description: Per-host notifications unavailable (no store attached)
 
   /admin/agents/{id}/self-update:
     post:

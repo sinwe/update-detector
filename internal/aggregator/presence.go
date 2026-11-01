@@ -68,6 +68,11 @@ type PresenceWatcher struct {
 	// minute with no restart. Nil keeps the legacy env-only behavior.
 	alerts *AlertStore
 
+	// hostNotify, when set (see SetHostNotifier), routes each event
+	// through the per-host/fleet-wide choice instead of straight to
+	// notifyMgr. Nil keeps the legacy behavior for tests.
+	hostNotify HostNotifier
+
 	mu     sync.Mutex
 	states map[string]*presenceState
 
@@ -194,19 +199,34 @@ func (w *PresenceWatcher) checkOnce(ctx context.Context) {
 // keeps the update-specific trailer out of what's purely a
 // connectivity message.
 func (w *PresenceWatcher) send(ctx context.Context, rec AgentRecord, title, change string) {
-	if w.notifyMgr == nil {
-		return
-	}
 	var status checker.Status
 	if rec.LastReport != nil {
 		status = *rec.LastReport
 	}
 	log.Printf("presence: %s %s", rec.Hostname, title)
-	w.notifyMgr.Send(ctx, notifier.Event{
+	ev := notifier.Event{
 		Hostname: rec.Hostname,
 		Title:    title,
 		Status:   status,
 		Changes:  []string{change},
 		Brief:    true,
-	})
+	}
+	// Per-host bots win over the fleet-wide one, and a host with neither
+	// still logs above. Only fall through to notifyMgr when nothing
+	// per-host is wired (tests, or a server that never set a store).
+	if w.hostNotify != nil {
+		w.hostNotify.NotifyHost(ctx, rec, ev)
+		return
+	}
+	if w.notifyMgr == nil {
+		return
+	}
+	w.notifyMgr.Send(ctx, ev)
+}
+
+// SetHostNotifier routes presence alerts through the per-host/fleet-wide
+// choice. Must be called before Run to avoid racing the watcher's own
+// reads.
+func (w *PresenceWatcher) SetHostNotifier(h HostNotifier) {
+	w.hostNotify = h
 }
