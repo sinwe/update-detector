@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -99,8 +100,13 @@ func TestNotifyStoreRoundTripAndMasking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("notify.json mode = %o, want 600", perm)
+	// Windows has no Unix permission bits -- os.Chmod there only toggles
+	// the read-only attribute, so a 0666-looking mode is expected and the
+	// 0600 guarantee is only assertable where the platform honors it.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("notify.json mode = %o, want 600", perm)
+		}
 	}
 
 	// Incomplete entries are refused rather than silently stored.
