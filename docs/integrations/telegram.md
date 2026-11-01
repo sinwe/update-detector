@@ -58,11 +58,12 @@ purpose:
   (`-1001234567890`). DMing [@userinfobot](https://t.me/userinfobot) also
   reports a personal user ID, which works as a chat ID for DMs.
 
-Paste both into that host's card, tick the box, press **Send test** — the
-message goes out immediately and a failure (wrong token, bot never
-started, wrong chat) comes back as Telegram's own error instead of
-silently doing nothing until the next update. **Save** persists it;
-**Clear** forgets it and returns the host to the fleet-wide bot. Leaving
+Paste both into that host's card, tick the box, press **Send test** — it
+saves the pair *and* delivers a message immediately, so a failure (wrong
+token, bot never started, wrong chat) comes back as Telegram's own error
+instead of silently doing nothing until the next update, and the values
+stay in the form either way. **Save** stores them without sending;
+**Clear** forgets them and returns the host to the fleet-wide bot. Leaving
 the token field blank on save keeps the stored token, since the page only
 ever shows a mask (`8891668888:…w2lE`) — that way an owner can fix a chat
 ID without being handed the secret again.

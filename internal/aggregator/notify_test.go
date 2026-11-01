@@ -322,6 +322,20 @@ func TestNotificationsSaveTestAndClear(t *testing.T) {
 	if _, ok := store.Get("a1"); ok {
 		t.Fatal("clear should have removed the config")
 	}
+
+	// Test on an unconfigured host persists the values: the page has no
+	// client-side state, so a test that didn't save would throw away
+	// everything just typed when the redirect re-rendered.
+	rec = doForm(t, s, url.Values{
+		"agent_id": {"a1"}, "action": {"test"},
+		"bot_token": {"987654321:other"}, "chat_id": {"7"}, "enabled": {"on"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("test: status %d", rec.Code)
+	}
+	if cfg, ok := store.Get("a1"); !ok || cfg.BotToken != "987654321:other" || cfg.ChatID != "7" || !cfg.Active() {
+		t.Fatalf("test should have saved the typed values, got %#v (present=%v)", cfg, ok)
+	}
 }
 
 func TestNotificationsRejectsUnknownHost(t *testing.T) {

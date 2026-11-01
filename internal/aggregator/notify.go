@@ -222,6 +222,17 @@ func (s *Server) handleNotificationsPost(w http.ResponseWriter, r *http.Request)
 			s.redirectNotify(w, r, "", rec.Hostname+": "+err.Error())
 			return
 		}
+		// Persist before sending. A test used to be read-only, but the
+		// page has no client-side state to restore: the redirect that
+		// follows re-renders from the store, so everything typed so far
+		// vanished unless the operator had pressed Save first (reported
+		// live: "Send test" wiped a freshly pasted token and chat id).
+		// Saving first keeps the values -- and is what an operator wants
+		// anyway once the test passes.
+		if err := s.notifyStore.Set(agentID, cfg); err != nil {
+			s.redirectNotify(w, r, "", rec.Hostname+": "+err.Error())
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), notifySendTimeout)
 		defer cancel()
 		ev := notifier.Event{
@@ -231,10 +242,13 @@ func (s *Server) handleNotificationsPost(w http.ResponseWriter, r *http.Request)
 			Brief:    true,
 		}
 		if err := s.newTelegram(cfg.BotToken, cfg.ChatID).Send(ctx, ev); err != nil {
-			s.redirectNotify(w, r, "", rec.Hostname+": test failed: "+err.Error())
+			// Saved, but undeliverable -- say both, rather than implying
+			// the values were rejected.
+			s.redirectNotify(w, r, rec.Hostname+": saved",
+				"test failed: "+err.Error())
 			return
 		}
-		s.redirectNotify(w, r, rec.Hostname+": test message sent", "")
+		s.redirectNotify(w, r, rec.Hostname+": saved and test message sent", "")
 	default:
 		s.redirectNotify(w, r, "", "unknown action")
 	}

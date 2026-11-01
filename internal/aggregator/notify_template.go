@@ -169,8 +169,9 @@ const notifyTemplateSrc = `<!DOCTYPE html>
       <h3>3. Save and test</h3>
       <p class="note">
         Paste both values below, tick the box, then press <strong>Send test</strong> —
-        it delivers immediately and reports Telegram's own error if something is
-        wrong, without waiting for a real update event.
+        it saves them first, then delivers immediately and reports Telegram's own
+        error if something is wrong, without waiting for a real update event. Nothing
+        is lost if you test before pressing <strong>Save</strong>.
       </p>
 
       <h3>Security</h3>
