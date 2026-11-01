@@ -1255,8 +1255,15 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-  install_unit update-detector-companion
+  # Cache the script BEFORE the restart: under self-update the unit being
+  # restarted is this script's own parent, so install_unit's restart
+  # cancels the companion's context and exec.CommandContext then kills
+  # this script -- anything after that line silently never runs. That is
+  # exactly how the cached copy got stuck on an old revision (confirmed
+  # live: a Mac mini kept re-running a months-old install.sh, so every
+  # self-update kept rewriting the old plists).
   cache_install_sh_for_companion
+  install_unit update-detector-companion
   echo "install.sh: done. Check status with: systemctl status update-detector-companion"
 }
 
@@ -1391,6 +1398,16 @@ install_companion_launchd() {
 EOF
   chmod 0644 "$plist_path"
 
+  # Cache the script BEFORE the restart below: during a self-update the
+  # daemon being restarted is this script's own parent, so the restart
+  # cancels the companion's context and exec.CommandContext kills this
+  # script -- everything after it (including the cache refresh, which
+  # used to sit at the very end) silently never ran. Confirmed live: a
+  # Mac mini kept re-running a months-old install.sh and rewriting the
+  # old plists on every self-update, so a launchd fix could never reach
+  # it through self-update at all.
+  cache_install_sh_for_companion
+
   if [ -n "${SELF_UPDATE_INVOCATION:-}" ]; then
     # Same function runs during companion self-update, where this
     # script's own parent IS this daemon: bootout-first would kill this
@@ -1405,7 +1422,6 @@ EOF
   else
     launchd_reload "$plist_label" "$plist_path"
   fi
-  cache_install_sh_for_companion
   echo "install.sh: done. The companion pairs through the agent -- it should show as connected on /admin shortly."
 }
 
