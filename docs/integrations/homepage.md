@@ -65,6 +65,15 @@ security updates. `security` is best-effort per-package (derived from
 `-security` appearing in the package's origin/pocket) — the authoritative
 count per host is still `packages.upgradable_security`.
 
+**Container health:** both images ship a Docker `HEALTHCHECK` that polls
+`GET /healthz`, so Homepage's Docker integration (and `docker ps` /
+`docker inspect`) report the container as healthy/unhealthy. As with Gatus,
+`/healthz` means "the process is up", not "the host is fully patched" —
+use `/status`'s `ok` field (or the `packages.upgradable_total` mapping)
+for the latter. The compose files also carry `homepage.*` labels for
+auto-discovery; set `homepage.href` in your own copy if you want Homepage
+to link to a specific host URL.
+
 **Known limitations:** the `/admin` page and `/widgets/*` endpoints have no
 authentication of their own — same trust model as the rest of this project
 (agent `/status`, Gatus polling): keep the aggregator on a private network or

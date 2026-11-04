@@ -21,4 +21,10 @@ COPY --from=builder /out/update-aggregator /usr/local/bin/update-aggregator
 
 USER update-aggregator
 EXPOSE 8080
+
+# Liveness probe for Docker (and Homepage's Docker integration). /healthz
+# on the aggregator reports process liveness only.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8080/healthz >/dev/null 2>&1 || exit 1
+
 ENTRYPOINT ["/usr/local/bin/update-aggregator"]

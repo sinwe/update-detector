@@ -15,6 +15,11 @@ services:
     # the companion owns updates here, not any external watcher.
     labels:
       - "wud.watch=false"
+      # Homepage (gethomepage.dev) Docker auto-discovery; health comes from
+      # the image's HEALTHCHECK (see Dockerfile.aggregator).
+      - "homepage.group=Infrastructure"
+      - "homepage.name=Update Aggregator"
+      - "homepage.icon=mdi-server-network"
     # For real deploys: `docker compose pull && docker compose up -d` uses
     # this published image (built by .github/workflows/release.yml on
     # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d

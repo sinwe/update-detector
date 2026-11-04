@@ -7,6 +7,15 @@ services:
     # images out from under us. Confirmed live against WUD.
     labels:
       - "wud.watch=false"
+      # Homepage (gethomepage.dev) Docker auto-discovery. Health comes from
+      # the image's HEALTHCHECK (see Dockerfile), so Homepage shows this
+      # container as healthy/unhealthy without extra config. Uncomment and
+      # set HOMEPAGE_HREF to the URL Homepage should link to (e.g.
+      # http://host:8080) if you want Homepage to discover this service
+      # automatically instead of configuring it in services.yaml.
+      - "homepage.group=Infrastructure"
+      - "homepage.name=Update Detector"
+      - "homepage.icon=mdi-update"
     # For real deploys: `docker compose pull && docker compose up -d` uses
     # this published image (built by .github/workflows/release.yml on
     # every `vX.Y.Z` tag). For local dev/testing: `docker compose up -d

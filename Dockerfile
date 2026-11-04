@@ -26,6 +26,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       apt \
+      curl \
       update-notifier-common \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,4 +43,12 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # before exec'ing the actual binary, which is what actually runs for the
 # life of the container.
 EXPOSE 8080
+
+# Liveness probe for Docker (and Homepage's Docker integration, which
+# surfaces this as the container's health state): /healthz reports process
+# liveness only, so a green check means "the agent is up", not "the host
+# is fully patched" -- that's /status's `ok` field instead.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl -fsS http://localhost:8080/healthz >/dev/null || exit 1
+
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
