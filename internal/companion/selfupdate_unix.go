@@ -3,8 +3,12 @@
 package companion
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +48,69 @@ var installShPath = "/usr/local/lib/update-detector/install.sh"
 // var, not a const, purely so tests can point it at a temp dir.
 var envFileDir = "/etc/default"
 
+// installShRawBase is where a per-release install.sh is fetched from --
+// a var, not a const, so tests can point it at a local server.
+var installShRawBase = "https://raw.githubusercontent.com/sinwe/update-detector"
+
+// refreshInstallShFunc is refreshInstallSh, a package var so the test
+// binary never touches the network.
+var refreshInstallShFunc = refreshInstallSh
+
+// refreshInstallSh replaces the cached install.sh with the copy from
+// targetVersion's own tag, right before that version's install runs.
+//
+// install.sh already re-caches itself, but only once it is new enough to
+// do so before its own restart step (see its cache_install_sh_for_companion
+// call sites) -- and a host whose cache predates that ordering can never
+// heal, because the stale script it runs has the refresh in the wrong
+// place, or no refresh at all. Confirmed live: a NUC and a Raspberry Pi
+// were still running install.sh from months earlier, so no later fix
+// could ever reach them through self-update, and a Mac mini kept
+// rewriting old launchd plists for the same reason.
+//
+// Best-effort: the caller logs and falls back to the cached copy, since a
+// host with no egress should still be able to self-update from what it
+// already has.
+func refreshInstallSh(ctx context.Context, targetVersion string) error {
+	if targetVersion == "" {
+		return fmt.Errorf("no target version to fetch install.sh for")
+	}
+	url := installShRawBase + "/" + targetVersion + "/install.sh"
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	// install.sh sets this too; some corporate proxies filter on it.
+	req.Header.Set("User-Agent", "update-detector-install.sh")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	// A captive portal or proxy can answer 200 with an HTML page; refuse
+	// to overwrite a working script with something that isn't one.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if !bytes.HasPrefix(data, []byte("#!")) {
+		return fmt.Errorf("%s: response is not a shell script", url)
+	}
+	tmp := installShPath + ".new"
+	if err := os.WriteFile(tmp, data, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
+	}
+	return os.Rename(tmp, installShPath)
+}
+
 // installNative re-invokes install.sh non-interactively to update
 // component to targetVersion. Passes the component's *existing*
 // configuration through as env vars first -- install_agent_native and
@@ -55,6 +122,14 @@ var envFileDir = "/etc/default"
 // wiped a configured ADMIN_APPLY_SHARED_SECRET clean off an aggregator
 // it had just updated.
 func installNative(ctx context.Context, component, targetVersion string) error {
+	// Refresh the script from the release being installed before running
+	// it: the cached copy may predate a fix this very self-update needs,
+	// and a stale cache cannot heal itself (see refreshInstallSh).
+	// Best-effort -- an offline host still updates from its cached copy.
+	if err := refreshInstallShFunc(ctx, targetVersion); err != nil {
+		log.Printf("selfupdate: could not refresh %s for %s, using the cached copy: %v",
+			installShPath, targetVersion, err)
+	}
 	cmd := exec.CommandContext(ctx, "sh", installShPath)
 	cmd.Env = append(append(os.Environ(), existingConfigEnv(component)...),
 		"INSTALL_COMPONENTS="+component,
@@ -160,4 +235,3 @@ func readEnvFile(path string) map[string]string {
 	}
 	return values
 }
-

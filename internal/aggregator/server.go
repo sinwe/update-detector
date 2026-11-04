@@ -62,6 +62,14 @@ type Server struct {
 	// (see AlertStore). The strip, the per-host dimming, and the watcher
 	// all read it; nil keeps the env-only behavior (tests).
 	alerts *AlertStore
+	// notifyStore, when non-nil, holds per-host Telegram targets (see
+	// NotifyStore) — the /admin/notifications page edits it and NotifyHost
+	// consults it before falling back to notifyMgr. Nil means every host
+	// uses the fleet-wide bot, exactly as before.
+	notifyStore *NotifyStore
+	// newTelegram builds the notifier for one token/chat pair. Swappable
+	// so tests can assert delivery without touching the network.
+	newTelegram func(botToken, chatID string) notifier.Notifier
 }
 
 func NewServer(shutdownCtx context.Context, registry *Registry, hub *CompanionHub, notifyMgr *notifier.Manager, adminApplySecret string, selfUpdate *selfupdate.Client, outputHub *OutputHub) *Server {
@@ -79,6 +87,9 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 		outputHub:        outputHub,
 		adminHub:         adminHub,
 		mux:              http.NewServeMux(),
+		newTelegram: func(botToken, chatID string) notifier.Notifier {
+			return notifier.NewTelegram(botToken, chatID)
+		},
 	}
 	s.mux.HandleFunc("/", s.handleRoot)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
@@ -92,6 +103,7 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 	s.mux.HandleFunc("/admin/events", s.handleAdminEvents)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
 	s.mux.HandleFunc("/admin/alert-settings", s.handleAdminAlertSettings)
+	s.mux.HandleFunc("/admin/notifications", s.handleAdminNotifications)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
 	s.mux.HandleFunc("/widgets/summary", s.handleWidgetSummary)
 	s.mux.HandleFunc("/widgets/hosts", s.handleWidgetHosts)
@@ -339,6 +351,18 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the previous report before Report() overwrites it -- the diff
+	// for per-host update alerts needs both sides.
+	prevRec, hadPrev := s.registry.Get(agentID)
+	var previous *checker.Status
+	// Only a genuinely older report counts as "previous": an agent
+	// retrying the same report (identical CheckedAt) must not be diffed
+	// against itself, which would be a no-op anyway, and a replayed stale
+	// report must not become the baseline.
+	if hadPrev && prevRec.LastReport != nil && prevRec.LastReport.CheckedAt.Before(status.CheckedAt) {
+		previous = prevRec.LastReport
+	}
+
 	outcome, err := s.registry.Report(agentID, token, status)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -356,6 +380,11 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 			log.Printf("aggregator: recording contact address for %s: %v", agentID, err)
 		}
 		s.adminHub.Notify()
+		// Per-host update alerts, if this host has its own bot (see
+		// maybeNotifyUpdate) -- the diff runs off the request path.
+		if rec, ok := s.registry.Get(agentID); ok {
+			s.maybeNotifyUpdate(rec, previous, status)
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 	}
 }
@@ -550,7 +579,7 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 		if err := s.hub.Push(rec.ID, swapAction); err != nil {
 			log.Printf("handleCompanionResult: failed to push ActionCompleteCompanionSwap for %s: %v", rec.ID, err)
 		} else {
-			s.outputHub.Begin(rec.ID, swapAction.ID)
+			s.beginAgentOutput(rec.ID, swapAction.ID)
 		}
 	}
 
@@ -663,9 +692,14 @@ func (s *Server) handleCompanionStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminEvents is the SSE endpoint the admin page holds open to get
-// live registry updates (enroll/report/approve). Any event means
-// "something changed" - the client reloads. Mirrors handleAdminOutputStream
-// shape (flusher, heartbeat, context-done) but subscribes to adminHub.
+// push events. Two event shapes flow through it: "registry" means
+// "something changed -- reload" (enroll/report/approve, friend/foe
+// presence), while "action" carries {agent_id, action_id} for an action
+// now in flight whose push source was outside the page (Telegram
+// apply-all button, apply API, self-update, another tab) -- openLiveOutput
+// in templates.go opens that host's live console instead of reloading.
+// Mirrors handleAdminOutputStream's shape (flusher, heartbeat,
+// context-done) but subscribes to adminHub.
 func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -680,6 +714,13 @@ func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
+	// Defense in depth for reverse proxies (the updater.winar.to vhost
+	// already sets proxy_buffering off for this server): nginx and friends
+	// buffer proxy responses by default, which would hold SSE frames back
+	// until a buffer fills or the connection ends -- the browser would
+	// then only ever see pushes via its fallback polling instead of the
+	// immediate push this endpoint exists for.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
@@ -699,12 +740,36 @@ func (s *Server) handleAdminEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case <-ch:
-			if _, err := io.WriteString(w, "event: registry\ndata: {}\n\n"); err != nil {
+		case ch_event := <-ch:
+			if err := writeAdminEvent(w, ch_event); err != nil {
 				return
 			}
 			flusher.Flush()
 		}
+	}
+}
+
+// writeAdminEvent writes one SSE frame on the admin events stream, in the
+// exact shape a browser's EventSource listeners expect (see
+// connectAdminStream in templates.go): "event: registry" (empty JSON body)
+// means reload; "event: action" carries {agent_id, action_id} for an
+// action now in flight, handled by opening that host's live console.
+// Split from handleAdminEvents so the frame format is unit-testable.
+func writeAdminEvent(w io.Writer, ev adminEvent) error {
+	switch ev.Kind {
+	case adminEventAction:
+		data, err := json.Marshal(struct {
+			AgentID  string `json:"agent_id"`
+			ActionID string `json:"action_id"`
+		}{ev.AgentID, ev.ActionID})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(w, "event: action\ndata: %s\n\n", data)
+		return err
+	default:
+		_, err := io.WriteString(w, "event: registry\ndata: {}\n\n")
+		return err
 	}
 }
 
@@ -723,6 +788,10 @@ func (s *Server) handleAdminOutputStream(w http.ResponseWriter, r *http.Request,
 	defer cancel()
 
 	w.Header().Set("Content-Type", "text/event-stream")
+	// Same proxy-buffering rationale as handleAdminEvents: this console
+	// stream must reach the browser as lines happen, not whenever a proxy
+	// buffer happens to fill.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
@@ -992,9 +1061,24 @@ func (s *Server) PushApply(id string, t ActionType, packages []string) (actionID
 	if err := s.hub.Push(id, action); err != nil {
 		return "", "", err
 	}
-	s.outputHub.Begin(id, action.ID)
+	s.beginAgentOutput(id, action.ID)
 
 	return action.ID, rec.Hostname, nil
+}
+
+// beginAgentOutput marks actionID as agentID's in-flight live output and
+// tells every open admin page a new action just started -- including ones
+// pushed from outside the browser (Telegram apply-all button, the
+// secret-gated apply endpoint, self-updates, another tab): an open page
+// can open that host's live console the moment the action is pushed,
+// instead of waiting for its next reload to re-derive the pane state.
+// Every outputHub.Begin call site goes through this so no push source can
+// forget the notification half.
+func (s *Server) beginAgentOutput(agentID, actionID string) {
+	s.outputHub.Begin(agentID, actionID)
+	if s.adminHub != nil {
+		s.adminHub.NotifyAction(agentID, actionID)
+	}
 }
 
 type recheckRequest struct {
@@ -1033,7 +1117,7 @@ func (s *Server) handleAdminRecheck(w http.ResponseWriter, r *http.Request, id s
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.outputHub.Begin(id, action.ID)
+	s.beginAgentOutput(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }
@@ -1182,7 +1266,7 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.outputHub.Begin(id, action.ID)
+	s.beginAgentOutput(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
 }

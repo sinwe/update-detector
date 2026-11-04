@@ -27,7 +27,7 @@ fi
 deadline=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   # Fail fast on a red workflow run for this tag.
-  run_json="$(curl -sS --max-time 30 "${auth_args[@]}" \
+  run_json="$(curl -sS --max-time 30 ${auth_args[@]+"${auth_args[@]}"} \
     "$API/actions/runs?event=push&per_page=10" || true)"
   conclusion="$(echo "$run_json" | jq -r \
     --arg tag "$TAG" '[.workflow_runs[]? | select(.head_branch == $tag)] | .[0] | "\(.status // "?")/\(.conclusion // "?")"' 2>/dev/null || echo "?/?")"
@@ -39,7 +39,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   esac
 
   # Release published? (created last in the workflow, after the images)
-  rel_json="$(curl -sS --max-time 30 "${auth_args[@]}" -o /dev/null -w "%{http_code}" \
+  rel_json="$(curl -sS --max-time 30 ${auth_args[@]+"${auth_args[@]}"} -o /dev/null -w "%{http_code}" \
     "$API/releases/tags/$TAG" || echo 000)"
   if [ "$rel_json" = "200" ]; then
     echo "release $TAG is published"

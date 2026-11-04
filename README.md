@@ -99,7 +99,11 @@ polling/`visibilitychange` fallback) so agent reports appear without manual
 refresh, and shows `Agent offline`/`Companion offline`/`Host offline`
 (both down → powered off) with last-seen timestamps. Installing the
 companion (also above, on each agent host) adds push-button apply and
-self-update from that same page. Full walkthrough — security model, apply
+self-update from that same page. **🔔 Notifications** on that page gives
+each host its own Telegram bot token + chat ID, so hosts owned by
+different people notify different chats — see [per-host
+bots](docs/integrations/telegram.md#per-host-bots-aggregator-notification-page).
+Full walkthrough — security model, apply
 mechanics, upgrade-vs-full-upgrade, self-update — in [Technical
 reference](docs/reference.md#triggering-updates-companion).
 

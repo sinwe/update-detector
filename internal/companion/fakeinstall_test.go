@@ -3,6 +3,7 @@
 package companion
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,5 +29,10 @@ exit ` + strconv.Itoa(exitCode) + `
 	}
 	orig := installShPath
 	installShPath = path
-	t.Cleanup(func() { installShPath = orig })
+	// installNative refreshes the cached script from the target release
+	// first; stub that out so the test binary never touches the network
+	// (the refresh itself is covered by selfupdate_refresh_test.go).
+	origRefresh := refreshInstallShFunc
+	refreshInstallShFunc = func(context.Context, string) error { return nil }
+	t.Cleanup(func() { installShPath, refreshInstallShFunc = orig, origRefresh })
 }

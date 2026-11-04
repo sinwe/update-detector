@@ -468,6 +468,18 @@ against the exact compose file/working directory Docker Compose itself
 recorded when the container was created (so it respects whatever `.env`,
 volumes, etc. you're actually running).
 
+Native components are updated by re-running `install.sh`, so a companion
+keeps a cached copy of that script under
+`/usr/local/lib/update-detector/`. Before invoking it, the companion
+fetches the copy from the release tag it is installing and swaps it in,
+falling back to the cached one if that download fails. This matters
+because that script is what writes the systemd unit / launchd plist and
+the env file: a cache frozen at an old revision silently re-applies old
+settings on every self-update — confirmed live, where hosts that had
+never re-cached kept rewriting pre-shim launchd plists (and two hosts
+were still running an `install.sh` from months earlier). Hence the
+refresh is pinned to the target tag, not to `main`.
+
 **The aggregator is always the dependency root.** Agent/companion can
 never be updated past the aggregator's own currently-running version —
 enforced server-side (not just hidden in the UI), specifically to avoid
@@ -552,6 +564,23 @@ select changes the grace period (1m–24h). Both apply within a minute
 with no restart and persist in `alert-settings.json` next to the
 registry (`GET/POST /admin/alert-settings`). `OFFLINE_ALERT_AFTER` now
 only seeds these two on first start.
+
+### Per-host notification bots
+
+Everything above assumes one Telegram bot for the whole fleet. If hosts
+belong to different people, `/admin/notifications` (linked as
+**🔔 Notifications** from the dashboard) gives each approved host its own
+bot token and chat ID, so an owner's alerts land in their chat and nobody
+else has to hand out the aggregator's bot. A host with an active own bot
+sends both its update and offline/recovery alerts there; a host without
+one falls back to the fleet-wide pair, and the aggregator stays silent
+about its *updates* so the agent's own diff-based notification is never
+duplicated. Config is keyed by agent ID (renaming a host keeps it), stored
+in `notify.json` beside the registry with mode `0600` because a bot token
+has to remain readable to be usable, and masked in the UI. Acquisition
+steps (BotFather for the token, `getUpdates` for the chat ID, negative IDs
+for groups) and the no-login caveat are on the page itself and in
+[Telegram notifications](integrations/telegram.md#per-host-bots-aggregator-notification-page).
 
 ## API reference
 
