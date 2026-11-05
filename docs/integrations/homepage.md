@@ -36,6 +36,7 @@ Homepage "Custom API" widgets:
         widget:
           type: customapi
           url: http://aggregator-host:9090/widgets/summary
+          status: http://aggregator-host:9090/healthz
           mappings:
             - field: hosts_ok
               label: Hosts OK
@@ -46,6 +47,7 @@ Homepage "Custom API" widgets:
         widget:
           type: customapi
           url: http://aggregator-host:9090/widgets/hosts/web01
+          status: http://aggregator-host:9090/healthz
           mappings:
             - field: packages.upgradable_total
               label: Upgradable
@@ -73,6 +75,17 @@ use `/status`'s `ok` field (or the `packages.upgradable_total` mapping)
 for the latter. The compose files also carry `homepage.*` labels for
 auto-discovery; set `homepage.href` in your own copy if you want Homepage
 to link to a specific host URL.
+
+**Status dot:** Homepage's service card pings the service's `href` (or an
+explicit `status` URL) for its green/red dot. The aggregator's root path
+(`/`) redirects to `/admin` (HTTP 303), which Homepage reads as "down",
+so a card whose `href` is the aggregator root shows grey/red even when
+everything is healthy. Point the dot at the liveness endpoint instead by
+adding `status: http://aggregator-host:9090/healthz` to each service
+entry (the widget URL stays on `/widgets/*`). The image also ships a
+Docker `HEALTHCHECK` against `/healthz`, so a Homepage service that uses
+the Docker integration (`server:` + `container:`) shows the container's
+health directly.
 
 **Known limitations:** the `/admin` page and `/widgets/*` endpoints have no
 authentication of their own — same trust model as the rest of this project
