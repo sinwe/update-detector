@@ -32,10 +32,16 @@ Check an item off when its change is committed on this branch.
   — `install_unit` does enable + restart and never checks the service
   stayed up or that `/status` answers. Wait briefly, then `curl
   localhost:8080/status` and report the upgradable counts.
-- [ ] **4. Check the aggregator URL is reachable during agent install**
+- [x] **4. Check the aggregator URL is reachable during agent install**
   — the companion install already does this (best-effort `curl` of
   `$agg_url/openapi.yaml` with a warning); the agent install doesn't,
-  so the user only finds out from agent logs later.
+  so the user only finds out from agent logs later. Done: new shared
+  helper `warn_if_aggregator_unreachable`, called in all three agent
+  install paths (native, Docker, macOS) right after the URL is resolved;
+  same curl probe and non-fatal wording as the companion, naming the file
+  holding the URL. Unreachable URL warns and the install continues
+  (exit 0, service active); reachable URL stays silent. Verified live on
+  this VM 8 Nov 2026.
 - [ ] **5. Offer Telegram setup instead of env-vars-only** —
   `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are never prompted for; a new
   user gets no notifications and only learns why from a log line. One
