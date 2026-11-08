@@ -22,11 +22,20 @@ func writeFakeDebsecan(t *testing.T, body string) string {
 
 func TestDetectParsesCVEsAndCounts(t *testing.T) {
 	writeFakeDebsecan(t, `cat <<'EOF'
-CVE-2024-0001  openssl  (critical)
-CVE-2024-0002  curl  (high)
-CVE-2024-0003  bash  (medium)
-CVE-2024-0004  vim  (low)
-CVE-2024-0005  zlib  (high)
+CVE-2024-0001 something
+  - openssl (critical urgency)
+
+CVE-2024-0002 something
+  - curl (high urgency)
+
+CVE-2024-0003 something
+  - bash (medium urgency)
+
+CVE-2024-0004 something
+  - vim (low urgency)
+
+CVE-2024-0005 something
+  - zlib (high urgency)
 EOF`)
 	det, err := New(Config{Command: "debsecan"})
 	if err != nil {
@@ -69,8 +78,11 @@ func TestDetectMissingBinary(t *testing.T) {
 
 func TestDetectDedupesCVEs(t *testing.T) {
 	writeFakeDebsecan(t, `cat <<'EOF'
-CVE-2024-0001  openssl  (high)
-CVE-2024-0001  openssl  (high)
+CVE-2024-0001 something
+  - openssl (high urgency)
+
+CVE-2024-0001 something
+  - openssl (high urgency)
 EOF`)
 	det, _ := New(Config{Command: "debsecan"})
 	info, err := det.Detect(context.Background(), nil)

@@ -79,8 +79,10 @@ func New(cfg Config) (*Checker, error) {
 	c := &Checker{cfg: cfg, aptConfigPath: confPath}
 	if cfg.CVECommand != "" {
 		det, err := cve.New("debian", cve.Fields{
-			"suite":       cfg.CVESuite,
-			"cve_command": cfg.CVECommand,
+			"suite":            cfg.CVESuite,
+			"dpkg_status_file": cfg.DpkgStatusFile,
+			"os_release_file":  cfg.OSReleaseFile,
+			"cve_command":      cfg.CVECommand,
 		})
 		if err == nil {
 			c.cveDetector = det

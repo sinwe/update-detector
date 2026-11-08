@@ -9,10 +9,10 @@
 package debian
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -28,16 +28,20 @@ var ErrNoScanner = fmt.Errorf("no vulnerability scanner found (tried debsecan, t
 func init() {
 	cve.Register("debian", func(f cve.Fields) (cve.Detector, error) {
 		return New(Config{
-			Suite:     f["suite"],
-			Scanners:  f["scanners"],
-			Command:   f["cve_command"],
+			Suite:          f["suite"],
+			DpkgStatusFile: f["dpkg_status_file"],
+			OSReleaseFile:  f["os_release_file"],
+			Scanners:       f["scanners"],
+			Command:        f["cve_command"],
 		})
 	})
 	cve.Register("ubuntu", func(f cve.Fields) (cve.Detector, error) {
 		return New(Config{
-			Suite:     f["suite"],
-			Scanners:  f["scanners"],
-			Command:   f["cve_command"],
+			Suite:          f["suite"],
+			DpkgStatusFile: f["dpkg_status_file"],
+			OSReleaseFile:  f["os_release_file"],
+			Scanners:       f["scanners"],
+			Command:        f["cve_command"],
 		})
 	})
 }
@@ -45,7 +49,15 @@ func init() {
 // Config configures the composite detector.
 type Config struct {
 	// Suite is the Debian/Ubuntu release codename (e.g. "trixie", "noble").
+	// Empty auto-detects from OSReleaseFile.
 	Suite string
+	// DpkgStatusFile is the host's dpkg status file (mounted read-only
+	// into the agent container at /host/var/lib/dpkg/status). debsecan
+	// scans this instead of the container's own package set.
+	DpkgStatusFile string
+	// OSReleaseFile is the host's os-release (mounted read-only). Used to
+	// auto-detect Suite when Suite is empty.
+	OSReleaseFile string
 	// Scanners is a comma-separated list of scanner names to try, in order.
 	// Defaults to "debsecan,trivy,osv-scanner". Empty disables detection.
 	Scanners string
@@ -74,6 +86,17 @@ func New(cfg Config) (*Detector, error) {
 			list = append(list, s)
 		}
 	}
+	// Auto-detect suite from the host's os-release when not pinned.
+	if cfg.Suite == "" && cfg.OSReleaseFile != "" {
+		if raw, err := os.ReadFile(cfg.OSReleaseFile); err == nil {
+			for _, line := range strings.Split(string(raw), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "VERSION_CODENAME=") {
+					cfg.Suite = strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"")
+				}
+			}
+		}
+	}
 	return &Detector{cfg: cfg, scanners: list}, nil
 }
 
@@ -88,7 +111,7 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 	}
 	var lastErr error
 	for _, name := range d.scanners {
-		info, err := runScanner(ctx, name, d.cfg.Suite)
+		info, err := runScanner(ctx, name, d.cfg.Suite, d.cfg.DpkgStatusFile)
 		if err == nil {
 			info.Scanner = name
 			info.Items = capItems(info.Items)
@@ -108,10 +131,10 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 	return checker.VulnerabilityInfo{}, lastErr
 }
 
-func runScanner(ctx context.Context, name, suite string) (checker.VulnerabilityInfo, error) {
+func runScanner(ctx context.Context, name, suite, statusFile string) (checker.VulnerabilityInfo, error) {
 	switch name {
 	case "debsecan":
-		return runDebsecan(ctx, suite)
+		return runDebsecan(ctx, suite, statusFile)
 	case "trivy":
 		return runTrivy(ctx)
 	case "osv-scanner", "osv":
@@ -126,48 +149,20 @@ func runScanner(ctx context.Context, name, suite string) (checker.VulnerabilityI
 
 var cveIDRE = regexp.MustCompile(`CVE-\d{4}-\d+`)
 
-func runDebsecan(ctx context.Context, suite string) (checker.VulnerabilityInfo, error) {
-	args := []string{}
+func runDebsecan(ctx context.Context, suite, statusFile string) (checker.VulnerabilityInfo, error) {
+	args := []string{"--format", "report"}
 	if suite != "" {
 		args = append(args, "--suite", suite)
+	}
+	if statusFile != "" {
+		args = append(args, "--status", statusFile)
 	}
 	cmd := exec.CommandContext(ctx, "debsecan", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return checker.VulnerabilityInfo{}, fmt.Errorf("debsecan: %w", err)
 	}
-	return parseDebsecan(string(out)), nil
-}
-
-func parseDebsecan(out string) checker.VulnerabilityInfo {
-	info := checker.VulnerabilityInfo{}
-	seen := map[string]bool{}
-	scanner := bufio.NewScanner(strings.NewReader(out))
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		id := cveIDRE.FindString(line)
-		if id == "" {
-			continue
-		}
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		sev := severityFromLine(line)
-		info.Total++
-		bumpSeverity(&info, sev)
-		info.Items = append(info.Items, checker.Vulnerability{
-			ID:       id,
-			Severity: sev,
-			Package:  packageFromLine(line, id),
-			Source:   "debsecan",
-		})
-	}
-	return info
+	return parseDebsecanReport(string(out)), nil
 }
 
 // --- trivy ---
@@ -398,3 +393,71 @@ func sevRank(s string) int {
 	return 4
 }
 
+
+// parseDebsecanReport parses `debsecan --format report` output.
+func parseDebsecanReport(out string) checker.VulnerabilityInfo {
+	info := checker.VulnerabilityInfo{}
+	seen := map[string]bool{}
+	lines := strings.Split(out, "\n")
+	i := 0
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+		id := cveIDRE.FindString(line)
+		if id == "" || !strings.HasPrefix(line, "CVE-") {
+			i++
+			continue
+		}
+		if seen[id] {
+			i++
+			continue
+		}
+		var pkgs []string
+		var sev string
+		j := i + 1
+		for j < len(lines) {
+			l := strings.TrimSpace(lines[j])
+			if l == "" || strings.HasPrefix(l, "CVE-") || strings.HasPrefix(l, "***") || strings.HasPrefix(l, "Security report") {
+				break
+			}
+			if strings.HasPrefix(l, "- ") {
+				p := strings.TrimPrefix(l, "- ")
+				p = strings.TrimSpace(p)
+				if idx := strings.Index(p, "("); idx >= 0 {
+					urg := strings.TrimSpace(p[idx+1:])
+					urg = strings.TrimSuffix(urg, ")")
+					urg = strings.TrimSpace(strings.TrimSuffix(urg, "urgency"))
+					urg = strings.TrimSpace(urg)
+					if sev == "" {
+						sev = cve.NormalizeSeverity(urg)
+					}
+					p = strings.TrimSpace(p[:idx])
+				}
+				for _, name := range strings.Split(p, ",") {
+					name = strings.TrimSpace(name)
+					if name != "" {
+						pkgs = append(pkgs, name)
+					}
+				}
+			}
+			j++
+		}
+		seen[id] = true
+		if sev == "" {
+			sev = cve.SeverityUnknown
+		}
+		info.Total++
+		bumpSeverity(&info, sev)
+		pkg := ""
+		if len(pkgs) > 0 {
+			pkg = pkgs[0]
+		}
+		info.Items = append(info.Items, checker.Vulnerability{
+			ID:       id,
+			Severity: sev,
+			Package:  pkg,
+			Source:   "debsecan",
+		})
+		i = j
+	}
+	return info
+}

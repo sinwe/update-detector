@@ -84,8 +84,10 @@ func New(cfg Config) (*Checker, error) {
 	}
 	if cfg.CVECommand != "" {
 		det, err := cve.New("ubuntu", cve.Fields{
-			"suite":        cfg.CVESuite,
-			"cve_command":  cfg.CVECommand,
+			"suite":             cfg.CVESuite,
+			"dpkg_status_file":  cfg.DpkgStatusFile,
+			"os_release_file":   cfg.OSReleaseFile,
+			"cve_command":       cfg.CVECommand,
 		})
 		if err == nil {
 			c.cveDetector = det

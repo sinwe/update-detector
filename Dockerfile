@@ -27,6 +27,7 @@ RUN apt-get update && \
       ca-certificates \
       apt \
       curl \
+      debsecan \
       update-notifier-common \
     && rm -rf /var/lib/apt/lists/*
 
