@@ -9,11 +9,14 @@ no fix yet, or one whose fix hasn't been applied.
 ## Status
 
 - Branch: `feature/cve-detection`
-- Implemented: Debian/Ubuntu detector via `debsecan` (see
-  `internal/cve/debian`), wired into both `ubuntu` and `debian` checkers,
-  surfaced in `Status.Vulnerabilities`, and folded into `ComputeOK`.
-- Not yet: macOS (Homebrew), Windows, aggregator/UI surfacing, Telegram
-  alerting, companion apply.
+- Implemented: Debian/Ubuntu detector with multi-scanner fallback
+  (debsecan → trivy → osv-scanner), wired into both `ubuntu` and
+  `debian` checkers, surfaced in `Status.Vulnerabilities`, folded into
+  `ComputeOK`. Missing scanner → `ErrNoScanner`, preserved previous
+  value, admin UI offers an "Install debsecan" button (companion has
+  sudo; allowlisted scanner names only) with a confirm() permission gate.
+- Not yet: macOS (Homebrew), Windows, Telegram install-prompt, aggregator
+  widget surfacing of counts.
 
 ## Architecture
 
