@@ -700,6 +700,7 @@ install_agent_native() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
+  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
 
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
@@ -809,6 +810,7 @@ install_agent_launchd() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
+  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
   resolved_listen_addr="${LISTEN_ADDR:-$existing_listen_addr}"
   resolved_listen_addr="${resolved_listen_addr:-:8080}"
   resolved_check_interval="${CHECK_INTERVAL:-$existing_check_interval}"
@@ -952,6 +954,7 @@ install_agent_docker() {
       echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
       exit 1
     fi
+    warn_if_aggregator_unreachable "$resolved_aggregator_url" "$dir/.env"
 
     mkdir -p "$dir"
     curl -fsSL "$(raw_url_for docker-compose.yml)" -o "$dir/docker-compose.yml"
@@ -1722,6 +1725,21 @@ prompt_aggregator_url() {
   printf "Enter the aggregator's URL (e.g. http://aggregator-host:9090): " >&2
   read -r url < /dev/tty
   printf '%s' "$url"
+}
+
+# warn_if_aggregator_unreachable URL WHERE -> best-effort check that the
+# aggregator at URL answers, warning (never fatal) when it doesn't. The
+# agent reconnects with backoff on its own, so a briefly unreachable
+# aggregator isn't fatal -- but a typo'd URL is the common case, and
+# without this the user only finds out from the agent's own logs after
+# the install has already claimed success. Same check the companion
+# install already does (see install_companion); WHERE names the file
+# holding the AGGREGATOR_URL so the warning can point at it.
+warn_if_aggregator_unreachable() {
+  url="$1" where="$2"
+  if [ -n "$url" ] && ! curl -fsS -o /dev/null --max-time 5 "$url/openapi.yaml"; then
+    echo "install.sh: warning: $url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
+  fi
 }
 
 # print_aggregator_secret_note -> after an agent install, tell the user
