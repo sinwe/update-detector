@@ -71,6 +71,12 @@ type Vulnerability struct {
 // cycle. Items holds the (possibly truncated) detail list; the counts are
 // the authoritative totals even when Items is capped.
 type VulnerabilityInfo struct {
+	// Scanner is the name of the scanner that produced this result
+	// (e.g. "debsecan", "trivy"). Empty when no scanner was available,
+	// which is the signal for the admin UI / Telegram to offer an
+	// install prompt (the companion has sudo and can apt-get install an
+	// allowlisted scanner).
+	Scanner string          `json:"scanner,omitempty"`
 	Critical int             `json:"critical"`
 	High     int             `json:"high"`
 	Medium   int             `json:"medium"`

@@ -34,6 +34,11 @@ type Applier interface {
 	// where there is no meaningful distinction (e.g. winget), this
 	// behaves identically to Upgrade.
 	FullUpgrade(ctx context.Context) (output string, err error)
+	// InstallScanner installs an allowlisted vulnerability scanner (e.g.
+	// "debsecan") via the platform package manager. Only allowlisted
+	// names are accepted by the caller; implementations may trust the
+	// name but should still validate.
+	InstallScanner(ctx context.Context, scanner string) (output string, err error)
 }
 
 // defaultApplier is set by exactly one platform package's init()
@@ -48,6 +53,20 @@ func registerApplier(a Applier) {
 		panic("companion: Applier already registered")
 	}
 	defaultApplier = a
+}
+
+// allowedScanners is the set of scanner names a companion is permitted to
+// install on behalf of an operator. Keep this list in sync with
+// scannerPackages (apt) and the detector's fallback list.
+var allowedScannersList = []string{"debsecan", "trivy", "osv-scanner", "osv"}
+
+func allowedScanner(name string) bool {
+	for _, s := range allowedScannersList {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // applierFor returns the registered defaultApplier, or an error if

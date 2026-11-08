@@ -69,6 +69,10 @@ func (b *brewApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return runCapped(ctx, brewCommand(ctx, "upgrade", "--greedy"))
 }
 
+func (b *brewApplier) InstallScanner(ctx context.Context, scanner string) (string, error) {
+	return "", fmt.Errorf("installing scanners is not supported on macOS via this path; install %s with brew manually", scanner)
+}
+
 // brewCommand builds a brew exec.Cmd. It is the sole place in the
 // companion that knows brew's name, so tests can swap PATH to intercept
 // all invocations. Names arrive already validated against the pending

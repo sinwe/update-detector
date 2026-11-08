@@ -33,6 +33,7 @@ type agentView struct {
 	RebootRequired     bool
 	OSUpdateAvailable  bool
 	AgentVersion       string
+	CVEScanner         string
 
 	// AnyStreamConnected, CompanionConnected, CompanionVersion, and
 	// RecentResults are only meaningful once Approved -- nothing has
@@ -189,6 +190,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
+		v.CVEScanner = rec.LastReport.Vulnerabilities.Scanner
 		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
 	}
 	// Results() is oldest-first; show most recent first.
@@ -687,6 +689,9 @@ const adminTemplateSrc = `<!DOCTYPE html>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
+            {{if and .HasReport (eq .CVEScanner "")}}
+            <button class="btn-sm" onclick="installScanner('{{.ID}}', 'debsecan')" title="No CVE scanner detected; install debsecan (requires companion)">Install debsecan</button>
+            {{end}}
             {{if .AgentUpdateAvailable}}
             <button class="btn-sm" onclick="postSelfUpdate('{{.ID}}', 'agent', '{{$.LatestVersion}}')" title="Update agent to {{$.LatestVersion}}">Update agent</button>
             {{end}}
@@ -913,6 +918,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
     }
     function applyAction(id, type) {
       postApply(id, {type: type});
+    }
+    function installScanner(id, scanner) {
+      if (!confirm('Install ' + scanner + ' on this host via apt-get (requires companion)?')) return;
+      postApply(id, {type: 'install-scanner', scanner: scanner});
     }
     function applyPackages(event, id) {
       event.preventDefault();

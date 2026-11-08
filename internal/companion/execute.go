@@ -84,6 +84,15 @@ func Apply(ctx context.Context, agentStatusURL, aggregatorURL string, identity a
 		output, err = applier.Upgrade(ctx)
 	case aggregator.ActionFullUpgrade:
 		output, err = applier.FullUpgrade(ctx)
+	case aggregator.ActionInstallScanner:
+		if !allowedScanner(action.Scanner) {
+			return aggregator.ActionResult{
+				ActionID:    action.ID,
+				Message:     fmt.Sprintf("rejected: scanner %q is not allowlisted", action.Scanner),
+				CompletedAt: time.Now(),
+			}
+		}
+		output, err = applier.InstallScanner(ctx, action.Scanner)
 	default:
 		return aggregator.ActionResult{
 			ActionID:    action.ID,

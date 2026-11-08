@@ -77,6 +77,37 @@ func (a *aptApplier) autoremove(ctx context.Context, prev string) string {
 	return strings.TrimRight(prev, "\n") + "\n" + out
 }
 
+// scannerPackages maps an allowlisted scanner name to the apt package that
+// provides it. Unknown names are rejected by InstallScanner.
+var scannerPackages = map[string]string{
+	"debsecan":    "debsecan",
+	"trivy":       "trivy",
+	"osv-scanner": "osv-scanner",
+	"osv":         "osv-scanner",
+}
+
+// InstallScanner runs:
+//
+//	apt-get update
+//	apt-get install -y <pkg>
+//
+// Only allowlisted scanners are accepted; arbitrary package installs are
+// not permitted through this path.
+func (a *aptApplier) InstallScanner(ctx context.Context, scanner string) (string, error) {
+	pkg, ok := scannerPackages[scanner]
+	if !ok {
+		return "", fmt.Errorf("scanner %q is not allowlisted", scanner)
+	}
+	if updateOut, err := runCapped(ctx, aptCommand(ctx, "update")); err != nil {
+		return fmt.Sprintf("apt-get update failed: %v\\n%s", err, updateOut), fmt.Errorf("%w: %v", ErrUpdateFailed, err)
+	}
+	out, err := runCapped(ctx, aptCommand(ctx, "install", "-y", pkg))
+	if err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // aptCommand builds an apt-get exec.Cmd with DEBIAN_FRONTEND=noninteractive
 // injected. It is the sole place in the companion that knows apt-get's name,
 // so tests can swap PATH to intercept all invocations.

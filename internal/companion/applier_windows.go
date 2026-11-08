@@ -106,6 +106,10 @@ func (w *windowsApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return w.Upgrade(ctx)
 }
 
+func (w *windowsApplier) InstallScanner(ctx context.Context, scanner string) (string, error) {
+	return "", fmt.Errorf("installing scanners is not supported on Windows via this path")
+}
+
 // installWindowsUpdates downloads and installs only the updates whose
 // own KBArticleIDs intersect kbs, or whose own Identity.UpdateID is in
 // updateIDs (used for the rare update with no KB at all -- see
