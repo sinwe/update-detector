@@ -17,6 +17,7 @@ import (
 	"update-detector/internal/aptutil"
 	"update-detector/internal/checker"
 	"update-detector/internal/checker/reboot"
+	"update-detector/internal/cve"
 	"update-detector/internal/osrelease"
 )
 
@@ -36,6 +37,8 @@ func init() {
 			AptListsCacheDir:   f["apt_lists_cache_dir"],
 			OSReleaseFile:      f["os_release_file"],
 			RebootRequiredFile: f["reboot_required_file"],
+			CVECommand:         f["cve_command"],
+			CVESuite:           f["cve_suite"],
 		})
 	})
 }
@@ -50,11 +53,15 @@ type Config struct {
 
 	OSReleaseFile      string
 	RebootRequiredFile string
+
+	CVECommand string
+	CVESuite   string
 }
 
 type Checker struct {
 	cfg           Config
 	aptConfigPath string
+	cveDetector   cve.Detector
 }
 
 // New generates the apt.conf override once (its paths don't change at
@@ -69,7 +76,17 @@ func New(cfg Config) (*Checker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("debian checker: %w", err)
 	}
-	return &Checker{cfg: cfg, aptConfigPath: confPath}, nil
+	c := &Checker{cfg: cfg, aptConfigPath: confPath}
+	if cfg.CVECommand != "" {
+		det, err := cve.New("debian", cve.Fields{
+			"suite":       cfg.CVESuite,
+			"cve_command": cfg.CVECommand,
+		})
+		if err == nil {
+			c.cveDetector = det
+		}
+	}
+	return c, nil
 }
 
 func (c *Checker) Platform() string { return "debian" }
@@ -122,6 +139,17 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		}
 	} else {
 		status.OS = osInfo
+	}
+
+	if c.cveDetector != nil {
+		if vulns, err := c.cveDetector.Detect(ctx, previous); err != nil {
+			errs = append(errs, fmt.Sprintf("cve: %v", err))
+			if previous != nil {
+				status.Vulnerabilities = previous.Vulnerabilities
+			}
+		} else {
+			status.Vulnerabilities = vulns
+		}
 	}
 
 	status.Errors = errs

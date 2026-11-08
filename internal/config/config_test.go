@@ -17,6 +17,8 @@ func TestCheckerFieldsRoundTrips(t *testing.T) {
 		OSReleaseFile:       "/etc/os-release",
 		ReleaseUpgradesFile: "/etc/update-manager/release-upgrades",
 		RebootRequiredFile:  "/var/run/reboot-required",
+		CVECommand:          "debsecan",
+		CVESuite:            "noble",
 	}
 
 	fields := cfg.CheckerFields()
@@ -30,6 +32,8 @@ func TestCheckerFieldsRoundTrips(t *testing.T) {
 		"os_release_file":       cfg.OSReleaseFile,
 		"release_upgrades_file": cfg.ReleaseUpgradesFile,
 		"reboot_required_file":  cfg.RebootRequiredFile,
+		"cve_command":           cfg.CVECommand,
+		"cve_suite":             cfg.CVESuite,
 	}
 	for key, wantVal := range want {
 		if got := fields[key]; got != wantVal {
