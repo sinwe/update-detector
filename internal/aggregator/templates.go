@@ -33,6 +33,7 @@ type agentView struct {
 	RebootRequired     bool
 	OSUpdateAvailable  bool
 	AgentVersion       string
+	Platform           string
 	CVEScanner         string
 
 	// AnyStreamConnected, CompanionConnected, CompanionVersion, and
@@ -190,6 +191,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
+		v.Platform = rec.LastReport.Platform
 		v.CVEScanner = rec.LastReport.Vulnerabilities.Scanner
 		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
 	}
@@ -689,7 +691,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
-            {{if and .HasReport (eq .CVEScanner "")}}
+            {{if and .HasReport (eq .CVEScanner "") (or (eq .Platform "ubuntu") (eq .Platform "debian"))}}
             <button class="btn-sm" onclick="installScanner('{{.ID}}', 'debsecan')" title="No CVE scanner detected; install debsecan (requires companion)">Install debsecan</button>
             {{end}}
             {{if .AgentUpdateAvailable}}
