@@ -693,6 +693,7 @@ EOF
 
   install_unit update-detector
   echo "install.sh: update-detector installed and started. Check: systemctl status update-detector"
+  print_aggregator_secret_note
 }
 
 # install_agent_launchd -> macOS equivalent of install_agent_native
@@ -851,6 +852,7 @@ EOF
   check_port="${resolved_listen_addr}"
   check_port="${check_port##*:}"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
+  print_aggregator_secret_note
 }
 
 # install_agent_docker -> Docker Compose equivalent of install_agent_native
@@ -920,6 +922,7 @@ install_agent_docker() {
 
   ( cd "$dir" && docker compose pull && docker compose up -d )
   echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
+  print_aggregator_secret_note
 }
 
 install_aggregator_native() {
@@ -1669,6 +1672,47 @@ prompt_aggregator_url() {
   printf "Enter the aggregator's URL (e.g. http://aggregator-host:9090): " >&2
   read -r url < /dev/tty
   printf '%s' "$url"
+}
+
+# print_aggregator_secret_note -> after an agent install, tell the user
+# the ADMIN_APPLY_SHARED_SECRET they'll be asked for the first time they
+# trigger an apply or self-update in the aggregator's /admin page. The
+# secret lives on the aggregator host, so its value can only be shown
+# when this host IS the aggregator host -- an aggregator installed in
+# this same run, or an existing one here: the env var this run was given,
+# the native /etc/default/update-aggregator, or a Docker deployment's
+# .env found via the same Compose-label lookup the docker installers
+# use. Otherwise, say where to find it instead of leaving the user to
+# discover the prompt with no answer -- that dead end (admin asks for a
+# secret the user never saw) is exactly what this note exists to prevent.
+# Prints on every agent install/re-run, deliberately: unlike the
+# aggregator install's one-time print, a re-run is how a user who lost
+# the value gets it back when the aggregator lives here.
+print_aggregator_secret_note() {
+  secret="${ADMIN_APPLY_SHARED_SECRET:-}"
+  if [ -z "$secret" ] && [ -f /etc/default/update-aggregator ]; then
+    secret="$(env_value /etc/default/update-aggregator ADMIN_APPLY_SHARED_SECRET)"
+  fi
+  if [ -z "$secret" ]; then
+    agg_dir="$(docker_compose_dir_for '(^|/)update-aggregator(:|$)')" || agg_dir=""
+    if [ -n "$agg_dir" ] && [ -f "$agg_dir/.env" ]; then
+      secret="$(env_value "$agg_dir/.env" ADMIN_APPLY_SHARED_SECRET)"
+    fi
+  fi
+  if [ -n "$secret" ]; then
+    echo "install.sh: your aggregator's apply secret is: $secret" >&2
+    echo "  The admin page will ask for this ADMIN_APPLY_SHARED_SECRET the first" >&2
+    echo "  time you trigger an apply or self-update -- keep it somewhere safe" >&2
+    echo "  (e.g. a password manager). It is also stored 0600 in the aggregator's" >&2
+    echo "  env file on the aggregator host." >&2
+  else
+    echo "install.sh: the admin page will ask for the aggregator's" >&2
+    echo "  ADMIN_APPLY_SHARED_SECRET the first time you trigger an apply or" >&2
+    echo "  self-update. It lives in the aggregator host's env file" >&2
+    echo "  (/etc/default/update-aggregator, or <dir>/.env for a Docker install);" >&2
+    echo "  if none was ever set, apply stays disabled until you set one and" >&2
+    echo "  restart the aggregator." >&2
+  fi
 }
 
 # prompt_uninstall_components -> like prompt_components, but for
