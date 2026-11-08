@@ -82,6 +82,56 @@
 
 set -eu
 
+# --help never needs root, and an unknown argument must fail fast
+# instead of silently starting an install: previously only --uninstall
+# was recognised as $1, and anything else (including --help itself) was
+# ignored and the install began. The only legitimate invocations are no
+# argument (interactive/scripted install), --uninstall, and --help -- the
+# companion's own self-update re-invokes this file with no arguments at
+# all, only env vars (see internal/companion/selfupdate_unix.go).
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<EOF
+Usage: install.sh [--help] [--uninstall]
+
+  Installs update-detector's agent, aggregator, and/or companion.
+  Run as root:
+    curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
+  (piped form takes its arguments after -s --, e.g. sh -s -- --uninstall)
+
+Options:
+  --help       Show this help and exit.
+  --uninstall  Remove a native install. A Docker-based agent/aggregator is
+               left alone -- run 'docker compose down' in its directory
+               yourself (the script prints where it found one).
+
+Environment (scripted/non-interactive use):
+  INSTALL_COMPONENTS   agent,aggregator,companion (comma-separated)
+  USE_DOCKER           1/0 to force or skip a Docker Compose deployment
+  DOCKER_DIR, AGGREGATOR_DOCKER_DIR
+                       directories for the Compose deployments
+  INSTALL_VERSION      release tag to install, or 'latest' (default)
+  SELF_UPDATE_CHANNEL  alpha, beta, rc, or release (default)
+  AGGREGATOR_URL       URL of the aggregator this agent reports to
+  ADMIN_APPLY_SHARED_SECRET
+                       secret gating apply/self-update in the aggregator's
+                       admin page; the admin page asks for it on first use
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+                       notifications for the agent
+  AGGREGATOR_TELEGRAM_BOT_TOKEN, AGGREGATOR_TELEGRAM_CHAT_ID
+                       notifications for the aggregator
+  UNINSTALL_COMPONENTS agent,aggregator,companion (comma-separated)
+EOF
+  exit 0
+fi
+case "${1:-}" in
+  "" | --uninstall) ;;
+  *)
+    echo "install.sh: unknown argument: $1" >&2
+    echo "install.sh: run with --help for usage." >&2
+    exit 1
+    ;;
+esac
+
 GITHUB_API="https://api.github.com/repos/sinwe/update-detector"
 INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
