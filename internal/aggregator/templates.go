@@ -33,6 +33,7 @@ type agentView struct {
 	RebootRequired     bool
 	OSUpdateAvailable  bool
 	AgentVersion       string
+	Platform           string
 	CVECritical       int
 	CVEHigh           int
 	CVEMedium         int
@@ -195,6 +196,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
+		v.Platform = rec.LastReport.Platform
 		v.CVECritical = rec.LastReport.Vulnerabilities.Critical
 		v.CVEHigh = rec.LastReport.Vulnerabilities.High
 		v.CVEMedium = rec.LastReport.Vulnerabilities.Medium
@@ -618,7 +620,12 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <div class="host-badges">
             {{if .HasReport}}
               {{if .OK}}<span class="badge badge-ok">OK</span>{{else}}<span class="badge badge-bad">Needs attention</span>{{end}}
-              {{if gt .CVECritical 0}}<span class="badge badge-bad">{{.CVECritical}} critical CVE{{if gt .CVECritical 1}}s{{end}}</span>{{else if gt .CVEHigh 0}}<span class="badge badge-warn">{{.CVEHigh}} high CVE{{if gt .CVEHigh 1}}s{{end}}</span>{{end}}
+              {{if or (eq .Platform "ubuntu") (eq .Platform "debian")}}
+                {{if eq .CVEScanner ""}}<span class="badge badge-warn" title="CVE detection didn't run on this host">No CVE scanner</span>
+                {{else if gt .CVECritical 0}}<span class="badge badge-bad">{{.CVECritical}} critical CVE{{if gt .CVECritical 1}}s{{end}}</span>
+                {{else if gt .CVEHigh 0}}<span class="badge badge-warn">{{.CVEHigh}} high CVE{{if gt .CVEHigh 1}}s{{end}}</span>
+                {{else}}<span class="badge badge-ok">CVE ok</span>{{end}}
+              {{end}}
               {{if .RebootRequired}}<span class="badge badge-warn">Reboot</span>{{end}}
               {{if .OSUpdateAvailable}}<span class="badge badge-warn">OS upgrade</span>{{end}}
             {{else}}
