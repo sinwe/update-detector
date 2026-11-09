@@ -21,9 +21,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"update-detector/internal/checker"
@@ -153,6 +155,9 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 		info, err := runScanner(ctx, name, d.cfg.Suite, d.cfg.DpkgStatusFile, d.cfg.Platform, d.cfg.CVEToolsCacheDir)
 		if err == nil {
 			info.Scanner = name
+			// Enrich unknown severities from OSV (cached, so only new
+			// CVEs cost a network round-trip on subsequent runs).
+			enrichSeverity(ctx, &info, d.cfg.CVEToolsCacheDir)
 			info.Items = capItems(info.Items)
 			sortItems(info.Items)
 			return info, nil
@@ -754,3 +759,216 @@ func ensureTrivy(ctx context.Context, cacheDir string) (string, error) {
 	}
 	return bin, nil
 }
+
+// severityCache maps CVE ID -> severity string.
+type severityCache struct {
+	Entries map[string]string `json:"entries"`
+}
+
+func loadSeverityCache(cacheDir string) severityCache {
+	sc := severityCache{Entries: map[string]string{}}
+	if cacheDir == "" {
+		cacheDir = "/var/lib/update-detector/tools"
+	}
+	path := filepath.Join(cacheDir, "cve-severity-cache.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return sc
+	}
+	_ = json.Unmarshal(data, &sc)
+	if sc.Entries == nil {
+		sc.Entries = map[string]string{}
+	}
+	return sc
+}
+
+func saveSeverityCache(cacheDir string, sc severityCache) {
+	if cacheDir == "" {
+		cacheDir = "/var/lib/update-detector/tools"
+	}
+	_ = os.MkdirAll(cacheDir, 0o755)
+	path := filepath.Join(cacheDir, "cve-severity-cache.json")
+	data, err := json.Marshal(sc)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o644)
+}
+
+// enrichSeverity fills in Severity for CVEs that are currently "unknown"
+// by querying the OSV individual vulnerability endpoint and computing a
+// CVSS base score from the returned vector. Results are cached so only
+// new CVEs cost a network round-trip. Best-effort: failures leave the
+// severity as "unknown".
+func enrichSeverity(ctx context.Context, info *checker.VulnerabilityInfo, cacheDir string) {
+	sc := loadSeverityCache(cacheDir)
+	changed := false
+	var unknowns []string
+	for i := range info.Items {
+		if info.Items[i].Severity == cve.SeverityUnknown || info.Items[i].Severity == "" {
+			unknowns = append(unknowns, info.Items[i].ID)
+		}
+	}
+	if len(unknowns) == 0 {
+		return
+	}
+	type result struct {
+		id  string
+		sev string
+	}
+	sem := make(chan struct{}, 8)
+	resCh := make(chan result, len(unknowns))
+	var wg sync.WaitGroup
+	for _, id := range unknowns {
+		if cached, ok := sc.Entries[id]; ok {
+			resCh <- result{id: id, sev: cached}
+			continue
+		}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			sev := fetchOSVSeverity(ctx, id)
+			sc.Entries[id] = sev
+			changed = true
+			resCh <- result{id: id, sev: sev}
+		}(id)
+	}
+	go func() { wg.Wait(); close(resCh) }()
+	sevByID := map[string]string{}
+	for r := range resCh {
+		sevByID[r.id] = r.sev
+	}
+	for i := range info.Items {
+		if info.Items[i].Severity == cve.SeverityUnknown || info.Items[i].Severity == "" {
+			if sev, ok := sevByID[info.Items[i].ID]; ok && sev != "" {
+				info.Items[i].Severity = sev
+			}
+		}
+	}
+	info.Critical, info.High, info.Medium, info.Low = 0, 0, 0, 0
+	for _, it := range info.Items {
+		bumpSeverity(info, it.Severity)
+	}
+	if changed {
+		saveSeverityCache(cacheDir, sc)
+	}
+}
+
+func fetchOSVSeverity(ctx context.Context, id string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.osv.dev/v1/vulns/"+id, nil)
+	if err != nil {
+		return cve.SeverityUnknown
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return cve.SeverityUnknown
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return cve.SeverityUnknown
+	}
+	var rec struct {
+		Severity []struct {
+			Type  string `json:"type"`
+			Score string `json:"score"`
+		} `json:"severity"`
+		DatabaseSpecific struct {
+			Severity string `json:"severity"`
+		} `json:"database_specific"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rec); err != nil {
+		return cve.SeverityUnknown
+	}
+	if sev := strings.ToLower(strings.TrimSpace(rec.DatabaseSpecific.Severity)); sev != "" {
+		switch sev {
+		case "critical":
+			return cve.SeverityCritical
+		case "high":
+			return cve.SeverityHigh
+		case "medium", "moderate":
+			return cve.SeverityMedium
+		case "low":
+			return cve.SeverityLow
+		}
+	}
+	for _, s := range rec.Severity {
+		if strings.HasPrefix(s.Type, "CVSS_V3") {
+			if score, ok := cvssV3BaseScore(s.Score); ok {
+				return severityFromCVSS(score)
+			}
+		}
+	}
+	return cve.SeverityUnknown
+}
+
+// cvssV3BaseScore computes the CVSS v3.0/v3.1 base score from a vector
+// string such as "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H".
+func cvssV3BaseScore(vector string) (float64, bool) {
+	metrics := map[string]string{}
+	for _, part := range strings.Split(vector, "/") {
+		if kv := strings.SplitN(part, ":", 2); len(kv) == 2 {
+			metrics[kv[0]] = kv[1]
+		}
+	}
+	avMap := map[string]float64{"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+	acMap := map[string]float64{"L": 0.77, "H": 0.44}
+	uiMap := map[string]float64{"N": 0.85, "R": 0.62}
+	ciaMap := map[string]float64{"N": 0, "L": 0.22, "H": 0.56}
+	av, ok1 := avMap[metrics["AV"]]
+	ac, ok2 := acMap[metrics["AC"]]
+	ui, ok3 := uiMap[metrics["UI"]]
+	c, ok4 := ciaMap[metrics["C"]]
+	i, ok5 := ciaMap[metrics["I"]]
+	a, ok6 := ciaMap[metrics["A"]]
+	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 {
+		return 0, false
+	}
+	scope := metrics["S"]
+	prStr := metrics["PR"]
+	var pr float64
+	switch scope {
+	case "C":
+		switch prStr {
+		case "N":
+			pr = 0.85
+		case "L":
+			pr = 0.68
+		case "H":
+			pr = 0.5
+		default:
+			return 0, false
+		}
+	default:
+		switch prStr {
+		case "N":
+			pr = 0.85
+		case "L":
+			pr = 0.62
+		case "H":
+			pr = 0.27
+		default:
+			return 0, false
+		}
+	}
+	iss := 1 - (1-c)*(1-i)*(1-a)
+	var impact float64
+	if scope == "C" {
+		impact = 7.52*(iss-0.029) - 3.25*math.Pow(iss-0.02, 15)
+	} else {
+		impact = 6.42 * iss
+	}
+	exploit := 8.22 * av * ac * pr * ui
+	var base float64
+	if impact <= 0 {
+		base = 0
+	} else if scope == "C" {
+		base = math.Min(1.08*(impact+exploit), 10)
+	} else {
+		base = math.Min(impact+exploit, 10)
+	}
+	base = math.Ceil(base*10) / 10
+	return base, true
+}
+
