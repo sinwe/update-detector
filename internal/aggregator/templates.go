@@ -40,6 +40,7 @@ type agentView struct {
 	CVELow            int
 	CVETotal          int
 	CVEScanner        string
+	CVEItems          []checker.Vulnerability
 
 	// AnyStreamConnected, CompanionConnected, CompanionVersion, and
 	// RecentResults are only meaningful once Approved -- nothing has
@@ -203,6 +204,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.CVELow = rec.LastReport.Vulnerabilities.Low
 		v.CVETotal = rec.LastReport.Vulnerabilities.Total
 		v.CVEScanner = rec.LastReport.Vulnerabilities.Scanner
+		v.CVEItems = rec.LastReport.Vulnerabilities.Items
 		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
 	}
 	// Results() is oldest-first; show most recent first.
@@ -674,6 +676,23 @@ const adminTemplateSrc = `<!DOCTYPE html>
               <span class="pkg-ver">{{.CandidateVersion}}</span>
             </li>
             {{end}}
+          </ul>
+        </details>
+        {{end}}
+
+        {{if .CVEItems}}
+        <details>
+          <summary>{{len .CVEItems}} CVE{{if gt (len .CVEItems) 1}}s{{end}}{{if gt (len .CVEItems) 50}} (showing first 50){{end}}</summary>
+          <ul class="pkg-list">
+            {{range $i, $cve := .CVEItems}}{{if lt $i 50}}
+            <li>
+              {{if eq $cve.Severity "critical"}}<span class="pkg-sec">{{$cve.ID}}</span>
+              {{else if eq $cve.Severity "high"}}<span style="color:var(--amber-text)">{{$cve.ID}}</span>
+              {{else}}{{$cve.ID}}{{end}}
+              <span class="pkg-ver">{{$cve.Severity}}</span>
+              {{if $cve.Package}}<span>{{$cve.Package}}</span>{{end}}
+            </li>
+            {{end}}{{end}}
           </ul>
         </details>
         {{end}}
