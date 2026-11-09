@@ -8,7 +8,9 @@
 package debian
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,7 +18,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,22 +36,24 @@ var ErrNoScanner = fmt.Errorf("no vulnerability scanner found (tried debsecan, t
 func init() {
 	cve.Register("debian", func(f cve.Fields) (cve.Detector, error) {
 		return New(Config{
-			Suite:          f["suite"],
-			DpkgStatusFile: f["dpkg_status_file"],
-			OSReleaseFile:  f["os_release_file"],
-			Scanners:       f["scanners"],
-			Command:        f["cve_command"],
-			Platform:       "debian",
+			Suite:            f["suite"],
+			DpkgStatusFile:   f["dpkg_status_file"],
+			OSReleaseFile:    f["os_release_file"],
+			Scanners:         f["scanners"],
+			Command:          f["cve_command"],
+			Platform:         "debian",
+			CVEToolsCacheDir: f["cve_tools_cache_dir"],
 		})
 	})
 	cve.Register("ubuntu", func(f cve.Fields) (cve.Detector, error) {
 		return New(Config{
-			Suite:          f["suite"],
-			DpkgStatusFile: f["dpkg_status_file"],
-			OSReleaseFile:  f["os_release_file"],
-			Scanners:       f["scanners"],
-			Command:        f["cve_command"],
-			Platform:       "ubuntu",
+			Suite:            f["suite"],
+			DpkgStatusFile:   f["dpkg_status_file"],
+			OSReleaseFile:     f["os_release_file"],
+			Scanners:         f["scanners"],
+			Command:          f["cve_command"],
+			Platform:         "ubuntu",
+			CVEToolsCacheDir: f["cve_tools_cache_dir"],
 		})
 	})
 }
@@ -73,6 +79,8 @@ type Config struct {
 	// Platform is the OS family ("debian"/"ubuntu"); used to pick the
 	// OSV ecosystem. Empty defaults to "debian".
 	Platform string
+	// CVEToolsCacheDir is where lazily-downloaded scanners are cached.
+	CVEToolsCacheDir string
 }
 
 type Detector struct {
@@ -142,7 +150,7 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 	}
 	var lastErr error
 	for _, name := range d.scanners {
-		info, err := runScanner(ctx, name, d.cfg.Suite, d.cfg.DpkgStatusFile, d.cfg.Platform)
+		info, err := runScanner(ctx, name, d.cfg.Suite, d.cfg.DpkgStatusFile, d.cfg.Platform, d.cfg.CVEToolsCacheDir)
 		if err == nil {
 			info.Scanner = name
 			info.Items = capItems(info.Items)
@@ -162,12 +170,12 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 	return checker.VulnerabilityInfo{}, lastErr
 }
 
-func runScanner(ctx context.Context, name, suite, statusFile, platform string) (checker.VulnerabilityInfo, error) {
+func runScanner(ctx context.Context, name, suite, statusFile, platform, cacheDir string) (checker.VulnerabilityInfo, error) {
 	switch name {
 	case "debsecan":
 		return runDebsecan(ctx, suite, statusFile)
 	case "trivy":
-		return runTrivy(ctx)
+		return runTrivy(ctx, cacheDir)
 	case "osv-scanner", "osv":
 		return runOSV(ctx, statusFile, platform)
 	default:
@@ -209,8 +217,12 @@ type trivyReport struct {
 	} `json:"Results"`
 }
 
-func runTrivy(ctx context.Context) (checker.VulnerabilityInfo, error) {
-	cmd := exec.CommandContext(ctx, "trivy", "rootfs", "--format", "json", "--quiet", "/")
+func runTrivy(ctx context.Context, cacheDir string) (checker.VulnerabilityInfo, error) {
+	bin, err := ensureTrivy(ctx, cacheDir)
+	if err != nil {
+		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "/")
 	out, err := cmd.Output()
 	if err != nil {
 		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
@@ -646,4 +658,99 @@ func parseDebsecanReport(out string) checker.VulnerabilityInfo {
 		i = j
 	}
 	return info
+}
+
+
+// ensureTrivy returns the path to a trivy binary, downloading it into
+// cacheDir on first use so the agent image stays small. The download is
+// best-effort; on failure the caller falls through to the next scanner.
+func ensureTrivy(ctx context.Context, cacheDir string) (string, error) {
+	if cacheDir == "" {
+		cacheDir = "/var/lib/update-detector/tools"
+	}
+	if p, err := exec.LookPath("trivy"); err == nil {
+		return p, nil
+	}
+	bin := filepath.Join(cacheDir, "trivy")
+	if info, err := os.Stat(bin); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return bin, nil
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", err
+	}
+	arch := "amd64"
+	switch runtime.GOARCH {
+	case "arm64":
+		arch = "arm64"
+	}
+	const ver = "0.69.3"
+	url := "https://github.com/aquasecurity/trivy/releases/download/v" + ver + "/trivy_" + ver + "_Linux-" + arch + ".tar.gz"
+	tmp := bin + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 300 * time.Second}).Do(req)
+	if err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		f.Close()
+		os.Remove(tmp)
+		return "", fmt.Errorf("trivy download: %s", resp.Status)
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return "", err
+	}
+	tr := tar.NewReader(gz)
+	found := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			gz.Close()
+			f.Close()
+			os.Remove(tmp)
+			return "", err
+		}
+		if hdr.Name == "trivy" || strings.HasSuffix(hdr.Name, "/trivy") {
+			if _, err := io.Copy(f, tr); err != nil {
+				gz.Close()
+				f.Close()
+				os.Remove(tmp)
+				return "", err
+			}
+			found = true
+			break
+		}
+	}
+	gz.Close()
+	f.Close()
+	if !found {
+		os.Remove(tmp)
+		return "", fmt.Errorf("trivy binary not found in archive")
+	}
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	if err := os.Rename(tmp, bin); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	return bin, nil
 }

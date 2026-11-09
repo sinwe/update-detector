@@ -55,9 +55,10 @@ type Config struct {
 	OSReleaseFile      string
 	RebootRequiredFile string
 
-	CVECommand  string
-	CVEScanners string
-	CVESuite    string
+	CVECommand       string
+	CVEScanners      string
+	CVESuite         string
+	CVEToolsCacheDir string
 }
 
 type Checker struct {
@@ -80,11 +81,12 @@ func New(cfg Config) (*Checker, error) {
 	}
 	c := &Checker{cfg: cfg, aptConfigPath: confPath}
 	det, err := cve.New("debian", cve.Fields{
-		"suite":            cfg.CVESuite,
-		"dpkg_status_file": cfg.DpkgStatusFile,
-		"os_release_file":  cfg.OSReleaseFile,
-		"scanners":         cfg.CVEScanners,
-		"cve_command":      cfg.CVECommand,
+		"suite":               cfg.CVESuite,
+		"dpkg_status_file":    cfg.DpkgStatusFile,
+		"os_release_file":     cfg.OSReleaseFile,
+		"scanners":            cfg.CVEScanners,
+		"cve_command":         cfg.CVECommand,
+		"cve_tools_cache_dir": cfg.CVEToolsCacheDir,
 	})
 	if err == nil {
 		c.cveDetector = det

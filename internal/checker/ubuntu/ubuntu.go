@@ -54,10 +54,11 @@ type Config struct {
 	RebootRequiredFile  string
 
 	// CVECommand overrides the vulnerability scanner binary; empty disables.
-	CVECommand  string
-	CVEScanners string
+	CVECommand       string
+	CVEScanners      string
 	// CVESuite pins the release codename passed to the scanner.
-	CVESuite string
+	CVESuite         string
+	CVEToolsCacheDir string
 }
 
 type Checker struct {
@@ -85,11 +86,12 @@ func New(cfg Config) (*Checker, error) {
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
 	}
 	det, err := cve.New("ubuntu", cve.Fields{
-		"suite":            cfg.CVESuite,
-		"dpkg_status_file": cfg.DpkgStatusFile,
-		"os_release_file":  cfg.OSReleaseFile,
-		"scanners":         cfg.CVEScanners,
-		"cve_command":      cfg.CVECommand,
+		"suite":               cfg.CVESuite,
+		"dpkg_status_file":    cfg.DpkgStatusFile,
+		"os_release_file":     cfg.OSReleaseFile,
+		"scanners":            cfg.CVEScanners,
+		"cve_command":         cfg.CVECommand,
+		"cve_tools_cache_dir": cfg.CVEToolsCacheDir,
 	})
 	if err == nil {
 		c.cveDetector = det

@@ -20,6 +20,7 @@ func TestCheckerFieldsRoundTrips(t *testing.T) {
 		CVECommand:          "debsecan",
 		CVEScanners:         "debsecan,trivy,osv-scanner",
 		CVESuite:            "noble",
+		CVEToolsCacheDir:    "/var/lib/update-detector/tools",
 	}
 
 	fields := cfg.CheckerFields()
@@ -36,6 +37,7 @@ func TestCheckerFieldsRoundTrips(t *testing.T) {
 		"cve_command":           cfg.CVECommand,
 		"cve_scanners":          cfg.CVEScanners,
 		"cve_suite":             cfg.CVESuite,
+		"cve_tools_cache_dir":   cfg.CVEToolsCacheDir,
 	}
 	for key, wantVal := range want {
 		if got := fields[key]; got != wantVal {

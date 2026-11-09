@@ -31,15 +31,11 @@ RUN apt-get update && \
       update-notifier-common \
     && rm -rf /var/lib/apt/lists/*
 
-# osv-scanner is the Ubuntu fallback: debsecan only knows Debian suites
-# (its data comes from the Debian security tracker, so Ubuntu codenames
-# like "resolute" 404), while OSV carries Ubuntu data. Pinned to the
-# release binary that matches the build arch (linux/{amd64,arm64}).
-ARG TARGETARCH
-ARG OSV_SCANNER_VERSION=v2.7.0
-RUN curl -fsSL "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_${TARGETARCH}" \
-  -o /usr/local/bin/osv-scanner \
-  && chmod +x /usr/local/bin/osv-scanner
+# Note: trivy is NOT baked into the image. It is downloaded on first use
+# by internal/cve/debian (ensureTrivy) and cached in /var/lib/update-detector/
+# tools (the bind-mounted state dir), so the image stays small and the
+# binary survives container restarts. debsecan stays apt-installed because
+# it is tiny and available in the Ubuntu repos.
 
 RUN useradd --system --uid 10001 --shell /usr/sbin/nologin update-detector \
     && mkdir -p /var/lib/update-detector \

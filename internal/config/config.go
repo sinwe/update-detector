@@ -35,8 +35,9 @@ type Config struct {
 	CVEScanners string
 	// CVESuite pins the release codename passed to the scanner; empty
 	// lets it auto-detect.
-	CVESuite  string
-	StateFile string
+	CVESuite          string
+	CVEToolsCacheDir  string
+	StateFile         string
 
 	TelegramBotToken string
 	TelegramChatID   string
@@ -101,9 +102,10 @@ func Load() (Config, error) {
 		ReleaseUpgradesFile: getEnv("RELEASE_UPGRADES_FILE", "/host/etc/update-manager/release-upgrades"),
 		RebootRequiredFile:  getEnv("REBOOT_REQUIRED_FILE", "/host/var/run/reboot-required"),
 
-		CVECommand:  os.Getenv("CVE_COMMAND"),
-		CVESuite:    os.Getenv("CVE_SUITE"),
-		CVEScanners: os.Getenv("CVE_SCANNERS"),
+		CVECommand:       os.Getenv("CVE_COMMAND"),
+		CVEScanners:      os.Getenv("CVE_SCANNERS"),
+		CVESuite:         os.Getenv("CVE_SUITE"),
+		CVEToolsCacheDir: getEnv("CVE_TOOLS_CACHE_DIR", "/var/lib/update-detector/tools"),
 
 		StateFile: getEnv("STATE_FILE", "/var/lib/update-detector/state.json"),
 
@@ -143,6 +145,7 @@ func (c Config) CheckerFields() checker.Fields {
 		"cve_command":           c.CVECommand,
 		"cve_scanners":          c.CVEScanners,
 		"cve_suite":             c.CVESuite,
+		"cve_tools_cache_dir":   c.CVEToolsCacheDir,
 	}
 }
 
