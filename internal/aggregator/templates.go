@@ -677,7 +677,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         </details>
         {{end}}
 
-        {{if .CVEItems}}
+        {{if and .CVEEnabled .CVEItems}}
         <details>
           <summary>{{len .CVEItems}} CVE{{if gt (len .CVEItems) 1}}s{{end}}{{if gt (len .CVEItems) 50}} (showing first 50){{end}}</summary>
           <ul class="pkg-list">
