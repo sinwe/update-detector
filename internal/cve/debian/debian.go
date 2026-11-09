@@ -105,12 +105,25 @@ func New(cfg Config) (*Detector, error) {
 		}
 	}
 	// Auto-detect suite from the host's os-release when not pinned.
-	if cfg.Suite == "" && cfg.OSReleaseFile != "" {
-		if raw, err := os.ReadFile(cfg.OSReleaseFile); err == nil {
-			for _, line := range strings.Split(string(raw), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "VERSION_CODENAME=") {
-					cfg.Suite = strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"")
+	osRelease := cfg.OSReleaseFile
+	if osRelease == "" {
+		osRelease = "/host/etc/os-release"
+	}
+	candidates := []string{osRelease}
+	if osRelease == "/host/etc/os-release" {
+		candidates = append(candidates, "/etc/os-release")
+	}
+	if cfg.Suite == "" {
+		for _, c := range candidates {
+			if raw, err := os.ReadFile(c); err == nil {
+				for _, line := range strings.Split(string(raw), "\n") {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "VERSION_CODENAME=") {
+						cfg.Suite = strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"")
+					}
+				}
+				if cfg.Suite != "" {
+					break
 				}
 			}
 		}
@@ -391,10 +404,23 @@ type osvPkg struct {
 }
 
 func parseDpkgStatus(path string) ([]osvPkg, error) {
-	if path == "" {
-		return nil, fmt.Errorf("no dpkg status file configured")
+	candidates := []string{path}
+	// Native (non-container) hosts keep dpkg status at /var/lib/dpkg/status
+	// rather than the container mount point /host/var/lib/dpkg/status.
+	if path == "/host/var/lib/dpkg/status" {
+		candidates = append(candidates, "/var/lib/dpkg/status")
 	}
-	data, err := os.ReadFile(path)
+	if path == "" {
+		candidates = []string{"/host/var/lib/dpkg/status", "/var/lib/dpkg/status"}
+	}
+	var data []byte
+	var err error
+	for _, c := range candidates {
+		data, err = os.ReadFile(c)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
