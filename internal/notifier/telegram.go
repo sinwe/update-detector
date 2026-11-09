@@ -105,6 +105,15 @@ func FormatMessage(ev Event) string {
 
 	s := ev.Status
 	fmt.Fprintf(&b, "\nUpgradable: %d (security: %d)\n", s.Packages.UpgradableTotal, s.Packages.UpgradableSecurity)
+	if s.Vulnerabilities.Total > 0 {
+		fmt.Fprintf(&b, "CVEs: %d critical, %d high, %d medium, %d low (%d total",
+			s.Vulnerabilities.Critical, s.Vulnerabilities.High,
+			s.Vulnerabilities.Medium, s.Vulnerabilities.Low, s.Vulnerabilities.Total)
+		if s.Vulnerabilities.Scanner != "" {
+			fmt.Fprintf(&b, " via %s", s.Vulnerabilities.Scanner)
+		}
+		fmt.Fprintf(&b, ")\n")
+	}
 	fmt.Fprintf(&b, "Reboot required: %v\n", s.RebootRequired)
 	if s.OS.UpdateAvailable {
 		fmt.Fprintf(&b, "OS upgrade available: %s -> %s\n",

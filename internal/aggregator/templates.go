@@ -33,6 +33,12 @@ type agentView struct {
 	RebootRequired     bool
 	OSUpdateAvailable  bool
 	AgentVersion       string
+	CVECritical       int
+	CVEHigh           int
+	CVEMedium         int
+	CVELow            int
+	CVETotal          int
+	CVEScanner        string
 
 	// AnyStreamConnected, CompanionConnected, CompanionVersion, and
 	// RecentResults are only meaningful once Approved -- nothing has
@@ -189,6 +195,12 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
+		v.CVECritical = rec.LastReport.Vulnerabilities.Critical
+		v.CVEHigh = rec.LastReport.Vulnerabilities.High
+		v.CVEMedium = rec.LastReport.Vulnerabilities.Medium
+		v.CVELow = rec.LastReport.Vulnerabilities.Low
+		v.CVETotal = rec.LastReport.Vulnerabilities.Total
+		v.CVEScanner = rec.LastReport.Vulnerabilities.Scanner
 		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
 	}
 	// Results() is oldest-first; show most recent first.
@@ -606,6 +618,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <div class="host-badges">
             {{if .HasReport}}
               {{if .OK}}<span class="badge badge-ok">OK</span>{{else}}<span class="badge badge-bad">Needs attention</span>{{end}}
+              {{if gt .CVECritical 0}}<span class="badge badge-bad">{{.CVECritical}} critical CVE{{if gt .CVECritical 1}}s{{end}}</span>{{else if gt .CVEHigh 0}}<span class="badge badge-warn">{{.CVEHigh}} high CVE{{if gt .CVEHigh 1}}s{{end}}</span>{{end}}
               {{if .RebootRequired}}<span class="badge badge-warn">Reboot</span>{{end}}
               {{if .OSUpdateAvailable}}<span class="badge badge-warn">OS upgrade</span>{{end}}
             {{else}}
@@ -638,6 +651,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="host-report">
           <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
           <span><strong>{{.UpgradableSecurity}}</strong> security</span>
+          <span><strong>{{.CVECritical}}</strong> critical CVE, <strong>{{.CVEHigh}}</strong> high, <strong>{{.CVEMedium}}</strong> medium, <strong>{{.CVELow}}</strong> low{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>
           <a href="/widgets/hosts/{{.Hostname}}" style="font-size:.75rem">JSON</a>
         </div>
 

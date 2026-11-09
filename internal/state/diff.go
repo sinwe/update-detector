@@ -42,5 +42,19 @@ func Diff(previous *checker.Status, current checker.Status) []string {
 		))
 	}
 
+	if delta := current.Vulnerabilities.Critical - previous.Vulnerabilities.Critical; delta > 0 {
+		changes = append(changes, fmt.Sprintf(
+			"%d new critical CVE(s) (total now %d)",
+			delta, current.Vulnerabilities.Critical,
+		))
+	}
+
+	if delta := current.Vulnerabilities.High - previous.Vulnerabilities.High; delta > 0 {
+		changes = append(changes, fmt.Sprintf(
+			"%d new high-severity CVE(s) (total now %d)",
+			delta, current.Vulnerabilities.High,
+		))
+	}
+
 	return changes
 }

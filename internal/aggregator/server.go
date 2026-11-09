@@ -1413,6 +1413,10 @@ type summaryResponse struct {
 	HostsOSUpgradeAvailable    int       `json:"hosts_os_upgrade_available"`
 	PackagesUpgradableTotal    int       `json:"packages_upgradable_total"`
 	PackagesUpgradableSecurity int       `json:"packages_upgradable_security"`
+	HostsCriticalCVEs          int       `json:"hosts_critical_cves"`
+	HostsHighCVEs              int       `json:"hosts_high_cves"`
+	CVEsCritical               int       `json:"cves_critical"`
+	CVEsHigh                   int       `json:"cves_high"`
 	GeneratedAt                time.Time `json:"generated_at"`
 }
 
@@ -1442,6 +1446,14 @@ func (s *Server) handleWidgetSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.PackagesUpgradableTotal += rec.LastReport.Packages.UpgradableTotal
 		resp.PackagesUpgradableSecurity += rec.LastReport.Packages.UpgradableSecurity
+		if rec.LastReport.Vulnerabilities.Critical > 0 {
+			resp.HostsCriticalCVEs++
+		}
+		if rec.LastReport.Vulnerabilities.High > 0 {
+			resp.HostsHighCVEs++
+		}
+		resp.CVEsCritical += rec.LastReport.Vulnerabilities.Critical
+		resp.CVEsHigh += rec.LastReport.Vulnerabilities.High
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
