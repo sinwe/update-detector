@@ -138,7 +138,7 @@ func runScanner(ctx context.Context, name, suite, statusFile string) (checker.Vu
 	case "trivy":
 		return runTrivy(ctx)
 	case "osv-scanner", "osv":
-		return runOSV(ctx)
+		return runOSV(ctx, statusFile)
 	default:
 		// Treat unknown name as a binary to invoke with no args.
 		return runGeneric(ctx, name)
@@ -227,8 +227,12 @@ type osvReport struct {
 	} `json:"results"`
 }
 
-func runOSV(ctx context.Context) (checker.VulnerabilityInfo, error) {
-	cmd := exec.CommandContext(ctx, "osv-scanner", "--format", "json", "/")
+func runOSV(ctx context.Context, statusFile string) (checker.VulnerabilityInfo, error) {
+	target := statusFile
+	if target == "" {
+		target = "/"
+	}
+	cmd := exec.CommandContext(ctx, "osv-scanner", "--format", "json", target)
 	out, err := cmd.Output()
 	if err != nil {
 		return checker.VulnerabilityInfo{}, fmt.Errorf("osv-scanner: %w", err)
