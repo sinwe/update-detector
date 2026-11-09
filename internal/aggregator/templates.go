@@ -657,7 +657,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="host-report">
           <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
           <span><strong>{{.UpgradableSecurity}}</strong> security</span>
-          {{if gt .CVETotal 0}}<span style="font-size:.75rem;opacity:.7">{{.CVECritical}} critical, {{.CVEHigh}} high, {{.CVEMedium}} medium, {{.CVELow}} low CVE{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>{{end}}
+          {{if and .CVEEnabled (gt .CVETotal 0)}}<span style="font-size:.75rem;opacity:.7">{{.CVECritical}} critical, {{.CVEHigh}} high, {{.CVEMedium}} medium, {{.CVELow}} low CVE{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>{{end}}
           <a href="/widgets/hosts/{{.Hostname}}" style="font-size:.75rem">JSON</a>
         </div>
 
@@ -724,7 +724,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Enable CVE/vulnerability detection for this host (off by default)">
             <input type="checkbox" {{if .CVEEnabled}}checked{{end}} onchange="postCVEEnabled('{{.ID}}', this.checked)"> CVE detection
           </label>
-          {{if gt .CVETotal 0}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
+          {{if and .CVEEnabled (gt .CVETotal 0)}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
