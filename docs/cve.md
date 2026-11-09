@@ -13,12 +13,14 @@ no fix yet, or one whose fix hasn't been applied.
   (debsecan → trivy → osv-scanner), wired into both `ubuntu` and
   `debian` checkers, surfaced in `Status.Vulnerabilities`, folded into
   `ComputeOK`. `debsecan` is shipped in the agent Docker image and runs
-  against the host's mounted dpkg status (`--status /host/var/lib/dpkg/
-  status`, suite auto-detected from the host's os-release), so no
-  host-side install or "Install debsecan" offer is needed. Missing
-  scanner → `ErrNoScanner`, preserved previous value.
-- Not yet: macOS (Homebrew), Windows, aggregator widget surfacing of
-  counts.
+  against the host's mounted dpkg status. Severity for unclassified
+  CVEs is enriched via OSV API + CVSS v3.1 computation (cached).
+  Admin UI shows CVE counts subtly + a "CVEs (N)" button per host that
+  opens a modal overlay with the full per-CVE list (id, severity, package).
+- Opt-in: `CVE_ENABLED` (default false). CVE scanning is off by default
+  because it is noisy, makes many network calls, and most hosts carry
+  hundreds of low-severity CVEs. Set `CVE_ENABLED=true` to turn it on.
+- Not yet: macOS (Homebrew), Windows, Telegram alerting on CVE changes.
 
 ## Architecture
 

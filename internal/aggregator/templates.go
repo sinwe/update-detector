@@ -612,7 +612,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </div>
       {{if .Approved}}
       {{range .Approved}}
-      <div class="host-card{{if not .AnyStreamConnected}} host-offline{{end}}">
+      <div class="host-card{{if not .AnyStreamConnected}} host-offline{{end}}" data-host-id="{{.ID}}" data-hostname="{{.Hostname}}">
         {{if not .AnyStreamConnected}}<div class="offline-banner">⚠ Host offline — powered off? No agent or companion connected{{if .LastSeen}} (last seen {{.LastSeen}}){{end}}</div>{{end}}
         <div class="host-top">
           <div>
@@ -622,12 +622,6 @@ const adminTemplateSrc = `<!DOCTYPE html>
           <div class="host-badges">
             {{if .HasReport}}
               {{if .OK}}<span class="badge badge-ok">OK</span>{{else}}<span class="badge badge-bad">Needs attention</span>{{end}}
-              {{if or (eq .Platform "ubuntu") (eq .Platform "debian")}}
-                {{if eq .CVEScanner ""}}<span class="badge badge-warn" title="CVE detection didn't run on this host">No CVE scanner</span>
-                {{else if gt .CVECritical 0}}<span class="badge badge-bad">{{.CVECritical}} critical CVE{{if gt .CVECritical 1}}s{{end}}</span>
-                {{else if gt .CVEHigh 0}}<span class="badge badge-warn">{{.CVEHigh}} high CVE{{if gt .CVEHigh 1}}s{{end}}</span>
-                {{else}}<span class="badge badge-ok">CVE ok</span>{{end}}
-              {{end}}
               {{if .RebootRequired}}<span class="badge badge-warn">Reboot</span>{{end}}
               {{if .OSUpdateAvailable}}<span class="badge badge-warn">OS upgrade</span>{{end}}
             {{else}}
@@ -660,7 +654,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="host-report">
           <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
           <span><strong>{{.UpgradableSecurity}}</strong> security</span>
-          <span><strong>{{.CVECritical}}</strong> critical CVE, <strong>{{.CVEHigh}}</strong> high, <strong>{{.CVEMedium}}</strong> medium, <strong>{{.CVELow}}</strong> low{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>
+          {{if gt .CVETotal 0}}<span style="font-size:.75rem;opacity:.7">{{.CVECritical}} critical, {{.CVEHigh}} high, {{.CVEMedium}} medium, {{.CVELow}} low CVE{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>{{end}}
           <a href="/widgets/hosts/{{.Hostname}}" style="font-size:.75rem">JSON</a>
         </div>
 
@@ -724,6 +718,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
             <input type="checkbox" id="verbose-{{.ID}}"> verbose
           </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
+          {{if gt .CVETotal 0}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
@@ -963,6 +958,40 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
       postApply(id, {type: 'packages', packages: packages});
       return false;
+    }
+    async function showCVEs(id) {
+      const modal = document.getElementById('cve-modal');
+      const body = document.getElementById('cve-modal-body');
+      body.innerHTML = 'Loading...';
+      modal.style.display = 'flex';
+      try {
+        // find hostname from the page
+        const hostCard = document.querySelector('[data-host-id="' + id + '"]');
+        const hostname = hostCard ? hostCard.dataset.hostname : id;
+        const resp = await fetch('/widgets/hosts/' + encodeURIComponent(hostname));
+        if (!resp.ok) { body.innerHTML = 'Failed to load CVEs'; return; }
+        const data = await resp.json();
+        const vulns = data.vulnerabilities || {};
+        const items = vulns.items || [];
+        if (items.length === 0) { body.innerHTML = 'No CVEs reported.'; return; }
+        let html = '<table style="width:100%;font-size:.8rem;border-collapse:collapse">';
+        html += '<tr><th style="text-align:left">CVE</th><th>Severity</th><th>Package</th></tr>';
+        for (const c of items) {
+          const sev = c.severity || 'unknown';
+          const color = sev === 'critical' ? 'var(--red-text)' : sev === 'high' ? 'var(--amber-text)' : '';
+          html += '<tr><td>' + c.id + '</td><td style="color:' + color + '">' + sev + '</td><td>' + (c.package || '') + '</td></tr>';
+        }
+        html += '</table>';
+        if (items.length < vulns.total) {
+          html += '<p style="font-size:.75rem;opacity:.7;margin-top:.5rem">Showing ' + items.length + ' of ' + vulns.total + ' CVEs. Full list in JSON.</p>';
+        }
+        body.innerHTML = html;
+      } catch (e) {
+        body.innerHTML = 'Error: ' + e;
+      }
+    }
+    function closeCVEModal() {
+      document.getElementById('cve-modal').style.display = 'none';
     }
     async function forceRecheck(id) {
       const verboseBox = document.getElementById('verbose-' + id);
@@ -1220,6 +1249,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
       });
     })();
   </script>
+  <div id="cve-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closeCVEModal()">
+    <div style="background:var(--surface);border-radius:.5rem;padding:1.5rem;max-width:700px;width:90%;max-height:80vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <strong>CVE Details</strong>
+        <button class="btn-sm" onclick="closeCVEModal()">Close</button>
+      </div>
+      <div id="cve-modal-body"></div>
+    </div>
+  </div>
 </body>
 </html>
 `
