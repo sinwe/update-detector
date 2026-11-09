@@ -29,12 +29,6 @@ const (
 	// packages/upgrade/full-upgrade genuinely run different apt-get
 	// subcommands.
 	ActionSelfUpdate ActionType = "self-update"
-	// ActionInstallScanner asks the companion to install an allowlisted
-	// vulnerability scanner (e.g. "debsecan") via the platform package
-	// manager, so CVE detection can run. Gated by the apply secret like
-	// every other companion action; the companion allowlists the scanner
-	// name and never installs arbitrary packages.
-	ActionInstallScanner ActionType = "install-scanner"
 	// ActionCompleteCompanionSwap is pushed to the agent when the companion
 	// has staged a new version of itself (downloaded to .exe.new) and
 	// needs the agent to stop the companion service, swap the binary,
@@ -49,7 +43,7 @@ const (
 
 func (t ActionType) valid() bool {
 	switch t {
-	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck, ActionSelfUpdate, ActionCompleteCompanionSwap, ActionInstallScanner:
+	case ActionPackages, ActionUpgrade, ActionFullUpgrade, ActionRecheck, ActionSelfUpdate, ActionCompleteCompanionSwap:
 		return true
 	default:
 		return false
@@ -106,10 +100,6 @@ type Action struct {
 	// release tag to update it to.
 	Component     string `json:"component,omitempty"`
 	TargetVersion string `json:"target_version,omitempty"`
-
-	// Scanner is only set for ActionInstallScanner -- the allowlisted
-	// scanner name the companion should install.
-	Scanner string `json:"scanner,omitempty"`
 
 	// Verbose is only meaningful for ActionRecheck: true streams the real
 	// shell command output the check runs (apt-get/apt-check/winget/

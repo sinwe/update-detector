@@ -73,9 +73,6 @@ func (w *wingetApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return w.Upgrade(ctx)
 }
 
-func (w *wingetApplier) InstallScanner(ctx context.Context, scanner string) (string, error) {
-	return "", fmt.Errorf("installing scanners is not supported via winget")
-}
 
 // wingetCommand builds a winget exec.Cmd.
 func wingetCommand(ctx context.Context, args ...string) *exec.Cmd {

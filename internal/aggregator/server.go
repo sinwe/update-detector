@@ -977,10 +977,6 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminSelfUpdate(w, r, id)
 		return
 	}
-	if action == "install-scanner" {
-		s.handleAdminInstallScanner(w, r, id)
-		return
-	}
 	if action == "forget" {
 		if err := s.registry.Forget(id); err != nil {
 			if err == ErrNotFound {
@@ -1021,7 +1017,6 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 type applyRequest struct {
 	Type     ActionType `json:"type"`
 	Packages []string   `json:"packages,omitempty"`
-	Scanner  string     `json:"scanner,omitempty"`
 }
 
 // handleAdminApply is the human-triggered counterpart to the companion's
@@ -1051,13 +1046,7 @@ func (s *Server) handleAdminApply(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	var actionID string
-	var err error
-	if req.Type == ActionInstallScanner {
-		actionID, _, err = s.PushInstallScanner(id, req.Scanner)
-	} else {
-		actionID, _, err = s.PushApply(id, req.Type, req.Packages)
-	}
+	actionID, _, err := s.PushApply(id, req.Type, req.Packages)
 	switch {
 	case errors.Is(err, ErrAgentNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -1118,30 +1107,6 @@ func (s *Server) PushApply(id string, t ActionType, packages []string) (actionID
 	return action.ID, rec.Hostname, nil
 }
 
-// PushInstallScanner pushes an ActionInstallScanner to a host's companion.
-func (s *Server) PushInstallScanner(id, scanner string) (actionID, hostname string, err error) {
-	rec, ok := s.registry.Get(id)
-	if !ok || rec.Status != StatusApproved {
-		return "", "", ErrAgentNotFound
-	}
-	switch scanner {
-	case "debsecan", "trivy", "osv-scanner", "osv":
-	default:
-		return "", "", fmt.Errorf("%w: scanner %q is not allowlisted", ErrInvalidAction, scanner)
-	}
-	action := Action{
-		ID:        newActionID(),
-		Type:      ActionInstallScanner,
-		Scanner:   scanner,
-		CreatedAt: time.Now(),
-	}
-	if err := s.hub.Push(id, action); err != nil {
-		return "", "", err
-	}
-	s.beginAgentOutput(id, action.ID)
-	return action.ID, rec.Hostname, nil
-}
-
 // beginAgentOutput marks actionID as agentID's in-flight live output and
 // tells every open admin page a new action just started -- including ones
 // pushed from outside the browser (Telegram apply-all button, the
@@ -1171,30 +1136,6 @@ type recheckRequest struct {
 // no shared secret: it can't change anything on the host, only make it
 // report what's already true sooner, so it gets the same trust model as
 // the rest of /admin (approve/reject/view).
-func (s *Server) handleAdminInstallScanner(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Scanner string `json:"scanner"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Scanner == "" {
-		req.Scanner = "debsecan"
-	}
-	actionID, _, err := s.PushInstallScanner(id, req.Scanner)
-	switch {
-	case errors.Is(err, ErrAgentNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, ErrInvalidAction):
-		http.Error(w, err.Error(), http.StatusBadRequest)
-	case err != nil:
-		http.Error(w, err.Error(), http.StatusConflict)
-	default:
-		writeJSON(w, http.StatusAccepted, map[string]string{"action_id": actionID})
-	}
-}
-
 func (s *Server) handleAdminRecheck(w http.ResponseWriter, r *http.Request, id string) {
 	rec, ok := s.registry.Get(id)
 	if !ok || rec.Status != StatusApproved {

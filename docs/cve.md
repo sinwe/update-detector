@@ -12,11 +12,13 @@ no fix yet, or one whose fix hasn't been applied.
 - Implemented: Debian/Ubuntu detector with multi-scanner fallback
   (debsecan → trivy → osv-scanner), wired into both `ubuntu` and
   `debian` checkers, surfaced in `Status.Vulnerabilities`, folded into
-  `ComputeOK`. Missing scanner → `ErrNoScanner`, preserved previous
-  value, admin UI offers an "Install debsecan" button (companion has
-  sudo; allowlisted scanner names only) with a confirm() permission gate.
-- Not yet: macOS (Homebrew), Windows, Telegram install-prompt, aggregator
-  widget surfacing of counts.
+  `ComputeOK`. `debsecan` is shipped in the agent Docker image and runs
+  against the host's mounted dpkg status (`--status /host/var/lib/dpkg/
+  status`, suite auto-detected from the host's os-release), so no
+  host-side install or "Install debsecan" offer is needed. Missing
+  scanner → `ErrNoScanner`, preserved previous value.
+- Not yet: macOS (Homebrew), Windows, aggregator widget surfacing of
+  counts.
 
 ## Architecture
 
