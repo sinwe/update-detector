@@ -35,6 +35,7 @@ func init() {
 			ReleaseUpgradesFile: f["release_upgrades_file"],
 			RebootRequiredFile:  f["reboot_required_file"],
 			CVECommand:          f["cve_command"],
+			CVEScanners:         f["cve_scanners"],
 			CVESuite:            f["cve_suite"],
 		})
 	})
@@ -53,7 +54,8 @@ type Config struct {
 	RebootRequiredFile  string
 
 	// CVECommand overrides the vulnerability scanner binary; empty disables.
-	CVECommand string
+	CVECommand  string
+	CVEScanners string
 	// CVESuite pins the release codename passed to the scanner.
 	CVESuite string
 }
@@ -82,16 +84,15 @@ func New(cfg Config) (*Checker, error) {
 		aptConfigPath: confPath,
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
 	}
-	if cfg.CVECommand != "" {
-		det, err := cve.New("ubuntu", cve.Fields{
-			"suite":             cfg.CVESuite,
-			"dpkg_status_file":  cfg.DpkgStatusFile,
-			"os_release_file":   cfg.OSReleaseFile,
-			"cve_command":       cfg.CVECommand,
-		})
-		if err == nil {
-			c.cveDetector = det
-		}
+	det, err := cve.New("ubuntu", cve.Fields{
+		"suite":            cfg.CVESuite,
+		"dpkg_status_file": cfg.DpkgStatusFile,
+		"os_release_file":  cfg.OSReleaseFile,
+		"scanners":         cfg.CVEScanners,
+		"cve_command":      cfg.CVECommand,
+	})
+	if err == nil {
+		c.cveDetector = det
 	}
 	return c, nil
 }

@@ -28,12 +28,14 @@ type Config struct {
 	ReleaseUpgradesFile string
 	RebootRequiredFile  string
 
-	// CVECommand overrides the vulnerability scanner binary (default
-	// "debsecan" on Debian/Ubuntu). Empty disables CVE detection.
-	CVECommand string
+	// CVECommand overrides the vulnerability scanner binary. Empty
+	// means use CVEScanners (default "debsecan,trivy,osv-scanner").
+	// "disable" turns CVE detection off.
+	CVECommand  string
+	CVEScanners string
 	// CVESuite pins the release codename passed to the scanner; empty
 	// lets it auto-detect.
-	CVESuite string
+	CVESuite  string
 	StateFile string
 
 	TelegramBotToken string
@@ -99,8 +101,9 @@ func Load() (Config, error) {
 		ReleaseUpgradesFile: getEnv("RELEASE_UPGRADES_FILE", "/host/etc/update-manager/release-upgrades"),
 		RebootRequiredFile:  getEnv("REBOOT_REQUIRED_FILE", "/host/var/run/reboot-required"),
 
-		CVECommand: getEnv("CVE_COMMAND", "debsecan"),
-		CVESuite:   os.Getenv("CVE_SUITE"),
+		CVECommand:  os.Getenv("CVE_COMMAND"),
+		CVESuite:    os.Getenv("CVE_SUITE"),
+		CVEScanners: os.Getenv("CVE_SCANNERS"),
 
 		StateFile: getEnv("STATE_FILE", "/var/lib/update-detector/state.json"),
 
@@ -138,6 +141,7 @@ func (c Config) CheckerFields() checker.Fields {
 		"release_upgrades_file": c.ReleaseUpgradesFile,
 		"reboot_required_file":  c.RebootRequiredFile,
 		"cve_command":           c.CVECommand,
+		"cve_scanners":          c.CVEScanners,
 		"cve_suite":             c.CVESuite,
 	}
 }

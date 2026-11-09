@@ -22,8 +22,8 @@ import (
 	"strings"
 	"time"
 
-	"update-detector/internal/cve"
 	"update-detector/internal/checker"
+	"update-detector/internal/cve"
 )
 
 // ErrNoScanner is returned when no supported scanner binary is available.
@@ -81,6 +81,15 @@ type Detector struct {
 }
 
 func New(cfg Config) (*Detector, error) {
+	if cfg.Command == "disable" {
+		cfg.Scanners = ""
+		cfg.Command = ""
+		scanners := ""
+		// Empty list: Detect returns ErrNoScanner, and Check preserves
+		// previous value. Disable is honored as "no scanning".
+		_ = scanners
+		return &Detector{cfg: cfg, scanners: nil}, nil
+	}
 	scanners := cfg.Scanners
 	if scanners == "" {
 		scanners = "debsecan,trivy,osv-scanner"
@@ -544,7 +553,6 @@ func sevRank(s string) int {
 	}
 	return 4
 }
-
 
 // parseDebsecanReport parses `debsecan --format report` output.
 func parseDebsecanReport(out string) checker.VulnerabilityInfo {

@@ -38,6 +38,7 @@ func init() {
 			OSReleaseFile:      f["os_release_file"],
 			RebootRequiredFile: f["reboot_required_file"],
 			CVECommand:         f["cve_command"],
+			CVEScanners:        f["cve_scanners"],
 			CVESuite:           f["cve_suite"],
 		})
 	})
@@ -54,8 +55,9 @@ type Config struct {
 	OSReleaseFile      string
 	RebootRequiredFile string
 
-	CVECommand string
-	CVESuite   string
+	CVECommand  string
+	CVEScanners string
+	CVESuite    string
 }
 
 type Checker struct {
@@ -77,16 +79,15 @@ func New(cfg Config) (*Checker, error) {
 		return nil, fmt.Errorf("debian checker: %w", err)
 	}
 	c := &Checker{cfg: cfg, aptConfigPath: confPath}
-	if cfg.CVECommand != "" {
-		det, err := cve.New("debian", cve.Fields{
-			"suite":            cfg.CVESuite,
-			"dpkg_status_file": cfg.DpkgStatusFile,
-			"os_release_file":  cfg.OSReleaseFile,
-			"cve_command":      cfg.CVECommand,
-		})
-		if err == nil {
-			c.cveDetector = det
-		}
+	det, err := cve.New("debian", cve.Fields{
+		"suite":            cfg.CVESuite,
+		"dpkg_status_file": cfg.DpkgStatusFile,
+		"os_release_file":  cfg.OSReleaseFile,
+		"scanners":         cfg.CVEScanners,
+		"cve_command":      cfg.CVECommand,
+	})
+	if err == nil {
+		c.cveDetector = det
 	}
 	return c, nil
 }
