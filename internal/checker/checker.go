@@ -1,6 +1,22 @@
 package checker
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
+
+// CVEEnabled is the runtime gate for CVE/vulnerability detection. Off by
+// default (see config.CVE_ENABLED). The aggregator's per-host toggle
+// updates it via SetCVEEnabled so detection can be turned on/off without
+// restarting the agent. Stored atomically so the check loop and the
+// report path don't race.
+var cveEnabled atomic.Bool
+
+// SetCVEEnabled updates the runtime gate.
+func SetCVEEnabled(v bool) { cveEnabled.Store(v) }
+
+// CVEEnabled reports whether CVE detection should run this cycle.
+func CVEEnabled() bool { return cveEnabled.Load() }
 
 // Checker detects available updates for one OS platform. Implementations
 // live in sibling packages (e.g. ubuntu), keyed by their own dependencies;

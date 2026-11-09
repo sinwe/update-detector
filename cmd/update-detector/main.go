@@ -71,6 +71,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	checker.SetCVEEnabled(cfg.CVEEnabled)
 
 	var notifiers []notifier.Notifier
 	if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
@@ -198,8 +199,10 @@ func run(ctx context.Context) error {
 
 		if aggClient != nil {
 			reportCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			if err := aggClient.Report(reportCtx, status); err != nil {
+			if desired, err := aggClient.Report(reportCtx, status); err != nil {
 				log.Printf("aggregator: report failed: %v", err)
+			} else {
+				checker.SetCVEEnabled(desired)
 			}
 			cancel()
 		}

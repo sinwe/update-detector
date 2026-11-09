@@ -158,11 +158,11 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		status.OS = osInfo
 	}
 
-	// CVE / vulnerability detection (optional plugin). A missing or
-	// failing detector is recorded as an error and the previous cycle's
-	// value is preserved, so a transient failure doesn't masquerade as
-	// "no vulnerabilities".
-	if c.cveDetector != nil {
+	// CVE / vulnerability detection (opt-in, gated by checker.CVEEnabled).
+	// A missing or failing detector is recorded as an error and the
+	// previous cycle's value is preserved, so a transient failure
+	// doesn't masquerade as "no vulnerabilities".
+	if c.cveDetector != nil && checker.CVEEnabled() {
 		if vulns, err := c.cveDetector.Detect(ctx, previous); err != nil {
 			errs = append(errs, fmt.Sprintf("cve: %v", err))
 			if previous != nil {

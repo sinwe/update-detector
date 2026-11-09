@@ -110,12 +110,7 @@ func Load() (Config, error) {
 		RebootRequiredFile:  getEnv("REBOOT_REQUIRED_FILE", "/host/var/run/reboot-required"),
 
 		CVEEnabled:       cveEnabled,
-		CVECommand:       func() string {
-			if !cveEnabled {
-				return "disable"
-			}
-			return os.Getenv("CVE_COMMAND")
-		}(),
+		CVECommand:       os.Getenv("CVE_COMMAND"),
 		CVEScanners:      os.Getenv("CVE_SCANNERS"),
 		CVESuite:         os.Getenv("CVE_SUITE"),
 		CVEToolsCacheDir: getEnv("CVE_TOOLS_CACHE_DIR", "/var/lib/update-detector/tools"),

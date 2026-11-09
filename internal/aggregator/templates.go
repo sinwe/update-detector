@@ -34,6 +34,7 @@ type agentView struct {
 	OSUpdateAvailable  bool
 	AgentVersion       string
 	Platform           string
+	CVEEnabled         bool
 	CVECritical       int
 	CVEHigh           int
 	CVEMedium         int
@@ -166,6 +167,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
 		Hostname:                 rec.Hostname,
+		CVEEnabled:               rec.CVEEnabled,
 		RemoteAddr:               rec.LastRemoteAddr,
 		NotifyMode:               rec.NotifyMode(now),
 		AnyStreamConnected:       connected,
@@ -198,6 +200,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
 		v.Platform = rec.LastReport.Platform
+		v.CVEEnabled = rec.CVEEnabled
 		v.CVECritical = rec.LastReport.Vulnerabilities.Critical
 		v.CVEHigh = rec.LastReport.Vulnerabilities.High
 		v.CVEMedium = rec.LastReport.Vulnerabilities.Medium
@@ -718,6 +721,9 @@ const adminTemplateSrc = `<!DOCTYPE html>
             <input type="checkbox" id="verbose-{{.ID}}"> verbose
           </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
+          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Enable CVE/vulnerability detection for this host (off by default)">
+            <input type="checkbox" {{if .CVEEnabled}}checked{{end}} onchange="postCVEEnabled('{{.ID}}', this.checked)"> CVE detection
+          </label>
           {{if gt .CVETotal 0}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
@@ -948,6 +954,16 @@ const adminTemplateSrc = `<!DOCTYPE html>
     }
     function applyAction(id, type) {
       postApply(id, {type: type});
+    }
+    async function postCVEEnabled(id, enabled) {
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/cve-enabled', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({enabled: enabled}),
+        });
+        if (!resp.ok) alert('CVE toggle failed: ' + await resp.text());
+      } catch (e) { alert('CVE toggle failed: ' + e); }
     }
     function applyPackages(event, id) {
       event.preventDefault();

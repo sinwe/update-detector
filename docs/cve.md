@@ -19,7 +19,10 @@ no fix yet, or one whose fix hasn't been applied.
   opens a modal overlay with the full per-CVE list (id, severity, package).
 - Opt-in: `CVE_ENABLED` (default false). CVE scanning is off by default
   because it is noisy, makes many network calls, and most hosts carry
-  hundreds of low-severity CVEs. Set `CVE_ENABLED=true` to turn it on.
+  hundreds of low-severity CVEs. Toggle per-host in the admin UI
+  (host card → "CVE detection" checkbox) or set `CVE_ENABLED=true` in
+  the agent's env. The admin toggle takes effect on the next check cycle
+  without restarting the agent.
 - Not yet: macOS (Homebrew), Windows, Telegram alerting on CVE changes.
 
 ## Architecture

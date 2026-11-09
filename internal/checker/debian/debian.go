@@ -146,7 +146,7 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		status.OS = osInfo
 	}
 
-	if c.cveDetector != nil {
+	if c.cveDetector != nil && checker.CVEEnabled() {
 		if vulns, err := c.cveDetector.Detect(ctx, previous); err != nil {
 			errs = append(errs, fmt.Sprintf("cve: %v", err))
 			if previous != nil {
