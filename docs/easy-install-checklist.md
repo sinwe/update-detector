@@ -88,3 +88,43 @@ Check an item off when its change is committed on this branch.
 - The first apt check was still running after 4+ minutes on a cold VM
   and `/status` answered `{"error":"no check has completed yet"}` the
   whole time, which reads as a failure to a new user.
+
+## Code review notes (added on rebase to main, 10 Nov 2026)
+
+Assessment of the completed items and remaining work:
+
+**Completed items — well implemented:**
+- Items 2 and 4 are solid. `--help` runs before the root check (correct),
+  unknown args fail fast, `warn_if_aggregator_unreachable` is non-fatal
+  with consistent wording across all three agent paths. `print_aggregator_
+  secret_note` has a thorough discovery chain (env → native env file →
+  Docker compose label lookup) with a clear "where to find it" fallback.
+- All three agent install paths (native, macOS/launchd, Docker) call both
+  helpers consistently — good DRY.
+
+**Potential issues in existing code:**
+- `warn_if_aggregator_unreachable` uses `curl` — minimal hosts (Alpine,
+  busybox) may not have it. Consider a `wget` fallback or
+  `command -v curl` guard. Low priority (best-effort check).
+- `env_value` and `docker_compose_dir_for` helpers are defined later in
+  the file than their first use — works in bash (functions resolved at
+  call time), but fragile for readers. Consider moving them up or
+  documenting.
+
+**Prioritization suggestions (unchanged from original review):**
+1. **Item 1** (`/dev/tty` guard) — real bug, affects all 7 prompt sites,
+   breaks non-interactive installs. Highest priority.
+2. **Item 3** (verify install success) — `install_unit` never checks the
+   service stayed up. A simple retry loop on `curl localhost:8080/status`
+   would catch failures early.
+3. **Item 6** (generate apply secret) — first-time aggregator installs
+   silently leave apply disabled (501 later). Generate + print it.
+4. **Item 7** (checksum verification) — security improvement worth doing
+   before a final release.
+5. **Item 9** (partial install cleanup) — AGGREGATOR_URL gate fires after
+   binary download + user creation. Validate first or clean up on failure.
+6. **Items 11-13** — polish, low effort, nice quality-of-life.
+
+**Verdict:** The checklist is well-structured, the completed items are
+implemented correctly, and the remaining items are legitimate follow-ups.
+The branch is small and focused. Ready to merge when items 1-3 are done.
