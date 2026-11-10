@@ -69,10 +69,14 @@ Check an item off when its change is committed on this branch.
 
 ## Next — medium effort, real robustness
 
-- [ ] **6. Generate an apply secret at aggregator-install time when none
-  is set** — today an unset secret silently leaves apply disabled (501
-  later). Generate one and print it, the same way the secret note now
-  surfaces it.
+- [x] **6. Generate an apply secret at aggregator-install time when none
+  is set** — Native: generates a 32-byte hex secret (openssl or
+  /dev/urandom fallback) when no secret is provided or already configured,
+  writes it to /etc/default/update-aggregator, prints it. Docker: same
+  generation when ADMIN_APPLY_SHARED_SECRET is unset and no existing
+  secret in .env, persisted via set_env_var. Both paths print the secret
+  with the same "keep it somewhere safe" wording as an explicitly-provided
+  one. Verified with bash -n.
 - [ ] **7. Verify downloaded binaries** — `download_binary` curls the
   release asset and installs it with no checksum check. Needs the
   release workflow to publish checksums too.

@@ -1076,6 +1076,18 @@ install_aggregator_native() {
   fi
   resolved_admin_secret="${ADMIN_APPLY_SHARED_SECRET:-$existing_admin_secret}"
 
+  # Generate a secret if none was provided or already configured, so apply/
+  # self-update work out of the box instead of silently staying disabled
+  # (501) until someone notices.
+  if [ -z "$resolved_admin_secret" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      resolved_admin_secret="$(openssl rand -hex 32)"
+    else
+      resolved_admin_secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n')"
+    fi
+    echo "install.sh: generated ADMIN_APPLY_SHARED_SECRET (no secret was set)" >&2
+  fi
+
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${AGGREGATOR_LISTEN_ADDR:-:9090}
 REGISTRY_FILE=$data_dir/registry.json
@@ -1175,6 +1187,25 @@ install_aggregator_docker() {
     # systemd equivalent.
     set_env_var_if_set "$dir/.env" TELEGRAM_BOT_TOKEN "${AGGREGATOR_TELEGRAM_BOT_TOKEN:-}"
     set_env_var_if_set "$dir/.env" TELEGRAM_CHAT_ID "${AGGREGATOR_TELEGRAM_CHAT_ID:-}"
+    # Generate a secret if none was provided or already configured, so
+    # apply/self-update work out of the box instead of staying disabled
+    # (501) until someone notices.
+    if [ -z "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
+      if [ -f "$dir/.env" ]; then
+        existing="$(env_value "$dir/.env" ADMIN_APPLY_SHARED_SECRET)"
+      else
+        existing=""
+      fi
+      if [ -z "$existing" ]; then
+        if command -v openssl >/dev/null 2>&1; then
+          resolved_secret="$(openssl rand -hex 32)"
+        else
+          resolved_secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n')"
+        fi
+        ADMIN_APPLY_SHARED_SECRET="$resolved_secret"
+        echo "install.sh: generated ADMIN_APPLY_SHARED_SECRET (no secret was set)" >&2
+      fi
+    fi
     set_env_var "$dir/.env" ADMIN_APPLY_SHARED_SECRET "${ADMIN_APPLY_SHARED_SECRET:-}"
     # The channel the aggregator's own update checks follow (see
     # SELF_UPDATE_CHANNEL in docs/reference.md): persisted only when
