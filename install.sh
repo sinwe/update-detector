@@ -82,6 +82,15 @@
 
 set -eu
 
+# have_tty -> returns 0 if /dev/tty can actually be opened for reading.
+# [ -r /dev/tty ] is NOT enough: the device node exists and is readable
+# even with no controlling terminal, but `read < /dev/tty` then fails with
+# ENXIO and, under set -e, aborts the whole script (exit 2). Probe-open
+# the device instead.
+have_tty() {
+  { : < /dev/tty; } 2>/dev/null
+}
+
 # --help never needs root, and an unknown argument must fail fast
 # instead of silently starting an install: previously only --uninstall
 # was recognised as $1, and anything else (including --help itself) was
@@ -153,10 +162,37 @@ fi
 # for what it actually needs instead -- systemctl inside install_unit,
 # used only by the native install functions and the always-native
 # companion.
-if ! command -v curl >/dev/null 2>&1; then
-  echo "install.sh: curl is required but not found on PATH" >&2
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+  echo "install.sh: curl or wget is required but neither was found on PATH" >&2
   exit 1
 fi
+
+fetch_body() {
+  url="$1" ua="${2:-update-detector-install.sh}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -H "User-Agent: $ua" "$url"
+  else
+    wget -qO- --user-agent="$ua" "$url"
+  fi
+}
+
+download_to() {
+  url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+  else
+    wget -qO "$dest" "$url"
+  fi
+}
+
+url_ok() {
+  url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -o /dev/null --max-time 5 "$url"
+  else
+    wget -q --spider --timeout=5 "$url"
+  fi
+}
 
 # is_macos -> true on macOS (Darwin), where there is no systemd, no
 # /proc, and no Docker path worth offering (see header).
@@ -234,7 +270,7 @@ resolve_asset_url() {
   # error. grep+sed avoids needing jq on the *installing* host too, which
   # (unlike the release workflow's own runner) we don't control.
   # GitHub's API rejects requests with no User-Agent at all (403).
-  curl -fsSL -H "User-Agent: update-detector-install.sh" "$release_url" \
+  fetch_body "$release_url" "update-detector-install.sh" \
     | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
     | head -1 \
     | sed -E 's/.*"(https[^"]+)"$/\1/'
@@ -254,7 +290,7 @@ download_binary() {
     exit 1
   fi
   echo "install.sh: downloading $download_url"
-  curl -fsSL "$download_url" -o "$dest.new"
+  download_to "$download_url" "$dest.new"
   chmod 0755 "$dest.new"
   mv "$dest.new" "$dest"
 }
@@ -282,7 +318,7 @@ cache_install_sh_for_companion() {
   else
     raw_url="https://raw.githubusercontent.com/sinwe/update-detector/$INSTALL_VERSION/install.sh"
   fi
-  if curl -fsSL "$raw_url" -o "$CACHED_INSTALL_SH.new"; then
+  if download_to "$raw_url" "$CACHED_INSTALL_SH.new"; then
     chmod 0755 "$CACHED_INSTALL_SH.new"
     mv "$CACHED_INSTALL_SH.new" "$CACHED_INSTALL_SH"
   else
@@ -531,7 +567,7 @@ prompt_use_docker() {
     esac
     return
   fi
-  if [ ! -r /dev/tty ]; then
+  if ! have_tty; then
     echo 1
     return
   fi
@@ -702,6 +738,9 @@ install_agent_native() {
   fi
   warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
 
+  # Optional Telegram setup (prompts only if not already configured).
+  prompt_telegram
+
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
 HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-$existing_hostname_override}
@@ -744,6 +783,10 @@ EOF
 
   install_unit update-detector
   echo "install.sh: update-detector installed and started. Check: systemctl status update-detector"
+  _agent_port="${LISTEN_ADDR:-:8080}"
+  _agent_port="${_agent_port##*:}"
+  _agent_port="${_agent_port:-8080}"
+  verify_agent "http://localhost:${_agent_port}"
   print_aggregator_secret_note
 }
 
@@ -811,6 +854,10 @@ install_agent_launchd() {
     exit 1
   fi
   warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
+
+  # Optional Telegram setup (prompts only if not already configured).
+  prompt_telegram
+
   resolved_listen_addr="${LISTEN_ADDR:-$existing_listen_addr}"
   resolved_listen_addr="${resolved_listen_addr:-:8080}"
   resolved_check_interval="${CHECK_INTERVAL:-$existing_check_interval}"
@@ -903,7 +950,9 @@ EOF
   launchd_reload "$plist_label" "$plist_path"
   check_port="${resolved_listen_addr}"
   check_port="${check_port##*:}"
+  check_port="${check_port:-8080}"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
+  verify_agent "http://localhost:$check_port"
   print_aggregator_secret_note
 }
 
@@ -941,7 +990,7 @@ install_agent_docker() {
     dir="${DOCKER_DIR:-}"
     if [ -z "$dir" ]; then
       suggested_dir="$(default_docker_dir)"
-      if [ -r /dev/tty ]; then
+      if have_tty; then
         printf "Directory for the update-detector Compose deployment [%s]: " "$suggested_dir" >&2
         read -r dir < /dev/tty
       fi
@@ -956,8 +1005,11 @@ install_agent_docker() {
     fi
     warn_if_aggregator_unreachable "$resolved_aggregator_url" "$dir/.env"
 
+    # Optional Telegram setup (prompts only if not already configured).
+    prompt_telegram
+
     mkdir -p "$dir"
-    curl -fsSL "$(raw_url_for docker-compose.yml)" -o "$dir/docker-compose.yml"
+    download_to "$(raw_url_for docker-compose.yml)" "$dir/docker-compose.yml"
     set_env_var "$dir/.env" HOSTNAME_OVERRIDE "${HOSTNAME_OVERRIDE:-}"
     # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID: see set_env_var_if_set's own
     # comment -- this directory may already have an aggregator-configured
@@ -975,6 +1027,8 @@ install_agent_docker() {
 
   ( cd "$dir" && docker compose pull && docker compose up -d )
   echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
+  _agent_port="${AGENT_PORT:-8080}"
+  verify_agent "http://localhost:${_agent_port}"
   print_aggregator_secret_note
 }
 
@@ -1039,6 +1093,7 @@ EOF
 
   install_unit update-aggregator
   echo "install.sh: update-aggregator installed and started. Check: systemctl status update-aggregator"
+  verify_agent "http://localhost:8080"
   if [ -n "$resolved_admin_secret" ]; then
     echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$resolved_admin_secret" >&2
     echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
@@ -1089,7 +1144,7 @@ install_aggregator_docker() {
     dir="${AGGREGATOR_DOCKER_DIR:-}"
     if [ -z "$dir" ]; then
       suggested_dir="$(default_docker_dir)"
-      if [ -r /dev/tty ]; then
+      if have_tty; then
         printf "Directory for the update-aggregator Compose deployment [%s]: " "$suggested_dir" >&2
         read -r dir < /dev/tty
       fi
@@ -1097,7 +1152,7 @@ install_aggregator_docker() {
     fi
     echo "install.sh: setting up update-aggregator via Docker Compose in $dir..."
     mkdir -p "$dir"
-    curl -fsSL "$(raw_url_for docker-compose.aggregator.yml)" -o "$dir/docker-compose.aggregator.yml"
+    download_to "$(raw_url_for docker-compose.aggregator.yml)" "$dir/docker-compose.aggregator.yml"
     # Prefixed AGGREGATOR_* input names, same reasoning as
     # install_aggregator_native's own env file -- keeps a same-run agent +
     # aggregator install from accidentally sharing one secret/token meant
@@ -1124,6 +1179,7 @@ install_aggregator_docker() {
   ( cd "$dir" && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" pull \
       && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" up -d )
   echo "install.sh: update-aggregator running via Docker Compose in $dir. Check: cd $dir && docker compose -f docker-compose.aggregator.yml -p $AGGREGATOR_COMPOSE_PROJECT logs -f"
+  verify_agent "http://localhost:9090"
   if [ -n "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
     echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$ADMIN_APPLY_SHARED_SECRET" >&2
     echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
@@ -1287,7 +1343,7 @@ install_companion() {
   # briefly unreachable right now isn't fatal (the companion reconnects
   # with backoff on its own). Just a heads-up if something's still off
   # despite the discovery above.
-  if [ -n "$agg_url" ] && ! curl -fsS -o /dev/null --max-time 5 "$agg_url/openapi.yaml"; then
+  if [ -n "$agg_url" ] && ! url_ok "$agg_url/openapi.yaml"; then
     echo "install.sh: warning: $agg_url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in /etc/systemd/system/update-detector-companion.service if the companion never connects" >&2
   fi
 
@@ -1380,7 +1436,7 @@ install_companion_launchd() {
 
   echo "install.sh: socket=$socket_path aggregator=$agg_url agent_status=$agent_status_url"
 
-  if [ -n "$agg_url" ] && ! curl -fsS -o /dev/null --max-time 5 "$agg_url/openapi.yaml"; then
+  if [ -n "$agg_url" ] && ! url_ok "$agg_url/openapi.yaml"; then
     echo "install.sh: warning: $agg_url doesn't look reachable from this host right now -- continuing anyway." >&2
   fi
 
@@ -1653,7 +1709,7 @@ prompt_components() {
   if is_macos; then
     # No Docker choice to offer and no aggregator port on macOS -- just
     # agent, companion, or both, all as LaunchDaemons.
-    if [ ! -r /dev/tty ]; then
+    if ! have_tty; then
       echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to agent only" >&2
       echo "agent"
       return
@@ -1674,9 +1730,9 @@ prompt_components() {
     esac
     return
   fi
-  if [ ! -r /dev/tty ]; then
-    echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to companion only" >&2
-    echo "companion"
+  if ! have_tty; then
+    echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to agent" >&2
+    echo "agent"
     return
   fi
   echo "Which of update-detector's pieces would you like to set up on this host?" >&2
@@ -1710,12 +1766,47 @@ prompt_components() {
 # through an aggregator; a companion can't even pair with an agent that
 # has none) -- so both callers treat an empty result (no terminal to
 # prompt on, or a human leaving it blank) as fatal.
+# prompt_telegram -> optionally configure Telegram notifications.
+# Sets TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID if the user opts in.
+# No-TTY: skips silently (env vars only).
+prompt_telegram() {
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+    return
+  fi
+  if ! have_tty; then
+    return
+  fi
+  echo >&2
+  echo "install.sh: Telegram update alerts (optional)" >&2
+  echo "  Get a bot token from @BotFather and your chat ID from @userinfobot." >&2
+  printf "Enable Telegram notifications? [y/N]: " >&2
+  read -r reply < /dev/tty
+  case "$reply" in
+    y|Y|yes|YES)
+      printf "Bot token: " >&2
+      read -r token < /dev/tty
+      printf "Chat ID: " >&2
+      read -r chat < /dev/tty
+      if [ -n "$token" ] && [ -n "$chat" ]; then
+        export TELEGRAM_BOT_TOKEN="$token"
+        export TELEGRAM_CHAT_ID="$chat"
+        echo "install.sh: Telegram configured." >&2
+      else
+        echo "install.sh: skipping Telegram (token or chat ID missing)." >&2
+      fi
+      ;;
+    *)
+      echo "install.sh: skipping Telegram." >&2
+      ;;
+  esac
+}
+
 prompt_aggregator_url() {
   if [ -n "${1:-}" ]; then
     printf '%s' "$1"
     return
   fi
-  if [ ! -r /dev/tty ]; then
+  if ! have_tty; then
     return
   fi
   echo "install.sh: no AGGREGATOR_URL could be found automatically." >&2
@@ -1733,11 +1824,42 @@ prompt_aggregator_url() {
 # aggregator isn't fatal -- but a typo'd URL is the common case, and
 # without this the user only finds out from the agent's own logs after
 # the install has already claimed success. Same check the companion
+# verify_agent BASE_URL -> best-effort check that the agent answers
+# /status after install_unit has restarted it. Waits briefly for the
+# first successful check (the agent's first apt scan can take a while on
+# a cold host, so /status may answer {"error":"no check has completed
+# yet"} for a minute or two -- that still counts as "up"). Never fatal.
+# verify_agent BASE_URL -> best-effort check that the service answers
+# /status (or /healthz) after install_unit has restarted it. Waits
+# briefly for the first successful response. Never fatal.
+verify_agent() {
+  base="${1:-http://localhost:8080}"
+  url="${base%/}/status"
+  echo "install.sh: verifying at $url ..."
+  i=0
+  while [ "$i" -lt 15 ]; do
+    resp="$(fetch_body "$url" 2>/dev/null || true)"
+    if [ -n "$resp" ]; then
+      echo "install.sh: service is up: $resp"
+      return 0
+    fi
+    # /status may not exist (aggregator) -- try /healthz
+    resp="$(fetch_body "${base%/}/healthz" 2>/dev/null || true)"
+    if [ -n "$resp" ]; then
+      echo "install.sh: service is up: $resp"
+      return 0
+    fi
+    sleep 1
+    i=$((i+1))
+  done
+  echo "install.sh: warning: service did not answer $url within 15s -- check: systemctl status (or docker compose logs)" >&2
+}
+
 # install already does (see install_companion); WHERE names the file
 # holding the AGGREGATOR_URL so the warning can point at it.
 warn_if_aggregator_unreachable() {
   url="$1" where="$2"
-  if [ -n "$url" ] && ! curl -fsS -o /dev/null --max-time 5 "$url/openapi.yaml"; then
+  if [ -n "$url" ] && ! url_ok "$url/openapi.yaml"; then
     echo "install.sh: warning: $url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
   fi
 }
@@ -1818,7 +1940,7 @@ prompt_uninstall_components() {
     # on macOS) -- confirm once for whatever was actually found, same
     # /dev/tty rationale as above.
     echo "Found installed:$found" >&2
-    if [ ! -r /dev/tty ]; then
+    if ! have_tty; then
       echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
       echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly (e.g. agent,companion) to proceed non-interactively." >&2
       return
@@ -1832,7 +1954,7 @@ prompt_uninstall_components() {
     return
   fi
 
-  if [ ! -r /dev/tty ]; then
+  if ! have_tty; then
     echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
     echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly to proceed non-interactively." >&2
     return
