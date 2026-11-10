@@ -16,12 +16,13 @@ Check an item off when its change is committed on this branch.
 
 ## Do first — small, high impact
 
-- [ ] **1. Fix the `/dev/tty` guard** — `[ -r /dev/tty ]` passes with no
+- [x] **1. Fix the `/dev/tty` guard** — `[ -r /dev/tty ]` passes with no
   controlling terminal, then `read < /dev/tty` fails with ENXIO and
-  `set -e` aborts (exit 2). Affects all 7 prompt sites. Test with
-  `[ -t 0 ]` or probe-open `/dev/tty` first. Also: no-TTY Linux default
-  is "companion only" vs macOS "agent" — companion-only is useless on a
-  fresh host with no agent.
+  `set -e` aborts (exit 2). Fixed: added `have_tty()` helper that
+  probe-opens `/dev/tty` (not just `-r` test). All 7 prompt sites now
+  use `have_tty`/`! have_tty`. Also: no-TTY Linux default changed from
+  "companion only" to "agent" (companion-only is useless on a fresh host
+  with no agent). Verified with `bash -n`.
 - [x] **2. Add `--help` (and reject unknown flags)** — today only
   `--uninstall` is recognised; anything else, including `--help`, is
   silently ignored and the install starts. Done: `--help`/`-h` prints

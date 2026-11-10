@@ -82,6 +82,15 @@
 
 set -eu
 
+# have_tty -> returns 0 if /dev/tty can actually be opened for reading.
+# [ -r /dev/tty ] is NOT enough: the device node exists and is readable
+# even with no controlling terminal, but `read < /dev/tty` then fails with
+# ENXIO and, under set -e, aborts the whole script (exit 2). Probe-open
+# the device instead.
+have_tty() {
+  { : < /dev/tty; } 2>/dev/null
+}
+
 # --help never needs root, and an unknown argument must fail fast
 # instead of silently starting an install: previously only --uninstall
 # was recognised as $1, and anything else (including --help itself) was
@@ -531,7 +540,7 @@ prompt_use_docker() {
     esac
     return
   fi
-  if [ ! -r /dev/tty ]; then
+  if ! have_tty; then
     echo 1
     return
   fi
@@ -941,7 +950,7 @@ install_agent_docker() {
     dir="${DOCKER_DIR:-}"
     if [ -z "$dir" ]; then
       suggested_dir="$(default_docker_dir)"
-      if [ -r /dev/tty ]; then
+      if have_tty; then
         printf "Directory for the update-detector Compose deployment [%s]: " "$suggested_dir" >&2
         read -r dir < /dev/tty
       fi
@@ -1089,7 +1098,7 @@ install_aggregator_docker() {
     dir="${AGGREGATOR_DOCKER_DIR:-}"
     if [ -z "$dir" ]; then
       suggested_dir="$(default_docker_dir)"
-      if [ -r /dev/tty ]; then
+      if have_tty; then
         printf "Directory for the update-aggregator Compose deployment [%s]: " "$suggested_dir" >&2
         read -r dir < /dev/tty
       fi
@@ -1653,7 +1662,7 @@ prompt_components() {
   if is_macos; then
     # No Docker choice to offer and no aggregator port on macOS -- just
     # agent, companion, or both, all as LaunchDaemons.
-    if [ ! -r /dev/tty ]; then
+    if ! have_tty; then
       echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to agent only" >&2
       echo "agent"
       return
@@ -1674,9 +1683,9 @@ prompt_components() {
     esac
     return
   fi
-  if [ ! -r /dev/tty ]; then
-    echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to companion only" >&2
-    echo "companion"
+  if ! have_tty; then
+    echo "install.sh: no terminal to prompt on and INSTALL_COMPONENTS not set -- defaulting to agent" >&2
+    echo "agent"
     return
   fi
   echo "Which of update-detector's pieces would you like to set up on this host?" >&2
@@ -1715,7 +1724,7 @@ prompt_aggregator_url() {
     printf '%s' "$1"
     return
   fi
-  if [ ! -r /dev/tty ]; then
+  if ! have_tty; then
     return
   fi
   echo "install.sh: no AGGREGATOR_URL could be found automatically." >&2
@@ -1818,7 +1827,7 @@ prompt_uninstall_components() {
     # on macOS) -- confirm once for whatever was actually found, same
     # /dev/tty rationale as above.
     echo "Found installed:$found" >&2
-    if [ ! -r /dev/tty ]; then
+    if ! have_tty; then
       echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
       echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly (e.g. agent,companion) to proceed non-interactively." >&2
       return
@@ -1832,7 +1841,7 @@ prompt_uninstall_components() {
     return
   fi
 
-  if [ ! -r /dev/tty ]; then
+  if ! have_tty; then
     echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
     echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly to proceed non-interactively." >&2
     return
