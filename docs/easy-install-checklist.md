@@ -29,10 +29,13 @@ Check an item off when its change is committed on this branch.
   usage and exits 0 (works with and without root, since it runs before
   the root check); unknown args fail fast, exit 1. Verified live on this
   VM 8 Nov 2026; scripted install still works end to end.
-- [ ] **3. Verify the install actually works before declaring success**
-  — `install_unit` does enable + restart and never checks the service
-  stayed up or that `/status` answers. Wait briefly, then `curl
-  localhost:8080/status` and report the upgradable counts.
+- [x] **3. Verify the install actually works before declaring success**
+  — Added `verify_agent` helper that waits up to 15s for `/status` (or
+  `/healthz` for the aggregator) to answer, reporting the response.
+  Called after every agent install path (native, macOS/launchd, Docker)
+  and both aggregator installs (native + Docker). Never fatal — just
+  warns if the service didn't come up. Uses `/status` first (agent
+  upgradable counts) then falls back to `/healthz` (aggregator).
 - [x] **4. Check the aggregator URL is reachable during agent install**
   — the companion install already does this (best-effort `curl` of
   `$agg_url/openapi.yaml` with a warning); the agent install doesn't,

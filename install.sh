@@ -753,6 +753,10 @@ EOF
 
   install_unit update-detector
   echo "install.sh: update-detector installed and started. Check: systemctl status update-detector"
+  _agent_port="${LISTEN_ADDR:-:8080}"
+  _agent_port="${_agent_port##*:}"
+  _agent_port="${_agent_port:-8080}"
+  verify_agent "http://localhost:${_agent_port}"
   print_aggregator_secret_note
 }
 
@@ -912,7 +916,9 @@ EOF
   launchd_reload "$plist_label" "$plist_path"
   check_port="${resolved_listen_addr}"
   check_port="${check_port##*:}"
+  check_port="${check_port:-8080}"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
+  verify_agent "http://localhost:$check_port"
   print_aggregator_secret_note
 }
 
@@ -984,6 +990,8 @@ install_agent_docker() {
 
   ( cd "$dir" && docker compose pull && docker compose up -d )
   echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
+  _agent_port="${AGENT_PORT:-8080}"
+  verify_agent "http://localhost:${_agent_port}"
   print_aggregator_secret_note
 }
 
@@ -1048,6 +1056,7 @@ EOF
 
   install_unit update-aggregator
   echo "install.sh: update-aggregator installed and started. Check: systemctl status update-aggregator"
+  verify_agent "http://localhost:8080"
   if [ -n "$resolved_admin_secret" ]; then
     echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$resolved_admin_secret" >&2
     echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
@@ -1133,6 +1142,7 @@ install_aggregator_docker() {
   ( cd "$dir" && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" pull \
       && docker compose -f docker-compose.aggregator.yml -p "$AGGREGATOR_COMPOSE_PROJECT" up -d )
   echo "install.sh: update-aggregator running via Docker Compose in $dir. Check: cd $dir && docker compose -f docker-compose.aggregator.yml -p $AGGREGATOR_COMPOSE_PROJECT logs -f"
+  verify_agent "http://localhost:9090"
   if [ -n "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
     echo "install.sh: ADMIN_APPLY_SHARED_SECRET=$ADMIN_APPLY_SHARED_SECRET" >&2
     echo "  Keep this somewhere safe (e.g. a password manager) -- it's the only" >&2
@@ -1742,6 +1752,37 @@ prompt_aggregator_url() {
 # aggregator isn't fatal -- but a typo'd URL is the common case, and
 # without this the user only finds out from the agent's own logs after
 # the install has already claimed success. Same check the companion
+# verify_agent BASE_URL -> best-effort check that the agent answers
+# /status after install_unit has restarted it. Waits briefly for the
+# first successful check (the agent's first apt scan can take a while on
+# a cold host, so /status may answer {"error":"no check has completed
+# yet"} for a minute or two -- that still counts as "up"). Never fatal.
+# verify_agent BASE_URL -> best-effort check that the service answers
+# /status (or /healthz) after install_unit has restarted it. Waits
+# briefly for the first successful response. Never fatal.
+verify_agent() {
+  base="${1:-http://localhost:8080}"
+  url="${base%/}/status"
+  echo "install.sh: verifying at $url ..."
+  i=0
+  while [ "$i" -lt 15 ]; do
+    resp="$(curl -fsS --max-time 5 "$url" 2>/dev/null || true)"
+    if [ -n "$resp" ]; then
+      echo "install.sh: service is up: $resp"
+      return 0
+    fi
+    # /status may not exist (aggregator) -- try /healthz
+    resp="$(curl -fsS --max-time 5 "${base%/}/healthz" 2>/dev/null || true)"
+    if [ -n "$resp" ]; then
+      echo "install.sh: service is up: $resp"
+      return 0
+    fi
+    sleep 1
+    i=$((i+1))
+  done
+  echo "install.sh: warning: service did not answer $url within 15s -- check: systemctl status (or docker compose logs)" >&2
+}
+
 # install already does (see install_companion); WHERE names the file
 # holding the AGGREGATOR_URL so the warning can point at it.
 warn_if_aggregator_unreachable() {
