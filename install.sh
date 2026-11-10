@@ -168,29 +168,29 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
 fi
 
 fetch_body() {
-  url="$1" ua="${2:-update-detector-install.sh}"
+  _url="$1" _ua="${2:-update-detector-install.sh}"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -H "User-Agent: $ua" "$url"
+    curl -fsSL -H "User-Agent: $_ua" "$_url"
   else
-    wget -qO- --user-agent="$ua" "$url"
+    wget -qO- --user-agent="$_ua" "$_url"
   fi
 }
 
 download_to() {
-  url="$1" dest="$2"
+  _url="$1" _dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$dest"
+    curl -fsSL "$_url" -o "$_dest"
   else
-    wget -qO "$dest" "$url"
+    wget -qO "$_dest" "$_url"
   fi
 }
 
 url_ok() {
-  url="$1"
+  _url="$1"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS -o /dev/null --max-time 5 "$url"
+    curl -fsS -o /dev/null --max-time 5 "$_url"
   else
-    wget -q --spider --timeout=5 "$url"
+    wget -q --spider --timeout=5 "$_url"
   fi
 }
 
@@ -1877,34 +1877,34 @@ prompt_aggregator_url() {
 # /status (or /healthz) after install_unit has restarted it. Waits
 # briefly for the first successful response. Never fatal.
 verify_agent() {
-  base="${1:-http://localhost:8080}"
-  url="${base%/}/status"
-  echo "install.sh: verifying at $url ..."
-  i=0
-  while [ "$i" -lt 15 ]; do
-    resp="$(fetch_body "$url" 2>/dev/null || true)"
-    if [ -n "$resp" ]; then
-      echo "install.sh: service is up: $resp"
+  _base="${1:-http://localhost:8080}"
+  _url="${_base%/}/status"
+  echo "install.sh: verifying at $_url ..."
+  _i=0
+  while [ "$_i" -lt 15 ]; do
+    _resp="$(fetch_body "$_url" 2>/dev/null || true)"
+    if [ -n "$_resp" ]; then
+      echo "install.sh: service is up: $_resp"
       return 0
     fi
     # /status may not exist (aggregator) -- try /healthz
-    resp="$(fetch_body "${base%/}/healthz" 2>/dev/null || true)"
-    if [ -n "$resp" ]; then
-      echo "install.sh: service is up: $resp"
+    _resp="$(fetch_body "${_base%/}/healthz" 2>/dev/null || true)"
+    if [ -n "$_resp" ]; then
+      echo "install.sh: service is up: $_resp"
       return 0
     fi
     sleep 1
-    i=$((i+1))
+    _i=$((_i+1))
   done
-  echo "install.sh: warning: service did not answer $url within 15s -- check: systemctl status (or docker compose logs)" >&2
+  echo "install.sh: warning: service did not answer $_url within 15s -- check: systemctl status (or docker compose logs)" >&2
 }
 
 # install already does (see install_companion); WHERE names the file
 # holding the AGGREGATOR_URL so the warning can point at it.
 warn_if_aggregator_unreachable() {
-  url="$1" where="$2"
-  if [ -n "$url" ] && ! url_ok "$url/openapi.yaml"; then
-    echo "install.sh: warning: $url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
+  _url="$1" where="$2"
+  if [ -n "$_url" ] && ! url_ok "$_url/openapi.yaml"; then
+    echo "install.sh: warning: $_url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
   fi
 }
 
