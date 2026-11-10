@@ -45,6 +45,12 @@ jobs:
           build darwin arm64 ""
           ls -la dist/
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > sha256sums.txt
+          cat sha256sums.txt
+
       # A -alphaN/-betaN/-rcN tag must never become :latest -- anything in
       # the fleet still tracking :latest (not pinned to a specific version)
       # would otherwise silently pick up a pre-release build. See

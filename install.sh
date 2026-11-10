@@ -279,9 +279,24 @@ resolve_asset_url() {
     | sed -E 's/.*"(https[^"]+)"$/\1/'
 }
 
+# sha256_of FILE -> prints the sha256 hex digest of FILE, or nothing if
+# no suitable tool is available.
+sha256_of() {
+  file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    echo ""
+  fi
+}
+
 # download_binary NAME DEST -> downloads NAME-$goos-$goarch to DEST,
 # atomically (via a .new + mv, so a partial download never replaces a
-# working binary) and executable.
+# working binary) and executable. Verifies the SHA-256 against the
+# release's sha256sums.txt when both the checksum tool and the checksums
+# file are available; a mismatch aborts the install.
 download_binary() {
   name="$1" dest="$2"
   resolve_goarch
@@ -295,6 +310,28 @@ download_binary() {
   echo "install.sh: downloading $download_url"
   download_to "$download_url" "$dest.new"
   chmod 0755 "$dest.new"
+
+  # Best-effort checksum verification: fetch sha256sums.txt from the same
+  # release and verify the downloaded binary against it. Skipped silently
+  # when no sha256 tool or no checksums file is available, so older
+  # releases (without checksums) and minimal hosts still work.
+  if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+    checksums_url="${download_url%/*}/sha256sums.txt"
+    if download_to "$checksums_url" "$dest.sha256sums" 2>/dev/null; then
+      expected="$(grep "  $asset_name\$" "$dest.sha256sums" 2>/dev/null | awk '{print $1}')"
+      if [ -n "$expected" ]; then
+        actual="$(sha256_of "$dest.new")"
+        if [ "$actual" != "$expected" ]; then
+          echo "install.sh: checksum mismatch for $asset_name (expected $expected, got $actual) -- aborting" >&2
+          rm -f "$dest.new" "$dest.sha256sums"
+          exit 1
+        fi
+        echo "install.sh: checksum verified ($actual)"
+      fi
+      rm -f "$dest.sha256sums"
+    fi
+  fi
+
   mv "$dest.new" "$dest"
 }
 

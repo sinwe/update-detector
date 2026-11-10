@@ -80,9 +80,13 @@ Check an item off when its change is committed on this branch.
   secret in .env, persisted via set_env_var. Both paths print the secret
   with the same "keep it somewhere safe" wording as an explicitly-provided
   one. Verified with bash -n.
-- [ ] **7. Verify downloaded binaries** — `download_binary` curls the
-  release asset and installs it with no checksum check. Needs the
-  release workflow to publish checksums too.
+- [x] **7. Verify downloaded binaries** — Added `sha256_of` helper
+  (sha256sum or shasum -a 256) and checksum verification in
+  `download_binary`: fetches `sha256sums.txt` from the same release,
+  verifies the downloaded binary's SHA-256 against it. Mismatch aborts
+  the install. Best-effort: skipped when no checksum tool or no
+  checksums file (older releases). Release workflow updated to generate
+  `sha256sums.txt` in dist/ (uploaded automatically via dist/*).
 - [ ] **8. Fix the misleading GitHub API error** — asset resolution hits
   `api.github.com` unauthenticated (60 req/hour limit), and any failure
   surfaces as "could not find asset X in release latest". Support
