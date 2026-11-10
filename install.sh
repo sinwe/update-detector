@@ -82,6 +82,56 @@
 
 set -eu
 
+# --help never needs root, and an unknown argument must fail fast
+# instead of silently starting an install: previously only --uninstall
+# was recognised as $1, and anything else (including --help itself) was
+# ignored and the install began. The only legitimate invocations are no
+# argument (interactive/scripted install), --uninstall, and --help -- the
+# companion's own self-update re-invokes this file with no arguments at
+# all, only env vars (see internal/companion/selfupdate_unix.go).
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<EOF
+Usage: install.sh [--help] [--uninstall]
+
+  Installs update-detector's agent, aggregator, and/or companion.
+  Run as root:
+    curl -fsSL https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh | sudo sh
+  (piped form takes its arguments after -s --, e.g. sh -s -- --uninstall)
+
+Options:
+  --help       Show this help and exit.
+  --uninstall  Remove a native install. A Docker-based agent/aggregator is
+               left alone -- run 'docker compose down' in its directory
+               yourself (the script prints where it found one).
+
+Environment (scripted/non-interactive use):
+  INSTALL_COMPONENTS   agent,aggregator,companion (comma-separated)
+  USE_DOCKER           1/0 to force or skip a Docker Compose deployment
+  DOCKER_DIR, AGGREGATOR_DOCKER_DIR
+                       directories for the Compose deployments
+  INSTALL_VERSION      release tag to install, or 'latest' (default)
+  SELF_UPDATE_CHANNEL  alpha, beta, rc, or release (default)
+  AGGREGATOR_URL       URL of the aggregator this agent reports to
+  ADMIN_APPLY_SHARED_SECRET
+                       secret gating apply/self-update in the aggregator's
+                       admin page; the admin page asks for it on first use
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+                       notifications for the agent
+  AGGREGATOR_TELEGRAM_BOT_TOKEN, AGGREGATOR_TELEGRAM_CHAT_ID
+                       notifications for the aggregator
+  UNINSTALL_COMPONENTS agent,aggregator,companion (comma-separated)
+EOF
+  exit 0
+fi
+case "${1:-}" in
+  "" | --uninstall) ;;
+  *)
+    echo "install.sh: unknown argument: $1" >&2
+    echo "install.sh: run with --help for usage." >&2
+    exit 1
+    ;;
+esac
+
 GITHUB_API="https://api.github.com/repos/sinwe/update-detector"
 INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
@@ -650,6 +700,7 @@ install_agent_native() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
+  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
 
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
@@ -693,6 +744,7 @@ EOF
 
   install_unit update-detector
   echo "install.sh: update-detector installed and started. Check: systemctl status update-detector"
+  print_aggregator_secret_note
 }
 
 # install_agent_launchd -> macOS equivalent of install_agent_native
@@ -758,6 +810,7 @@ install_agent_launchd() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
+  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
   resolved_listen_addr="${LISTEN_ADDR:-$existing_listen_addr}"
   resolved_listen_addr="${resolved_listen_addr:-:8080}"
   resolved_check_interval="${CHECK_INTERVAL:-$existing_check_interval}"
@@ -851,6 +904,7 @@ EOF
   check_port="${resolved_listen_addr}"
   check_port="${check_port##*:}"
   echo "install.sh: update-detector installed and started. Check: curl http://localhost:$check_port/status"
+  print_aggregator_secret_note
 }
 
 # install_agent_docker -> Docker Compose equivalent of install_agent_native
@@ -900,6 +954,7 @@ install_agent_docker() {
       echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
       exit 1
     fi
+    warn_if_aggregator_unreachable "$resolved_aggregator_url" "$dir/.env"
 
     mkdir -p "$dir"
     curl -fsSL "$(raw_url_for docker-compose.yml)" -o "$dir/docker-compose.yml"
@@ -920,6 +975,7 @@ install_agent_docker() {
 
   ( cd "$dir" && docker compose pull && docker compose up -d )
   echo "install.sh: update-detector running via Docker Compose in $dir. Check: cd $dir && docker compose logs -f"
+  print_aggregator_secret_note
 }
 
 install_aggregator_native() {
@@ -1669,6 +1725,62 @@ prompt_aggregator_url() {
   printf "Enter the aggregator's URL (e.g. http://aggregator-host:9090): " >&2
   read -r url < /dev/tty
   printf '%s' "$url"
+}
+
+# warn_if_aggregator_unreachable URL WHERE -> best-effort check that the
+# aggregator at URL answers, warning (never fatal) when it doesn't. The
+# agent reconnects with backoff on its own, so a briefly unreachable
+# aggregator isn't fatal -- but a typo'd URL is the common case, and
+# without this the user only finds out from the agent's own logs after
+# the install has already claimed success. Same check the companion
+# install already does (see install_companion); WHERE names the file
+# holding the AGGREGATOR_URL so the warning can point at it.
+warn_if_aggregator_unreachable() {
+  url="$1" where="$2"
+  if [ -n "$url" ] && ! curl -fsS -o /dev/null --max-time 5 "$url/openapi.yaml"; then
+    echo "install.sh: warning: $url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
+  fi
+}
+
+# print_aggregator_secret_note -> after an agent install, tell the user
+# the ADMIN_APPLY_SHARED_SECRET they'll be asked for the first time they
+# trigger an apply or self-update in the aggregator's /admin page. The
+# secret lives on the aggregator host, so its value can only be shown
+# when this host IS the aggregator host -- an aggregator installed in
+# this same run, or an existing one here: the env var this run was given,
+# the native /etc/default/update-aggregator, or a Docker deployment's
+# .env found via the same Compose-label lookup the docker installers
+# use. Otherwise, say where to find it instead of leaving the user to
+# discover the prompt with no answer -- that dead end (admin asks for a
+# secret the user never saw) is exactly what this note exists to prevent.
+# Prints on every agent install/re-run, deliberately: unlike the
+# aggregator install's one-time print, a re-run is how a user who lost
+# the value gets it back when the aggregator lives here.
+print_aggregator_secret_note() {
+  secret="${ADMIN_APPLY_SHARED_SECRET:-}"
+  if [ -z "$secret" ] && [ -f /etc/default/update-aggregator ]; then
+    secret="$(env_value /etc/default/update-aggregator ADMIN_APPLY_SHARED_SECRET)"
+  fi
+  if [ -z "$secret" ]; then
+    agg_dir="$(docker_compose_dir_for '(^|/)update-aggregator(:|$)')" || agg_dir=""
+    if [ -n "$agg_dir" ] && [ -f "$agg_dir/.env" ]; then
+      secret="$(env_value "$agg_dir/.env" ADMIN_APPLY_SHARED_SECRET)"
+    fi
+  fi
+  if [ -n "$secret" ]; then
+    echo "install.sh: your aggregator's apply secret is: $secret" >&2
+    echo "  The admin page will ask for this ADMIN_APPLY_SHARED_SECRET the first" >&2
+    echo "  time you trigger an apply or self-update -- keep it somewhere safe" >&2
+    echo "  (e.g. a password manager). It is also stored 0600 in the aggregator's" >&2
+    echo "  env file on the aggregator host." >&2
+  else
+    echo "install.sh: the admin page will ask for the aggregator's" >&2
+    echo "  ADMIN_APPLY_SHARED_SECRET the first time you trigger an apply or" >&2
+    echo "  self-update. It lives in the aggregator host's env file" >&2
+    echo "  (/etc/default/update-aggregator, or <dir>/.env for a Docker install);" >&2
+    echo "  if none was ever set, apply stays disabled until you set one and" >&2
+    echo "  restart the aggregator." >&2
+  fi
 }
 
 # prompt_uninstall_components -> like prompt_components, but for
