@@ -82,13 +82,16 @@
 
 set -eu
 
-# have_tty -> returns 0 if /dev/tty can actually be opened for reading.
-# [ -r /dev/tty ] is NOT enough: the device node exists and is readable
-# even with no controlling terminal, but `read < /dev/tty` then fails with
-# ENXIO and, under set -e, aborts the whole script (exit 2). Probe-open
-# the device instead.
+# have_tty -> returns 0 if stdin is an interactive terminal. We deliberately
+# check stdin (fd 0) rather than probe-opening /dev/tty: the device node
+# exists and is openable even with no controlling terminal (WSL pseudo-
+# ttys, automated SSH sessions), so a probe-open passes in contexts where
+# `read < /dev/tty` then blocks forever waiting for input that will never
+# come. Checking stdin means `curl | sh` piped installs and non-interactive
+# runs (CI, SSH commands) skip prompts and use defaults/env vars, which is
+# the safe behavior; genuinely interactive runs have a tty on stdin.
 have_tty() {
-  { : < /dev/tty; } 2>/dev/null
+  [ -t 0 ]
 }
 
 # --help never needs root, and an unknown argument must fail fast

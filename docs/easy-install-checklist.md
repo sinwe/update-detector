@@ -24,11 +24,14 @@ Check an item off when its change is committed on this branch.
 
 - [x] **1. Fix the `/dev/tty` guard** — `[ -r /dev/tty ]` passes with no
   controlling terminal, then `read < /dev/tty` fails with ENXIO and
-  `set -e` aborts (exit 2). Fixed: added `have_tty()` helper that
-  probe-opens `/dev/tty` (not just `-r` test). All 7 prompt sites now
-  use `have_tty`/`! have_tty`. Also: no-TTY Linux default changed from
-  "companion only" to "agent" (companion-only is useless on a fresh host
-  with no agent). Verified with `bash -n`.
+  `set -e` aborts (exit 2). First fix (probe-open) still hung in WSL
+  because `/dev/tty` is openable there even without a real user. Final
+  fix: `have_tty()` now checks `[ -t 0 ]` (stdin is a tty) instead of
+  probe-opening /dev/tty. This correctly skips prompts in non-interactive
+  contexts (WSL, SSH, CI, piped installs) and uses defaults/env vars.
+  Interactive `curl | sh` users lose prompting (acceptable tradeoff;
+  set env vars instead). Also: no-TTY Linux default changed from
+  "companion only" to "agent". Verified with `bash -n` and live WSL test.
 - [x] **2. Add `--help` (and reject unknown flags)** — today only
   `--uninstall` is recognised; anything else, including `--help`, is
   silently ignored and the install starts. Done: `--help`/`-h` prints
