@@ -28,7 +28,18 @@ type Config struct {
 	ReleaseUpgradesFile string
 	RebootRequiredFile  string
 
-	StateFile string
+	// CVECommand overrides the vulnerability scanner binary. Empty
+	// means use CVEScanners (default "debsecan,trivy,osv-scanner").
+	// "disable" turns CVE detection off.
+	// CVEEnabled gates CVE/vulnerability detection. Off by default.
+	CVEEnabled       bool
+	CVECommand       string
+	CVEScanners      string
+	// CVESuite pins the release codename passed to the scanner; empty
+	// lets it auto-detect.
+	CVESuite         string
+	CVEToolsCacheDir string
+	StateFile        string
 
 	TelegramBotToken string
 	TelegramChatID   string
@@ -78,6 +89,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	cveEnabled, err := parseBool("CVE_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		ListenAddr: getEnv("LISTEN_ADDR", ":8080"),
 		Hostname:   getEnv("HOSTNAME_OVERRIDE", hostname),
@@ -92,6 +108,12 @@ func Load() (Config, error) {
 		OSReleaseFile:       getEnv("OS_RELEASE_FILE", "/host/etc/os-release"),
 		ReleaseUpgradesFile: getEnv("RELEASE_UPGRADES_FILE", "/host/etc/update-manager/release-upgrades"),
 		RebootRequiredFile:  getEnv("REBOOT_REQUIRED_FILE", "/host/var/run/reboot-required"),
+
+		CVEEnabled:       cveEnabled,
+		CVECommand:       os.Getenv("CVE_COMMAND"),
+		CVEScanners:      os.Getenv("CVE_SCANNERS"),
+		CVESuite:         os.Getenv("CVE_SUITE"),
+		CVEToolsCacheDir: getEnv("CVE_TOOLS_CACHE_DIR", "/var/lib/update-detector/tools"),
 
 		StateFile: getEnv("STATE_FILE", "/var/lib/update-detector/state.json"),
 
@@ -128,6 +150,10 @@ func (c Config) CheckerFields() checker.Fields {
 		"os_release_file":       c.OSReleaseFile,
 		"release_upgrades_file": c.ReleaseUpgradesFile,
 		"reboot_required_file":  c.RebootRequiredFile,
+		"cve_command":           c.CVECommand,
+		"cve_scanners":          c.CVEScanners,
+		"cve_suite":             c.CVESuite,
+		"cve_tools_cache_dir":   c.CVEToolsCacheDir,
 	}
 }
 

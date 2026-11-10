@@ -88,7 +88,7 @@ func TestClientReportSuccessAndFailure(t *testing.T) {
 
 	client := New(srv.URL, Identity{AgentID: "agent-1", Token: "tok"})
 
-	if err := client.Report(context.Background(), checker.Status{Hostname: "web01", OK: true}); err != nil {
+	if _, err := client.Report(context.Background(), checker.Status{Hostname: "web01", OK: true}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotHeader.Get("X-Agent-ID") != "agent-1" || gotHeader.Get("Authorization") != "Bearer tok" {
@@ -99,7 +99,7 @@ func TestClientReportSuccessAndFailure(t *testing.T) {
 	}
 
 	statusCode = http.StatusForbidden
-	if err := client.Report(context.Background(), checker.Status{Hostname: "web01"}); err == nil {
+	if _, err := client.Report(context.Background(), checker.Status{Hostname: "web01"}); err == nil {
 		t.Fatal("expected error on non-200 response")
 	}
 }

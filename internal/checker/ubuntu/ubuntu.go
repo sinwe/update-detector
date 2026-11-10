@@ -15,6 +15,7 @@ import (
 	"update-detector/internal/aptutil"
 	"update-detector/internal/checker"
 	"update-detector/internal/checker/reboot"
+	"update-detector/internal/cve"
 )
 
 // init registers this package with internal/checker's registry under
@@ -33,6 +34,9 @@ func init() {
 			OSReleaseFile:       f["os_release_file"],
 			ReleaseUpgradesFile: f["release_upgrades_file"],
 			RebootRequiredFile:  f["reboot_required_file"],
+			CVECommand:          f["cve_command"],
+			CVEScanners:         f["cve_scanners"],
+			CVESuite:            f["cve_suite"],
 		})
 	})
 }
@@ -48,12 +52,20 @@ type Config struct {
 	OSReleaseFile       string
 	ReleaseUpgradesFile string
 	RebootRequiredFile  string
+
+	// CVECommand overrides the vulnerability scanner binary; empty disables.
+	CVECommand       string
+	CVEScanners      string
+	// CVESuite pins the release codename passed to the scanner.
+	CVESuite         string
+	CVEToolsCacheDir string
 }
 
 type Checker struct {
 	cfg           Config
 	aptConfigPath string
 	httpClient    *http.Client
+	cveDetector   cve.Detector
 }
 
 // New generates the apt.conf override once (its paths don't change at
@@ -68,11 +80,23 @@ func New(cfg Config) (*Checker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ubuntu checker: %w", err)
 	}
-	return &Checker{
+	c := &Checker{
 		cfg:           cfg,
 		aptConfigPath: confPath,
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
-	}, nil
+	}
+	det, err := cve.New("ubuntu", cve.Fields{
+		"suite":               cfg.CVESuite,
+		"dpkg_status_file":    cfg.DpkgStatusFile,
+		"os_release_file":     cfg.OSReleaseFile,
+		"scanners":            cfg.CVEScanners,
+		"cve_command":         cfg.CVECommand,
+		"cve_tools_cache_dir": cfg.CVEToolsCacheDir,
+	})
+	if err == nil {
+		c.cveDetector = det
+	}
+	return c, nil
 }
 
 func (c *Checker) Platform() string { return "ubuntu" }
@@ -132,6 +156,21 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		}
 	} else {
 		status.OS = osInfo
+	}
+
+	// CVE / vulnerability detection (opt-in, gated by checker.CVEEnabled).
+	// A missing or failing detector is recorded as an error and the
+	// previous cycle's value is preserved, so a transient failure
+	// doesn't masquerade as "no vulnerabilities".
+	if c.cveDetector != nil && checker.CVEEnabled() {
+		if vulns, err := c.cveDetector.Detect(ctx, previous); err != nil {
+			errs = append(errs, fmt.Sprintf("cve: %v", err))
+			if previous != nil {
+				status.Vulnerabilities = previous.Vulnerabilities
+			}
+		} else {
+			status.Vulnerabilities = vulns
+		}
 	}
 
 	status.Errors = errs

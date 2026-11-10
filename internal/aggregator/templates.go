@@ -33,6 +33,15 @@ type agentView struct {
 	RebootRequired     bool
 	OSUpdateAvailable  bool
 	AgentVersion       string
+	Platform           string
+	CVEEnabled         bool
+	CVECritical       int
+	CVEHigh           int
+	CVEMedium         int
+	CVELow            int
+	CVETotal          int
+	CVEScanner        string
+	CVEItems          []checker.Vulnerability
 
 	// AnyStreamConnected, CompanionConnected, CompanionVersion, and
 	// RecentResults are only meaningful once Approved -- nothing has
@@ -158,6 +167,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		ID:                       rec.ID,
 		ShortID:                  shortID(rec.ID),
 		Hostname:                 rec.Hostname,
+		CVEEnabled:               rec.CVEEnabled,
 		RemoteAddr:               rec.LastRemoteAddr,
 		NotifyMode:               rec.NotifyMode(now),
 		AnyStreamConnected:       connected,
@@ -189,6 +199,15 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.RebootRequired = rec.LastReport.RebootRequired
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
+		v.Platform = rec.LastReport.Platform
+		v.CVEEnabled = rec.CVEEnabled
+		v.CVECritical = rec.LastReport.Vulnerabilities.Critical
+		v.CVEHigh = rec.LastReport.Vulnerabilities.High
+		v.CVEMedium = rec.LastReport.Vulnerabilities.Medium
+		v.CVELow = rec.LastReport.Vulnerabilities.Low
+		v.CVETotal = rec.LastReport.Vulnerabilities.Total
+		v.CVEScanner = rec.LastReport.Vulnerabilities.Scanner
+		v.CVEItems = rec.LastReport.Vulnerabilities.Items
 		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
 	}
 	// Results() is oldest-first; show most recent first.
@@ -596,7 +615,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
       </div>
       {{if .Approved}}
       {{range .Approved}}
-      <div class="host-card{{if not .AnyStreamConnected}} host-offline{{end}}">
+      <div class="host-card{{if not .AnyStreamConnected}} host-offline{{end}}" data-host-id="{{.ID}}" data-hostname="{{.Hostname}}">
         {{if not .AnyStreamConnected}}<div class="offline-banner">⚠ Host offline — powered off? No agent or companion connected{{if .LastSeen}} (last seen {{.LastSeen}}){{end}}</div>{{end}}
         <div class="host-top">
           <div>
@@ -638,6 +657,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="host-report">
           <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
           <span><strong>{{.UpgradableSecurity}}</strong> security</span>
+          {{if and .CVEEnabled (gt .CVETotal 0)}}<span style="font-size:.75rem;opacity:.7">{{.CVECritical}} critical, {{.CVEHigh}} high, {{.CVEMedium}} medium, {{.CVELow}} low CVE{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>{{end}}
           <a href="/widgets/hosts/{{.Hostname}}" style="font-size:.75rem">JSON</a>
         </div>
 
@@ -653,6 +673,23 @@ const adminTemplateSrc = `<!DOCTYPE html>
               <span class="pkg-ver">{{.CandidateVersion}}</span>
             </li>
             {{end}}
+          </ul>
+        </details>
+        {{end}}
+
+        {{if and .CVEEnabled .CVEItems}}
+        <details>
+          <summary>{{len .CVEItems}} CVE{{if gt (len .CVEItems) 1}}s{{end}}{{if gt (len .CVEItems) 50}} (showing first 50){{end}}</summary>
+          <ul class="pkg-list">
+            {{range $i, $cve := .CVEItems}}{{if lt $i 50}}
+            <li>
+              {{if eq $cve.Severity "critical"}}<span class="pkg-sec">{{$cve.ID}}</span>
+              {{else if eq $cve.Severity "high"}}<span style="color:var(--amber-text)">{{$cve.ID}}</span>
+              {{else}}{{$cve.ID}}{{end}}
+              <span class="pkg-ver">{{$cve.Severity}}</span>
+              {{if $cve.Package}}<span>{{$cve.Package}}</span>{{end}}
+            </li>
+            {{end}}{{end}}
           </ul>
         </details>
         {{end}}
@@ -684,6 +721,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
             <input type="checkbox" id="verbose-{{.ID}}"> verbose
           </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
+          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Enable CVE/vulnerability detection for this host (off by default)">
+            <input type="checkbox" {{if .CVEEnabled}}checked{{end}} onchange="postCVEEnabled('{{.ID}}', this.checked)"> CVE detection
+          </label>
+          {{if and .CVEEnabled (gt .CVETotal 0)}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
@@ -914,6 +955,16 @@ const adminTemplateSrc = `<!DOCTYPE html>
     function applyAction(id, type) {
       postApply(id, {type: type});
     }
+    async function postCVEEnabled(id, enabled) {
+      try {
+        const resp = await fetch('/admin/agents/' + id + '/cve-enabled', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({enabled: enabled}),
+        });
+        if (!resp.ok) alert('CVE toggle failed: ' + await resp.text());
+      } catch (e) { alert('CVE toggle failed: ' + e); }
+    }
     function applyPackages(event, id) {
       event.preventDefault();
       const packages = Array.from(event.target.querySelectorAll('input[name=pkg]:checked')).map(i => i.value);
@@ -923,6 +974,40 @@ const adminTemplateSrc = `<!DOCTYPE html>
       }
       postApply(id, {type: 'packages', packages: packages});
       return false;
+    }
+    async function showCVEs(id) {
+      const modal = document.getElementById('cve-modal');
+      const body = document.getElementById('cve-modal-body');
+      body.innerHTML = 'Loading...';
+      modal.style.display = 'flex';
+      try {
+        // find hostname from the page
+        const hostCard = document.querySelector('[data-host-id="' + id + '"]');
+        const hostname = hostCard ? hostCard.dataset.hostname : id;
+        const resp = await fetch('/widgets/hosts/' + encodeURIComponent(hostname));
+        if (!resp.ok) { body.innerHTML = 'Failed to load CVEs'; return; }
+        const data = await resp.json();
+        const vulns = data.vulnerabilities || {};
+        const items = vulns.items || [];
+        if (items.length === 0) { body.innerHTML = 'No CVEs reported.'; return; }
+        let html = '<table style="width:100%;font-size:.8rem;border-collapse:collapse">';
+        html += '<tr><th style="text-align:left">CVE</th><th>Severity</th><th>Package</th></tr>';
+        for (const c of items) {
+          const sev = c.severity || 'unknown';
+          const color = sev === 'critical' ? 'var(--red-text)' : sev === 'high' ? 'var(--amber-text)' : '';
+          html += '<tr><td>' + c.id + '</td><td style="color:' + color + '">' + sev + '</td><td>' + (c.package || '') + '</td></tr>';
+        }
+        html += '</table>';
+        if (items.length < vulns.total) {
+          html += '<p style="font-size:.75rem;opacity:.7;margin-top:.5rem">Showing ' + items.length + ' of ' + vulns.total + ' CVEs. Full list in JSON.</p>';
+        }
+        body.innerHTML = html;
+      } catch (e) {
+        body.innerHTML = 'Error: ' + e;
+      }
+    }
+    function closeCVEModal() {
+      document.getElementById('cve-modal').style.display = 'none';
     }
     async function forceRecheck(id) {
       const verboseBox = document.getElementById('verbose-' + id);
@@ -1180,6 +1265,15 @@ const adminTemplateSrc = `<!DOCTYPE html>
       });
     })();
   </script>
+  <div id="cve-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closeCVEModal()">
+    <div style="background:var(--surface);border-radius:.5rem;padding:1.5rem;max-width:700px;width:90%;max-height:80vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <strong>CVE Details</strong>
+        <button class="btn-sm" onclick="closeCVEModal()">Close</button>
+      </div>
+      <div id="cve-modal-body"></div>
+    </div>
+  </div>
 </body>
 </html>
 `

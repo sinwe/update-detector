@@ -25,6 +25,12 @@ type Status struct {
 
 	Packages PackageInfo `json:"packages"`
 
+	// Vulnerabilities reports CVEs affecting the host's OS/packages/runtime.
+	// Populated by the CVE detector plugin (internal/cve) when one is
+	// available for this platform; left zero when detection is unavailable
+	// or disabled, so a missing detector never masquerades as "clean".
+	Vulnerabilities VulnerabilityInfo `json:"vulnerabilities,omitempty"`
+
 	// Errors lists subsystems that failed to report this cycle; their fields
 	// above retain the last successfully observed value rather than being
 	// reset, so a transient failure (e.g. a network blip) doesn't produce a
@@ -49,6 +55,36 @@ type PackageInfo struct {
 	Upgrades           []PackageUpgrade `json:"upgrades,omitempty"`
 }
 
+// Vulnerability is a single CVE affecting the host's OS/packages/runtime.
+// Severity is one of "critical", "high", "medium", "low" (or "unknown"
+// when the source doesn't classify). Source names the detector that
+// produced it (e.g. "debsecan", "osv", "trivy").
+type Vulnerability struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	Package  string `json:"package,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Fixed    bool   `json:"fixed,omitempty"`
+}
+
+// VulnerabilityInfo aggregates CVE counts by severity for a single check
+// cycle. Items holds the (possibly truncated) detail list; the counts are
+// the authoritative totals even when Items is capped.
+type VulnerabilityInfo struct {
+	// Scanner is the name of the scanner that produced this result
+	// (e.g. "debsecan", "trivy"). Empty when no scanner was available,
+	// which is the signal for the admin UI / Telegram to offer an
+	// install prompt (the companion has sudo and can apt-get install an
+	// allowlisted scanner).
+	Scanner string          `json:"scanner,omitempty"`
+	Critical int             `json:"critical"`
+	High     int             `json:"high"`
+	Medium   int             `json:"medium"`
+	Low      int             `json:"low"`
+	Total    int             `json:"total"`
+	Items    []Vulnerability `json:"items,omitempty"`
+}
+
 type PackageUpgrade struct {
 	Name             string `json:"name"`
 	CurrentVersion   string `json:"current_version,omitempty"`
@@ -63,5 +99,6 @@ type PackageUpgrade struct {
 
 // ComputeOK derives the OK convenience field from the rest of the Status.
 func ComputeOK(s Status) bool {
-	return !s.RebootRequired && s.Packages.UpgradableSecurity == 0 && !s.OS.UpdateAvailable
+	return !s.RebootRequired && s.Packages.UpgradableSecurity == 0 && !s.OS.UpdateAvailable &&
+		s.Vulnerabilities.Critical == 0 && s.Vulnerabilities.High == 0
 }

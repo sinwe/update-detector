@@ -385,7 +385,14 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		if rec, ok := s.registry.Get(agentID); ok {
 			s.maybeNotifyUpdate(rec, previous, status)
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+		cveEnabled := false
+		if rec, ok := s.registry.Get(agentID); ok {
+			cveEnabled = rec.CVEEnabled
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "accepted",
+			"cve_enabled": cveEnabled,
+		})
 	}
 }
 
@@ -977,6 +984,10 @@ func (s *Server) handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		s.handleAdminSelfUpdate(w, r, id)
 		return
 	}
+	if action == "cve-enabled" {
+		s.handleAdminCVEEnabled(w, r, id)
+		return
+	}
 	if action == "forget" {
 		if err := s.registry.Forget(id); err != nil {
 			if err == ErrNotFound {
@@ -1249,6 +1260,26 @@ type selfUpdateRequest struct {
 // gets silently mistreated as a companion). This is the actual trust
 // boundary; greying out a button client-side is UX on top of this, not
 // a substitute for it.
+func (s *Server) handleAdminCVEEnabled(w http.ResponseWriter, r *http.Request, id string) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := s.registry.SetCVEEnabled(id, req.Enabled); err != nil {
+		if err == ErrNotFound {
+			http.Error(w, "agent not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.adminHub.Notify()
+	writeJSON(w, http.StatusOK, map[string]bool{"cve_enabled": req.Enabled})
+}
+
 func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, id string) {
 	if s.adminApplySecret == "" {
 		http.Error(w, "self-update is disabled: ADMIN_APPLY_SHARED_SECRET is not configured", http.StatusNotImplemented)
@@ -1413,6 +1444,10 @@ type summaryResponse struct {
 	HostsOSUpgradeAvailable    int       `json:"hosts_os_upgrade_available"`
 	PackagesUpgradableTotal    int       `json:"packages_upgradable_total"`
 	PackagesUpgradableSecurity int       `json:"packages_upgradable_security"`
+	HostsCriticalCVEs          int       `json:"hosts_critical_cves"`
+	HostsHighCVEs              int       `json:"hosts_high_cves"`
+	CVEsCritical               int       `json:"cves_critical"`
+	CVEsHigh                   int       `json:"cves_high"`
 	GeneratedAt                time.Time `json:"generated_at"`
 }
 
@@ -1442,6 +1477,14 @@ func (s *Server) handleWidgetSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.PackagesUpgradableTotal += rec.LastReport.Packages.UpgradableTotal
 		resp.PackagesUpgradableSecurity += rec.LastReport.Packages.UpgradableSecurity
+		if rec.LastReport.Vulnerabilities.Critical > 0 {
+			resp.HostsCriticalCVEs++
+		}
+		if rec.LastReport.Vulnerabilities.High > 0 {
+			resp.HostsHighCVEs++
+		}
+		resp.CVEsCritical += rec.LastReport.Vulnerabilities.Critical
+		resp.CVEsHigh += rec.LastReport.Vulnerabilities.High
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -69,6 +69,7 @@ func (b *brewApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return runCapped(ctx, brewCommand(ctx, "upgrade", "--greedy"))
 }
 
+
 // brewCommand builds a brew exec.Cmd. It is the sole place in the
 // companion that knows brew's name, so tests can swap PATH to intercept
 // all invocations. Names arrive already validated against the pending

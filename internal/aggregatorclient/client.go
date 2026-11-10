@@ -133,15 +133,19 @@ func (c *Client) Enroll(ctx context.Context, hostname string) (status string, er
 // Report pushes the current Status to the aggregator. Callers should log
 // (not fail on) errors here — local detection, Gatus, and Telegram must
 // keep working regardless of the aggregator's reachability.
-func (c *Client) Report(ctx context.Context, status checker.Status) error {
+// Report pushes the current Status to the aggregator. It returns the
+// aggregator's desired CVE_ENABLED state for this host (so the admin UI
+// toggle can drive the agent's CVE scan without a restart), or false on
+// any error.
+func (c *Client) Report(ctx context.Context, status checker.Status) (bool, error) {
 	body, err := json.Marshal(status)
 	if err != nil {
-		return fmt.Errorf("aggregatorclient: encoding report: %w", err)
+		return false, fmt.Errorf("aggregatorclient: encoding report: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/report", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("aggregatorclient: building report request: %w", err)
+		return false, fmt.Errorf("aggregatorclient: building report request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agent-ID", c.identity.AgentID)
@@ -149,13 +153,17 @@ func (c *Client) Report(ctx context.Context, status checker.Status) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("aggregatorclient: report request failed: %w", err)
+		return false, fmt.Errorf("aggregatorclient: report request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("aggregatorclient: report: unexpected status %s", resp.Status)
+		return false, fmt.Errorf("aggregatorclient: report: unexpected status %s", resp.Status)
 	}
-	return nil
+	var out struct {
+		CVEEnabled bool `json:"cve_enabled"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out.CVEEnabled, nil
 }
 
 type actionResultRequest struct {

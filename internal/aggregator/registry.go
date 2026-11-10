@@ -46,6 +46,12 @@ type AgentRecord struct {
 	// off in /admin only silences that host's down/up messages, never
 	// apply-result notifications.
 	NotifyDown bool `json:"notify_down"`
+	// CVEEnabled is whether CVE/vulnerability detection is turned on for
+	// this host. False by default (opt-in). The agent reads the desired
+	// state from the report response and enables/disables its CVE scan
+	// accordingly, so the toggle takes effect on the next check cycle
+	// without restarting the agent.
+	CVEEnabled bool `json:"cve_enabled"`
 	// MutedUntil, when non-nil, temporarily suppresses the same alerts
 	// until that time (the /admin "mute for" control) — after which
 	// alerts resume on their own. Only meaningful while NotifyDown is
@@ -310,6 +316,20 @@ func (r *Registry) SetNotifyDown(id string, enabled bool) error {
 	}
 	rec.NotifyDown = enabled
 	rec.MutedUntil = nil
+	return r.saveLocked()
+}
+
+// SetCVEEnabled toggles CVE/vulnerability detection for this host.
+// Persists like every other mutation. The agent reads the desired state
+// from the report response and applies it on the next check cycle.
+func (r *Registry) SetCVEEnabled(id string, enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.agents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	rec.CVEEnabled = enabled
 	return r.saveLocked()
 }
 

@@ -27,8 +27,15 @@ RUN apt-get update && \
       ca-certificates \
       apt \
       curl \
+      debsecan \
       update-notifier-common \
     && rm -rf /var/lib/apt/lists/*
+
+# Note: trivy is NOT baked into the image. It is downloaded on first use
+# by internal/cve/debian (ensureTrivy) and cached in /var/lib/update-detector/
+# tools (the bind-mounted state dir), so the image stays small and the
+# binary survives container restarts. debsecan stays apt-installed because
+# it is tiny and available in the Ubuntu repos.
 
 RUN useradd --system --uid 10001 --shell /usr/sbin/nologin update-detector \
     && mkdir -p /var/lib/update-detector \

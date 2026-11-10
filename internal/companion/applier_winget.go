@@ -73,6 +73,7 @@ func (w *wingetApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return w.Upgrade(ctx)
 }
 
+
 // wingetCommand builds a winget exec.Cmd.
 func wingetCommand(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "winget", args...)

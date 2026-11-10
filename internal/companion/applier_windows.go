@@ -106,6 +106,7 @@ func (w *windowsApplier) FullUpgrade(ctx context.Context) (string, error) {
 	return w.Upgrade(ctx)
 }
 
+
 // installWindowsUpdates downloads and installs only the updates whose
 // own KBArticleIDs intersect kbs, or whose own Identity.UpdateID is in
 // updateIDs (used for the rare update with no KB at all -- see
