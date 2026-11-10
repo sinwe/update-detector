@@ -14,6 +14,12 @@ Check an item off when its change is committed on this branch.
   var, native `/etc/default/update-aggregator`, or a Docker aggregator's
   `.env`), otherwise says where to find it on the aggregator host.
 
+- [x] **Fallback to wget when curl is unavailable** — added `fetch_body`,
+  `download_to`, and `url_ok` helpers that prefer curl and fall back to
+  wget. All download/reachability/verification call sites now use these
+  helpers instead of calling curl directly. The hard requirement at the
+  top now accepts either curl or wget. Verified with `bash -n`.
+
 ## Do first — small, high impact
 
 - [x] **1. Fix the `/dev/tty` guard** — `[ -r /dev/tty ]` passes with no
@@ -107,9 +113,8 @@ Assessment of the completed items and remaining work:
   helpers consistently — good DRY.
 
 **Potential issues in existing code:**
-- `warn_if_aggregator_unreachable` uses `curl` — minimal hosts (Alpine,
-  busybox) may not have it. Consider a `wget` fallback or
-  `command -v curl` guard. Low priority (best-effort check).
+- ~~`warn_if_aggregator_unreachable` uses `curl`~~ — resolved: all HTTP
+  helpers now fall back to wget when curl is unavailable.
 - `env_value` and `docker_compose_dir_for` helpers are defined later in
   the file than their first use — works in bash (functions resolved at
   call time), but fragile for readers. Consider moving them up or

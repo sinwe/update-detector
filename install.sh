@@ -162,10 +162,37 @@ fi
 # for what it actually needs instead -- systemctl inside install_unit,
 # used only by the native install functions and the always-native
 # companion.
-if ! command -v curl >/dev/null 2>&1; then
-  echo "install.sh: curl is required but not found on PATH" >&2
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+  echo "install.sh: curl or wget is required but neither was found on PATH" >&2
   exit 1
 fi
+
+fetch_body() {
+  url="$1" ua="${2:-update-detector-install.sh}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -H "User-Agent: $ua" "$url"
+  else
+    wget -qO- --user-agent="$ua" "$url"
+  fi
+}
+
+download_to() {
+  url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+  else
+    wget -qO "$dest" "$url"
+  fi
+}
+
+url_ok() {
+  url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -o /dev/null --max-time 5 "$url"
+  else
+    wget -q --spider --timeout=5 "$url"
+  fi
+}
 
 # is_macos -> true on macOS (Darwin), where there is no systemd, no
 # /proc, and no Docker path worth offering (see header).
@@ -243,7 +270,7 @@ resolve_asset_url() {
   # error. grep+sed avoids needing jq on the *installing* host too, which
   # (unlike the release workflow's own runner) we don't control.
   # GitHub's API rejects requests with no User-Agent at all (403).
-  curl -fsSL -H "User-Agent: update-detector-install.sh" "$release_url" \
+  fetch_body "$release_url" "update-detector-install.sh" \
     | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
     | head -1 \
     | sed -E 's/.*"(https[^"]+)"$/\1/'
@@ -263,7 +290,7 @@ download_binary() {
     exit 1
   fi
   echo "install.sh: downloading $download_url"
-  curl -fsSL "$download_url" -o "$dest.new"
+  download_to "$download_url" "$dest.new"
   chmod 0755 "$dest.new"
   mv "$dest.new" "$dest"
 }
@@ -291,7 +318,7 @@ cache_install_sh_for_companion() {
   else
     raw_url="https://raw.githubusercontent.com/sinwe/update-detector/$INSTALL_VERSION/install.sh"
   fi
-  if curl -fsSL "$raw_url" -o "$CACHED_INSTALL_SH.new"; then
+  if download_to "$raw_url" "$CACHED_INSTALL_SH.new"; then
     chmod 0755 "$CACHED_INSTALL_SH.new"
     mv "$CACHED_INSTALL_SH.new" "$CACHED_INSTALL_SH"
   else
@@ -972,7 +999,7 @@ install_agent_docker() {
     warn_if_aggregator_unreachable "$resolved_aggregator_url" "$dir/.env"
 
     mkdir -p "$dir"
-    curl -fsSL "$(raw_url_for docker-compose.yml)" -o "$dir/docker-compose.yml"
+    download_to "$(raw_url_for docker-compose.yml)" "$dir/docker-compose.yml"
     set_env_var "$dir/.env" HOSTNAME_OVERRIDE "${HOSTNAME_OVERRIDE:-}"
     # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID: see set_env_var_if_set's own
     # comment -- this directory may already have an aggregator-configured
@@ -1115,7 +1142,7 @@ install_aggregator_docker() {
     fi
     echo "install.sh: setting up update-aggregator via Docker Compose in $dir..."
     mkdir -p "$dir"
-    curl -fsSL "$(raw_url_for docker-compose.aggregator.yml)" -o "$dir/docker-compose.aggregator.yml"
+    download_to "$(raw_url_for docker-compose.aggregator.yml)" "$dir/docker-compose.aggregator.yml"
     # Prefixed AGGREGATOR_* input names, same reasoning as
     # install_aggregator_native's own env file -- keeps a same-run agent +
     # aggregator install from accidentally sharing one secret/token meant
@@ -1306,7 +1333,7 @@ install_companion() {
   # briefly unreachable right now isn't fatal (the companion reconnects
   # with backoff on its own). Just a heads-up if something's still off
   # despite the discovery above.
-  if [ -n "$agg_url" ] && ! curl -fsS -o /dev/null --max-time 5 "$agg_url/openapi.yaml"; then
+  if [ -n "$agg_url" ] && ! url_ok "$agg_url/openapi.yaml"; then
     echo "install.sh: warning: $agg_url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in /etc/systemd/system/update-detector-companion.service if the companion never connects" >&2
   fi
 
@@ -1399,7 +1426,7 @@ install_companion_launchd() {
 
   echo "install.sh: socket=$socket_path aggregator=$agg_url agent_status=$agent_status_url"
 
-  if [ -n "$agg_url" ] && ! curl -fsS -o /dev/null --max-time 5 "$agg_url/openapi.yaml"; then
+  if [ -n "$agg_url" ] && ! url_ok "$agg_url/openapi.yaml"; then
     echo "install.sh: warning: $agg_url doesn't look reachable from this host right now -- continuing anyway." >&2
   fi
 
@@ -1766,13 +1793,13 @@ verify_agent() {
   echo "install.sh: verifying at $url ..."
   i=0
   while [ "$i" -lt 15 ]; do
-    resp="$(curl -fsS --max-time 5 "$url" 2>/dev/null || true)"
+    resp="$(fetch_body "$url" 2>/dev/null || true)"
     if [ -n "$resp" ]; then
       echo "install.sh: service is up: $resp"
       return 0
     fi
     # /status may not exist (aggregator) -- try /healthz
-    resp="$(curl -fsS --max-time 5 "${base%/}/healthz" 2>/dev/null || true)"
+    resp="$(fetch_body "${base%/}/healthz" 2>/dev/null || true)"
     if [ -n "$resp" ]; then
       echo "install.sh: service is up: $resp"
       return 0
@@ -1787,7 +1814,7 @@ verify_agent() {
 # holding the AGGREGATOR_URL so the warning can point at it.
 warn_if_aggregator_unreachable() {
   url="$1" where="$2"
-  if [ -n "$url" ] && ! curl -fsS -o /dev/null --max-time 5 "$url/openapi.yaml"; then
+  if [ -n "$url" ] && ! url_ok "$url/openapi.yaml"; then
     echo "install.sh: warning: $url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
   fi
 }
