@@ -698,6 +698,19 @@ install_agent_native() {
   mkdir -p "$state_dir"
   chown update-detector:update-detector "$state_dir"
 
+  # Ubuntu's apt-check (from update-notifier-common) gives the
+  # authoritative security-pocket count; without it the agent falls
+  # back to parsing `apt-get -s dist-upgrade`, which loses the
+  # security classification. Install it on Debian/Ubuntu hosts if apt
+  # is available and the package is missing -- best-effort, never fatal,
+  # since the fallback path still works.
+  if command -v apt-get >/dev/null 2>&1 && ! command -v apt-check >/dev/null 2>&1 && ! [ -x /usr/lib/update-notifier/apt-check ]; then
+    if apt-get update -qq 2>/dev/null && apt-get install -y --no-install-recommends update-notifier-common 2>/dev/null; then
+      echo "install.sh: installed update-notifier-common (apt-check) for Ubuntu security classification"
+    else
+      echo "install.sh: warning: could not install update-notifier-common -- security-pocket counts will be best-effort" >&2
+    fi
+  fi
   # Read back whatever's already configured (a re-install/upgrade of an
   # existing native agent) so re-running this doesn't reset every value to
   # blank just because the shell re-running it doesn't happen to have

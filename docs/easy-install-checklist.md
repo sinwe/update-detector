@@ -59,6 +59,14 @@ Check an item off when its change is committed on this branch.
   silently when already configured via env or existing config, and when
   no TTY is available (non-interactive). No-TTY: env vars only.
 
+- [x] **14. Install update-notifier-common on native hosts** — Native
+  agent install now apt-installs `update-notifier-common` (best-effort,
+  never fatal) when apt is available and apt-check is missing, so Ubuntu
+  hosts get the authoritative security-pocket classification instead of
+  falling back to parsing `apt-get -s dist-upgrade`. Found during live
+  testing on Ubuntu 24.04 WSL (10 Nov 2026): apt-check was absent and
+  the agent logged "apt-check: no such file or directory".
+
 ## Next — medium effort, real robustness
 
 - [ ] **6. Generate an apply secret at aggregator-install time when none
