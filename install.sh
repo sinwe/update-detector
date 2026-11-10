@@ -738,6 +738,9 @@ install_agent_native() {
   fi
   warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
 
+  # Optional Telegram setup (prompts only if not already configured).
+  prompt_telegram
+
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
 HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-$existing_hostname_override}
@@ -851,6 +854,10 @@ install_agent_launchd() {
     exit 1
   fi
   warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
+
+  # Optional Telegram setup (prompts only if not already configured).
+  prompt_telegram
+
   resolved_listen_addr="${LISTEN_ADDR:-$existing_listen_addr}"
   resolved_listen_addr="${resolved_listen_addr:-:8080}"
   resolved_check_interval="${CHECK_INTERVAL:-$existing_check_interval}"
@@ -997,6 +1004,9 @@ install_agent_docker() {
       exit 1
     fi
     warn_if_aggregator_unreachable "$resolved_aggregator_url" "$dir/.env"
+
+    # Optional Telegram setup (prompts only if not already configured).
+    prompt_telegram
 
     mkdir -p "$dir"
     download_to "$(raw_url_for docker-compose.yml)" "$dir/docker-compose.yml"
@@ -1756,6 +1766,41 @@ prompt_components() {
 # through an aggregator; a companion can't even pair with an agent that
 # has none) -- so both callers treat an empty result (no terminal to
 # prompt on, or a human leaving it blank) as fatal.
+# prompt_telegram -> optionally configure Telegram notifications.
+# Sets TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID if the user opts in.
+# No-TTY: skips silently (env vars only).
+prompt_telegram() {
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+    return
+  fi
+  if ! have_tty; then
+    return
+  fi
+  echo >&2
+  echo "install.sh: Telegram update alerts (optional)" >&2
+  echo "  Get a bot token from @BotFather and your chat ID from @userinfobot." >&2
+  printf "Enable Telegram notifications? [y/N]: " >&2
+  read -r reply < /dev/tty
+  case "$reply" in
+    y|Y|yes|YES)
+      printf "Bot token: " >&2
+      read -r token < /dev/tty
+      printf "Chat ID: " >&2
+      read -r chat < /dev/tty
+      if [ -n "$token" ] && [ -n "$chat" ]; then
+        export TELEGRAM_BOT_TOKEN="$token"
+        export TELEGRAM_CHAT_ID="$chat"
+        echo "install.sh: Telegram configured." >&2
+      else
+        echo "install.sh: skipping Telegram (token or chat ID missing)." >&2
+      fi
+      ;;
+    *)
+      echo "install.sh: skipping Telegram." >&2
+      ;;
+  esac
+}
+
 prompt_aggregator_url() {
   if [ -n "${1:-}" ]; then
     printf '%s' "$1"

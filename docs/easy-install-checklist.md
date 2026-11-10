@@ -52,10 +52,12 @@ Check an item off when its change is committed on this branch.
   holding the URL. Unreachable URL warns and the install continues
   (exit 0, service active); reachable URL stays silent. Verified live on
   this VM 8 Nov 2026.
-- [ ] **5. Offer Telegram setup instead of env-vars-only** —
-  `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are never prompted for; a new
-  user gets no notifications and only learns why from a log line. One
-  optional prompt ("want update alerts on Telegram?") would close it.
+- [x] **5. Offer Telegram setup instead of env-vars-only** — Added
+  `prompt_telegram` helper that asks "Enable Telegram notifications?
+  [y/N]" and prompts for bot token + chat ID if yes. Called in all
+  three agent install paths (native, macOS/launchd, Docker). Skips
+  silently when already configured via env or existing config, and when
+  no TTY is available (non-interactive). No-TTY: env vars only.
 
 ## Next — medium effort, real robustness
 
