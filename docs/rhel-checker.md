@@ -35,4 +35,4 @@ The aggregator is unchanged.
 - [x] Reboot detection (`needs-restarting`)
 - [ ] CVE integration
 - [x] Installer (`install.sh`) dnf-aware native path
-- [ ] Fixture-based parsing tests
+- [x] Fixture-based parsing tests

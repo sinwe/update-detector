@@ -76,46 +76,22 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		}
 	}
 
-	lines := strings.Split(string(out), "\n")
 	// Build a set of security-flagged package names from a separate
 	// `dnf check-update --security` run (best-effort; ignored on failure).
 	securitySet := map[string]bool{}
 	secOut, secErr := exec.CommandContext(ctx, "dnf", "check-update", "-q", "--security").Output()
 	if secErr == nil {
-		// ok
+		// no updates (or success)
 	} else if ee, ok := secErr.(*exec.ExitError); ok && ee.ExitCode() == 100 {
 		// updates available
 	} else {
 		secOut = nil
 	}
 	if secOut != nil {
-		for _, line := range strings.Split(string(secOut), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 1 {
-				continue
-			}
-			securitySet[stripArch(fields[0])] = true
-		}
+		securitySet = parseDnfSecuritySet(string(secOut))
 	}
 
-	var upgrades []checker.PackageUpgrade
-	securityCount := 0
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		name := stripArch(fields[0])
-		isSec := securitySet[name]
-		if isSec {
-			securityCount++
-		}
-		upgrades = append(upgrades, checker.PackageUpgrade{
-			Name:             name,
-			CandidateVersion: fields[1],
-			Security:         isSec,
-		})
-	}
+	upgrades, securityCount := parseDnfUpgrades(string(out), securitySet)
 	status.Packages = checker.PackageInfo{
 		UpgradableTotal:    len(upgrades),
 		UpgradableSecurity: securityCount,
@@ -141,6 +117,62 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 
 	status.OK = checker.ComputeOK(status)
 	return status, nil
+}
+
+// parseDnfSecuritySet builds a set of package names flagged as security
+// updates from `dnf check-update --security` output. Each non-blank line's
+// first field is a "name.arch" token; the arch suffix is stripped so the
+// set keys match parseDnfUpgrades' names.
+func parseDnfSecuritySet(raw string) map[string]bool {
+	set := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 1 {
+			continue
+		}
+		set[stripArch(fields[0])] = true
+	}
+	return set
+}
+
+// parseDnfUpgrades parses `dnf check-update -q` output into upgrades.
+// Expected lines look like:
+//
+//	bash.x86_64  5.1.8-9.el9  baseos
+//	kernel.x86_64 5.14.0-...  baseos
+//
+// Lines with fewer than 3 fields (headers, blank lines, "Last metadata
+// expiration check: ..." diagnostics) are skipped. Security is set from
+// securitySet when the package name appears there.
+func parseDnfUpgrades(raw string, securitySet map[string]bool) ([]checker.PackageUpgrade, int) {
+	var upgrades []checker.PackageUpgrade
+	securityCount := 0
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		// dnf prefixes package lines with "name.arch"; diagnostic lines
+		// (e.g. "Last metadata expiration check: ...") have no arch suffix
+		// and must be skipped.
+		if stripArch(fields[0]) == fields[0] {
+			continue
+		}
+		name := stripArch(fields[0])
+		isSec := false
+		if securitySet != nil {
+			isSec = securitySet[name]
+		}
+		if isSec {
+			securityCount++
+		}
+		upgrades = append(upgrades, checker.PackageUpgrade{
+			Name:             name,
+			CandidateVersion: fields[1],
+			Security:         isSec,
+		})
+	}
+	return upgrades, securityCount
 }
 
 var knownArches = map[string]bool{
