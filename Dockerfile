@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X update-detector/internal/vers
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && \
+RUN for i in 1 2 3 4 5; do apt-get update && break || sleep 10; done && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       apt \
