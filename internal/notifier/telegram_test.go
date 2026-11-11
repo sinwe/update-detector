@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"update-detector/internal/checker"
 )
 
 // captureSend returns a notifier wired to a fake Bot API that records the
@@ -26,6 +29,30 @@ func captureSend(t *testing.T) (*Telegram, *map[string]any) {
 	n.apiBase = srv.URL
 	n.client = srv.Client()
 	return n, &body
+}
+
+func TestFormatMessageIncludesPackageVersions(t *testing.T) {
+	got := FormatMessage(Event{
+		Hostname: "host",
+		Status: checker.Status{Packages: checker.PackageInfo{
+			UpgradableTotal:    2,
+			UpgradableSecurity: 1,
+			Upgrades: []checker.PackageUpgrade{
+				{Name: "curl", CurrentVersion: "8.5.0-1", CandidateVersion: "8.5.0-2", Security: true},
+				{Name: "tool<name>", CurrentVersion: "1.0", CandidateVersion: "2.0"},
+			},
+		}},
+	})
+
+	for _, want := range []string{
+		"Packages:\n",
+		"• curl: 8.5.0-1 → 8.5.0-2 (security)\n",
+		"• tool&lt;name&gt;: 1.0 → 2.0\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("FormatMessage() missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestSendOmitsReplyMarkupWithoutApplyTarget(t *testing.T) {

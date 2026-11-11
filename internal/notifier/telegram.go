@@ -105,6 +105,22 @@ func FormatMessage(ev Event) string {
 
 	s := ev.Status
 	fmt.Fprintf(&b, "\nUpgradable: %d (security: %d)\n", s.Packages.UpgradableTotal, s.Packages.UpgradableSecurity)
+	if len(s.Packages.Upgrades) > 0 {
+		b.WriteString("Packages:\n")
+		for _, upgrade := range s.Packages.Upgrades {
+			fmt.Fprintf(&b, "• %s", html.EscapeString(upgrade.Name))
+			switch {
+			case upgrade.CurrentVersion != "" && upgrade.CandidateVersion != "":
+				fmt.Fprintf(&b, ": %s → %s", html.EscapeString(upgrade.CurrentVersion), html.EscapeString(upgrade.CandidateVersion))
+			case upgrade.CandidateVersion != "":
+				fmt.Fprintf(&b, ": available %s", html.EscapeString(upgrade.CandidateVersion))
+			}
+			if upgrade.Security {
+				b.WriteString(" (security)")
+			}
+			b.WriteByte('\n')
+		}
+	}
 	if s.Vulnerabilities.Total > 0 {
 		fmt.Fprintf(&b, "CVEs: %d critical, %d high, %d medium, %d low (%d total",
 			s.Vulnerabilities.Critical, s.Vulnerabilities.High,
