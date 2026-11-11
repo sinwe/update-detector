@@ -405,9 +405,16 @@ download_binary() {
     existing_version="$("$dest" --version 2>/dev/null | awk '{print $NF}')"
     if [ -n "$existing_version" ] && [ "$existing_version" = "$INSTALL_VERSION" ]; then
       skip=1
+      # Best-effort checksum comparison with a short timeout so a slow or
+      # stalled network can never make the "already up to date" path hang.
       if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
         checksums_url="${download_url%/*}/sha256sums.txt"
-        if download_to "$checksums_url" "$dest.sha256sums" 2>/dev/null; then
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL --connect-timeout 5 --max-time 10 -o "$dest.sha256sums" "$checksums_url" 2>/dev/null
+        else
+          wget -qO "$dest.sha256sums" --timeout=10 "$checksums_url" 2>/dev/null
+        fi
+        if [ -f "$dest.sha256sums" ]; then
           expected="$(grep "  $asset_name\$" "$dest.sha256sums" 2>/dev/null | awk '{print $1}')"
           if [ -n "$expected" ]; then
             actual="$(sha256_of "$dest")"
@@ -420,7 +427,7 @@ download_binary() {
         fi
       fi
       if [ "$skip" = "1" ]; then
-        echo "install.sh: $dest already at $INSTALL_VERSION with matching checksum -- skipping download (set FORCE_DOWNLOAD=1 to override)"
+        echo "install.sh: $dest already at $INSTALL_VERSION -- skipping download (set FORCE_DOWNLOAD=1 to override)"
         return 0
       fi
     fi
