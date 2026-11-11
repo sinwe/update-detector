@@ -385,19 +385,6 @@ sha256_of() {
 # file are available; a mismatch aborts the install.
 download_binary() {
   name="$1" dest="$2"
-  # Skip re-downloading when the binary already exists at the requested
-  # version and the caller hasn't asked for a forced refresh. Comparing
-  # versions (not just existence) is essential: self-update re-invokes this
-  # script against a newer INSTALL_VERSION, and a bare existence check
-  # would leave the old binary in place forever. A version mismatch (or a
-  # binary that can't report its version) falls through to a fresh download.
-  if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
-    existing_version="$("$dest" --version 2>/dev/null | awk '{print $NF}')"
-    if [ -n "$existing_version" ] && [ "$existing_version" = "$INSTALL_VERSION" ]; then
-      echo "install.sh: $dest already at $INSTALL_VERSION -- skipping download (set FORCE_DOWNLOAD=1 to override)"
-      return 0
-    fi
-  fi
   resolve_goarch
   asset_name="$name-$(goos_name)-$goarch"
   echo "install.sh: resolving $asset_name from release $INSTALL_VERSION..."
@@ -406,6 +393,39 @@ download_binary() {
     echo "install.sh: could not find asset $asset_name in release $INSTALL_VERSION" >&2
     exit 1
   fi
+
+  # Skip re-downloading when the binary already exists at the requested
+  # version AND its checksum matches the release's published sha256sums.txt.
+  # Comparing only versions is not enough: a corrupted/partial binary or a
+  # re-published asset with the same version string would otherwise be
+  # left in place. A version mismatch, a checksum mismatch, or a missing
+  # checksums file (older releases) falls through to a fresh download.
+  # FORCE_DOWNLOAD=1 always overrides.
+  if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
+    existing_version="$("$dest" --version 2>/dev/null | awk '{print $NF}')"
+    if [ -n "$existing_version" ] && [ "$existing_version" = "$INSTALL_VERSION" ]; then
+      skip=1
+      if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+        checksums_url="${download_url%/*}/sha256sums.txt"
+        if download_to "$checksums_url" "$dest.sha256sums" 2>/dev/null; then
+          expected="$(grep "  $asset_name\$" "$dest.sha256sums" 2>/dev/null | awk '{print $1}')"
+          if [ -n "$expected" ]; then
+            actual="$(sha256_of "$dest")"
+            if [ "$actual" != "$expected" ]; then
+              skip=0
+              echo "install.sh: $dest checksum differs from release (expected $expected, got $actual) -- re-downloading"
+            fi
+          fi
+          rm -f "$dest.sha256sums"
+        fi
+      fi
+      if [ "$skip" = "1" ]; then
+        echo "install.sh: $dest already at $INSTALL_VERSION with matching checksum -- skipping download (set FORCE_DOWNLOAD=1 to override)"
+        return 0
+      fi
+    fi
+  fi
+
   echo "install.sh: downloading $download_url"
   if ! download_to "$download_url" "$dest.new"; then
     echo "install.sh: failed to download $download_url" >&2
