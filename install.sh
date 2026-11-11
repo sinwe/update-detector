@@ -1988,9 +1988,7 @@ prompt_components() {
   echo "  1) aggregator only" >&2
   echo "  2) agent only" >&2
   echo "  3) agent + companion" >&2
-  if echo "$found" | grep -q 'aggregator'; then
-    echo "  4) all three" >&2
-  fi
+  echo "  4) all three" >&2
   printf "Choose [0-4]: " >&2
   if ! read_tty choice; then
     echo "install.sh: no input received -- defaulting to agent" >&2
