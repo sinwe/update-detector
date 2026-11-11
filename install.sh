@@ -2394,11 +2394,6 @@ elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native"
       ;;
   esac
   case ",$components," in *,companion,*) install_companion ;; esac
-elif is_macos; then
-  # An agent already exists and macOS has no companion: re-running with
-  # no explicit components updates that agent in place (re-download +
-  # restart), mirroring what the Docker path does on Linux.
-  install_agent_native
 else
   install_companion
 fi
