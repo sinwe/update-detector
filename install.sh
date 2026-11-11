@@ -14,7 +14,7 @@
 # On a host with nothing installed yet, this prompts (interactively, or
 # via INSTALL_COMPONENTS below) for which of the aggregator, the agent, and
 # the companion to set up. For the aggregator and the agent specifically
-# (the companion is always native -- it needs real root to run apt-get),
+# (the companion is always native -- it needs real root to run the package manager),
 # it then checks whether Docker is actually usable here (see
 # docker_available below) and defaults to a Docker Compose deployment when
 # it is -- prompting for a directory (default ~/docker-updater; the agent
@@ -875,6 +875,17 @@ install_agent_native() {
       echo "install.sh: installed update-notifier-common (apt-check) for Ubuntu security classification"
     else
       echo "install.sh: warning: could not install update-notifier-common -- security-pocket counts will be best-effort" >&2
+    fi
+  fi
+
+  # RHEL-family hosts: needs-restarting (from dnf-utils/yum-utils) backs
+  # the checker's reboot detection; install it if missing so that signal
+  # isn't silently unavailable. Best-effort, never fatal.
+  if command -v dnf >/dev/null 2>&1 && ! command -v needs-restarting >/dev/null 2>&1; then
+    if dnf install -y dnf-utils >/dev/null 2>&1 || dnf install -y yum-utils >/dev/null 2>&1; then
+      echo "install.sh: installed dnf-utils (needs-restarting) for RHEL reboot detection"
+    else
+      echo "install.sh: warning: could not install dnf-utils -- reboot detection will be best-effort" >&2
     fi
   fi
 
