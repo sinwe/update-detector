@@ -2173,20 +2173,60 @@ prompt_uninstall_components() {
 
   if is_macos; then
     # Agent and/or companion at most (no Docker path, no aggregator port
-    # on macOS) -- confirm once for whatever was actually found, same
-    # /dev/tty rationale as above.
+    # on macOS). Offer a menu so the companion can be removed on its own
+    # (the agent stays), while removing the agent also removes the
+    # companion (it cannot run without one).
     echo "Found installed:$found" >&2
     if ! have_tty; then
       echo "install.sh: no terminal to prompt on and UNINSTALL_COMPONENTS not set --" >&2
       echo "  found:$found -- set UNINSTALL_COMPONENTS explicitly (e.g. agent,companion) to proceed non-interactively." >&2
       return
     fi
-    printf "Uninstall:%s? [y/N]: " "$found" >&2
+
+    # Build the menu from what's actually present.
+    echo "Which would you like to uninstall?" >&2
+    echo "  0) cancel" >&2
+    echo >&2
+    _opt=1
+    if echo "$found" | grep -q 'agent'; then
+      echo "  $_opt) agent (and companion, if installed)" >&2
+      _agent_opt=$_opt
+      _opt=$((_opt+1))
+    fi
+    if echo "$found" | grep -q 'companion'; then
+      echo "  $_opt) companion only" >&2
+      _companion_opt=$_opt
+      _opt=$((_opt+1))
+    fi
+    if echo "$found" | grep -q ' ' ; then
+      echo "  $_opt) all" >&2
+      _all_opt=$_opt
+      _opt=$((_opt+1))
+    fi
+    printf "Choose: " >&2
     read_tty choice || true
-    case "$choice" in
-      y|Y|yes|YES) echo "$found" | sed 's/^ *//; s/  */,/g' ;;
-      *) echo "install.sh: cancelled -- nothing uninstalled." >&2; return ;;
-    esac
+    if [ -z "$choice" ]; then
+      echo "install.sh: cancelled -- nothing uninstalled." >&2
+      return
+    fi
+    # Map the choice back to a component list.
+    if [ -n "${_agent_opt:-}" ] && [ "$choice" = "$_agent_opt" ]; then
+      if echo "$found" | grep -q 'companion'; then
+        echo "agent,companion"
+      else
+        echo "agent"
+      fi
+      return
+    fi
+    if [ -n "${_companion_opt:-}" ] && [ "$choice" = "$_companion_opt" ]; then
+      echo "companion"
+      return
+    fi
+    if [ -n "${_all_opt:-}" ] && [ "$choice" = "$_all_opt" ]; then
+      echo "$found" | sed 's/^ *//; s/  */,/g'
+      return
+    fi
+    echo "install.sh: cancelled -- nothing uninstalled." >&2
     return
   fi
 
