@@ -15,8 +15,11 @@ import (
 
 // softwareUpdateTimeout bounds `softwareupdate --list`, which phones home
 // to Apple's catalog and can stall on a bad network -- a stuck check must
-// not wedge the agent's whole detection cycle.
-const softwareUpdateTimeout = 90 * time.Second
+// not wedge the agent's whole detection cycle. Kept generous: on a slow
+// or sleepy (MacBook on battery) link Apple's catalog scan can take well
+// over a minute, and a too-tight bound shows up as a scary
+// "signal: killed" (Go's exec.CommandContext SIGKILL on deadline).
+const softwareUpdateTimeout = 3 * time.Minute
 
 // readOSInfo combines `sw_vers` (current OS name/version, always local
 // and fast) with `softwareupdate --list` (whether Apple offers anything
@@ -83,7 +86,10 @@ func softwareUpdateList(ctx context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, softwareUpdateTimeout)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "softwareupdate", "--list")
+	// --os-only keeps the scan to OS updates (which is all OSInfo cares
+	// about) and shrinks the catalog scan, which is the part that can
+	// hang long enough to trip softwareUpdateTimeout above.
+	cmd := exec.CommandContext(ctx, "softwareupdate", "--list", "--os-only")
 	// Same live tap as brew outdated above -- this is the slowest call
 	// in a macOS check (it phones Apple's catalog), so it's the one a
 	// verbose-recheck viewer most wants to watch. sw_vers stays untapped:
@@ -98,6 +104,12 @@ func softwareUpdateList(ctx context.Context) (bool, error) {
 	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// Surface a timeout as what it actually is instead of the opaque
+		// "signal: killed" that exec.CommandContext produces when it
+		// SIGKILLs the process on deadline expiry.
+		if ctx.Err() == context.DeadlineExceeded {
+			return false, fmt.Errorf("softwareupdate --list: timed out after %s (Apple catalog scan did not finish): %s", softwareUpdateTimeout, strings.TrimSpace(stderr.String()))
+		}
 		return false, fmt.Errorf("softwareupdate --list: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return parseSoftwareUpdateList(stdout.String()), nil
