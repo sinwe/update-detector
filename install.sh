@@ -1964,7 +1964,9 @@ prompt_components() {
   echo "  1) aggregator only" >&2
   echo "  2) agent only" >&2
   echo "  3) agent + companion" >&2
-  echo "  4) all three" >&2
+  if echo "$found" | grep -q 'aggregator'; then
+    echo "  4) all three" >&2
+  fi
   printf "Choose [0-4]: " >&2
   if ! read_tty choice; then
     echo "install.sh: no input received -- defaulting to agent" >&2
@@ -2200,7 +2202,9 @@ prompt_uninstall_components() {
       _companion_opt=$_opt
       _opt=$((_opt+1))
     fi
-    if echo "$found" | grep -q ' ' ; then
+    # "all" only makes sense when an aggregator is present (i.e. all
+    # three components), since removing the aggregator takes everything.
+    if echo "$found" | grep -q 'aggregator'; then
       echo "  $_opt) all" >&2
       _all_opt=$_opt
       _opt=$((_opt+1))
