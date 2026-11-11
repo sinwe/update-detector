@@ -34,6 +34,7 @@ type agentView struct {
 	OSUpdateAvailable  bool
 	AgentVersion       string
 	Platform           string
+	CVESupported       bool
 	CVEEnabled         bool
 	CVECritical       int
 	CVEHigh           int
@@ -200,6 +201,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.OSUpdateAvailable = rec.LastReport.OS.UpdateAvailable
 		v.AgentVersion = rec.LastReport.AgentVersion
 		v.Platform = rec.LastReport.Platform
+		v.CVESupported = cveSupportedPlatform(v.Platform)
 		v.CVEEnabled = rec.CVEEnabled
 		v.CVECritical = rec.LastReport.Vulnerabilities.Critical
 		v.CVEHigh = rec.LastReport.Vulnerabilities.High
@@ -221,6 +223,14 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		})
 	}
 	return v
+}
+
+// cveSupportedPlatform reports whether CVE detection is actually implemented
+// for the host's platform. Today that's only the Debian/Ubuntu checkers;
+// Windows and macOS hosts must not be offered the toggle (or show CVE
+// counts) until a detector exists for them.
+func cveSupportedPlatform(platform string) bool {
+	return platform == "ubuntu" || platform == "debian"
 }
 
 func shortID(id string) string {
@@ -657,7 +667,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         <div class="host-report">
           <span><strong>{{.UpgradableTotal}}</strong> upgradable</span>
           <span><strong>{{.UpgradableSecurity}}</strong> security</span>
-          {{if and .CVEEnabled (gt .CVETotal 0)}}<span style="font-size:.75rem;opacity:.7">{{.CVECritical}} critical, {{.CVEHigh}} high, {{.CVEMedium}} medium, {{.CVELow}} low CVE{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>{{end}}
+          {{if and .CVESupported .CVEEnabled (gt .CVETotal 0)}}<span style="font-size:.75rem;opacity:.7">{{.CVECritical}} critical, {{.CVEHigh}} high, {{.CVEMedium}} medium, {{.CVELow}} low CVE{{if .CVEScanner}} ({{.CVEScanner}}){{end}}</span>{{end}}
           <a href="/widgets/hosts/{{.Hostname}}" style="font-size:.75rem">JSON</a>
         </div>
 
@@ -677,7 +687,7 @@ const adminTemplateSrc = `<!DOCTYPE html>
         </details>
         {{end}}
 
-        {{if and .CVEEnabled .CVEItems}}
+        {{if and .CVESupported .CVEEnabled .CVEItems}}
         <details>
           <summary>{{len .CVEItems}} CVE{{if gt (len .CVEItems) 1}}s{{end}}{{if gt (len .CVEItems) 50}} (showing first 50){{end}}</summary>
           <ul class="pkg-list">
@@ -721,10 +731,10 @@ const adminTemplateSrc = `<!DOCTYPE html>
             <input type="checkbox" id="verbose-{{.ID}}"> verbose
           </label>
           <button class="btn-sm" onclick="forceRecheck('{{.ID}}')" title="Re-scan now">Force recheck</button>
-          <label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Enable CVE/vulnerability detection for this host (off by default)">
+          {{if .CVESupported}}<label class="verbose-toggle" style="font-size:.75rem;font-weight:normal" title="Enable CVE/vulnerability detection for this host (off by default)">
             <input type="checkbox" {{if .CVEEnabled}}checked{{end}} onchange="postCVEEnabled('{{.ID}}', this.checked)"> CVE detection
-          </label>
-          {{if and .CVEEnabled (gt .CVETotal 0)}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
+          </label>{{end}}
+          {{if and .CVESupported .CVEEnabled (gt .CVETotal 0)}}<button class="btn-sm" onclick="showCVEs('{{.ID}}')" title="View CVE details">CVEs ({{.CVETotal}})</button>{{end}}
           {{if .CompanionConnected}}
             <button class="btn-primary btn-sm" onclick="applyAction('{{.ID}}', 'upgrade')">Upgrade all</button>
             <button class="btn-warn btn-sm" onclick="applyAction('{{.ID}}', 'full-upgrade')">Full upgrade all</button>
