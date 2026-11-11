@@ -84,7 +84,7 @@ set -eu
 
 # Defensive defaults so prompt variables are never unbound under `set -u`,
 # even when a read fails before assigning them.
-reply=""; choice=""; token=""; chat=""; url=""; dir=""; _top_action=""
+reply=""; choice=""; token=""; chat=""; url=""; dir=""; _top_action=""; force_prompt=0
 # have_tty -> true if an interactive terminal is available for prompting.
 # Checks stdin first ([ -t 0 ]): a real terminal or `sudo sh install.sh`
 # run directly. Falls back to probe-opening /dev/tty with a short timeout
@@ -2323,7 +2323,7 @@ if [ "$uninstall_requested" = "0" ] && have_tty; then
   case "$_top_action" in
     0) echo "install.sh: cancelled -- nothing done." >&2; exit 0 ;;
     2) uninstall_requested=1 ;;
-    *) ;; # default: proceed with install
+    *) force_prompt=1 ;; # install or update components interactively
   esac
 fi
 
@@ -2371,7 +2371,7 @@ if [ "$uninstall_requested" = "1" ]; then
 # the "nothing set up here yet, so ask what to set up" case this whole
 # feature is for. If an agent already exists, the original zero-config
 # "just install the companion against it" default still applies.
-elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native" = "0" ] && [ -z "$existing_agent_docker" ]; }; then
+elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native" = "0" ] && [ -z "$existing_agent_docker" ]; } || [ "$force_prompt" = "1" ]; then
   components=$(prompt_components)
   components=$(printf '%s' "$components" | tr ' ' ',' | tr -s ',')
   assert_macos_components "$components"
