@@ -252,9 +252,9 @@ fi
 fetch_body() {
   _url="$1" _ua="${2:-update-detector-install.sh}"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -H "User-Agent: $_ua" "$_url"
+    curl -fsSL --connect-timeout 10 --max-time 60 -H "User-Agent: $_ua" "$_url"
   else
-    wget -qO- --user-agent="$_ua" "$_url"
+    wget -qO- --timeout=60 --user-agent="$_ua" "$_url"
   fi
 }
 
@@ -268,9 +268,9 @@ download_to() {
   if command -v curl >/dev/null 2>&1; then
     # -# shows a progress bar (auto-disabled when not a tty) instead of
     # the fully silent -s, so a slow connection doesn't look hung.
-    curl -fL -# "$_url" -o "$_dest"
+    curl -fL -# --connect-timeout 10 --max-time 300 "$_url" -o "$_dest"
   else
-    wget --show-progress -O "$_dest" "$_url"
+    wget --show-progress -T 300 -O "$_dest" "$_url"
   fi
 }
 
