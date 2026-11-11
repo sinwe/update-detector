@@ -385,12 +385,18 @@ sha256_of() {
 # file are available; a mismatch aborts the install.
 download_binary() {
   name="$1" dest="$2"
-  # Skip re-downloading when the binary already exists and the caller
-  # hasn't asked for a forced refresh. Re-running install.sh on a host
-  # that's already on the requested version shouldn't re-fetch ~10MB.
+  # Skip re-downloading when the binary already exists at the requested
+  # version and the caller hasn't asked for a forced refresh. Comparing
+  # versions (not just existence) is essential: self-update re-invokes this
+  # script against a newer INSTALL_VERSION, and a bare existence check
+  # would leave the old binary in place forever. A version mismatch (or a
+  # binary that can't report its version) falls through to a fresh download.
   if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
-    echo "install.sh: $dest already present -- skipping download (set FORCE_DOWNLOAD=1 to override)"
-    return 0
+    existing_version="$("$dest" --version 2>/dev/null | awk '{print $NF}')"
+    if [ -n "$existing_version" ] && [ "$existing_version" = "$INSTALL_VERSION" ]; then
+      echo "install.sh: $dest already at $INSTALL_VERSION -- skipping download (set FORCE_DOWNLOAD=1 to override)"
+      return 0
+    fi
   fi
   resolve_goarch
   asset_name="$name-$(goos_name)-$goarch"
