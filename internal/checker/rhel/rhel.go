@@ -59,22 +59,65 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 	}
 
 	lines := strings.Split(string(out), "\n")
+	// Build a set of security-flagged package names from a separate
+	// `dnf check-update --security` run (best-effort; ignored on failure).
+	securitySet := map[string]bool{}
+	secOut, secErr := exec.CommandContext(ctx, "dnf", "check-update", "-q", "--security").Output()
+	if secErr == nil {
+		// ok
+	} else if ee, ok := secErr.(*exec.ExitError); ok && ee.ExitCode() == 100 {
+		// updates available
+	} else {
+		secOut = nil
+	}
+	if secOut != nil {
+		for _, line := range strings.Split(string(secOut), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 1 {
+				continue
+			}
+			securitySet[stripArch(fields[0])] = true
+		}
+	}
+
 	var upgrades []checker.PackageUpgrade
+	securityCount := 0
 	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue
 		}
-		// dnf check-update lines: name.arch  version  repo
+		name := stripArch(fields[0])
+		isSec := securitySet[name]
+		if isSec {
+			securityCount++
+		}
 		upgrades = append(upgrades, checker.PackageUpgrade{
-			Name:             fields[0],
+			Name:             name,
 			CandidateVersion: fields[1],
+			Security:         isSec,
 		})
 	}
 	status.Packages = checker.PackageInfo{
-		UpgradableTotal: len(upgrades),
-		Upgrades:        upgrades,
+		UpgradableTotal:    len(upgrades),
+		UpgradableSecurity: securityCount,
+		Upgrades:           upgrades,
 	}
 	status.OK = checker.ComputeOK(status)
 	return status, nil
+}
+
+var knownArches = map[string]bool{
+	"x86_64": true, "aarch64": true, "noarch": true, "i686": true,
+	"ppc64le": true, "s390x": true, "armv7hl": true, "i386": true,
+}
+
+// stripArch removes a trailing ".<arch>" from a dnf package name.
+func stripArch(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		if knownArches[name[i+1:]] {
+			return name[:i]
+		}
+	}
+	return name
 }
