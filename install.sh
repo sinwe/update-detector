@@ -843,7 +843,7 @@ install_agent_native() {
 
   # Validate AGGREGATOR_URL BEFORE downloading anything or creating
   # users/state dirs, so a missing URL doesn't leave a partial install.
-  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
+  resolved_aggregator_url="$(resolve_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
   if [ "$resolved_aggregator_url" = "CANCEL" ]; then
     echo "install.sh: cancelled -- nothing installed." >&2
     exit 0
@@ -852,7 +852,6 @@ install_agent_native() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
-  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
 
   # Optional Telegram setup (prompts only if not already configured).
   prompt_telegram
@@ -973,7 +972,7 @@ install_agent_launchd() {
   fi
 
   # Validate AGGREGATOR_URL BEFORE downloading the binary.
-  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
+  resolved_aggregator_url="$(resolve_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
   if [ "$resolved_aggregator_url" = "CANCEL" ]; then
     echo "install.sh: cancelled -- nothing installed." >&2
     exit 0
@@ -982,7 +981,6 @@ install_agent_launchd() {
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
   fi
-  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
 
   # Optional Telegram setup (prompts only if not already configured).
   prompt_telegram
@@ -1131,7 +1129,7 @@ install_agent_docker() {
     fi
     echo "install.sh: setting up update-detector (agent) via Docker Compose in $dir..."
 
-    resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+    resolved_aggregator_url="$(resolve_aggregator_url "${AGGREGATOR_URL:-}")"
     if [ "$resolved_aggregator_url" = "CANCEL" ]; then
       echo "install.sh: cancelled -- nothing installed." >&2
       exit 0
@@ -1140,7 +1138,6 @@ install_agent_docker() {
       echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
       exit 1
     fi
-    warn_if_aggregator_unreachable "$resolved_aggregator_url" "$dir/.env"
 
     # Optional Telegram setup (prompts only if not already configured).
     prompt_telegram
@@ -1495,7 +1492,7 @@ install_companion() {
   # the companion has no meaningful way to run without one at all, so an
   # empty result here (no terminal to prompt on, or left blank) is fatal.
   if [ -z "$agg_url" ]; then
-    agg_url="$(prompt_aggregator_url "")"
+    agg_url="$(resolve_aggregator_url "")"
   fi
   if [ "$agg_url" = "CANCEL" ]; then
     echo "install.sh: cancelled -- nothing installed." >&2
@@ -1598,7 +1595,7 @@ install_companion_launchd() {
   agent_status_url="http://localhost:${agent_listen_addr#*:}/status"
 
   if [ -z "$agg_url" ]; then
-    agg_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+    agg_url="$(resolve_aggregator_url "${AGGREGATOR_URL:-}")"
   fi
   if [ "$agg_url" = "CANCEL" ]; then
     echo "install.sh: cancelled -- nothing installed." >&2
@@ -2082,6 +2079,77 @@ prompt_aggregator_url() {
       return
     fi
     echo "install.sh: AGGREGATOR_URL is required." >&2
+  done
+}
+
+# resolve_aggregator_url INITIAL -> interactively resolve an aggregator URL,
+# prompting for it when INITIAL is empty and, when a terminal is available,
+# re-prompting when the entered URL doesn't look reachable (instead of
+# silently continuing). Prints the final URL, or "CANCEL" if the user
+# chose to quit. Non-interactive runs keep the old warn-and-continue
+# behavior.
+resolve_aggregator_url() {
+  _initial="$1"
+  if [ -n "$_initial" ]; then
+    _current="$_initial"
+  else
+    _current="$(prompt_aggregator_url "")"
+    if [ "$_current" = "CANCEL" ]; then
+      printf 'CANCEL'
+      return
+    fi
+  fi
+
+  if [ -z "$_current" ]; then
+    printf '%s' "$_current"
+    return
+  fi
+
+  while :; do
+    if url_ok "$_current/openapi.yaml"; then
+      printf '%s' "$_current"
+      return
+    fi
+
+    if ! have_tty; then
+      echo "install.sh: warning: $_current doesn't look reachable from this host right now -- continuing anyway." >&2
+      printf '%s' "$_current"
+      return
+    fi
+
+    echo "install.sh: $_current doesn't look reachable from this host right now." >&2
+    echo "  1) amend the URL" >&2
+    echo "  2) continue anyway" >&2
+    echo "  q) quit" >&2
+    printf "Choose [1/2/q]: " >&2
+    read_tty _choice || true
+    case "$_choice" in
+      1|a|A|amend)
+        _current="$(prompt_aggregator_url "")"
+        if [ "$_current" = "CANCEL" ]; then
+          printf 'CANCEL'
+          return
+        fi
+        if [ -z "$_current" ]; then
+          printf '%s' "$_current"
+          return
+        fi
+        ;;
+      2|c|C|continue|"")
+        printf '%s' "$_current"
+        return
+        ;;
+      q|Q)
+        echo "install.sh: cancelled -- nothing installed." >&2
+        printf 'CANCEL'
+        return
+        ;;
+      *)
+        echo "install.sh: continuing anyway." >&2
+        printf '%s' "$_current"
+        return
+        ;;
+    esac
   done
 }
 
