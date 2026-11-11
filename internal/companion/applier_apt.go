@@ -11,6 +11,11 @@ import (
 )
 
 func init() {
+	// On dnf-based distros (RHEL family) the dnf applier registers
+	// itself; skip here to avoid a duplicate-registration panic.
+	if _, err := exec.LookPath("dnf"); err == nil {
+		return
+	}
 	registerApplier(&aptApplier{})
 }
 

@@ -8,6 +8,7 @@ package main
 // regardless of GOOS. See docs/plugin-architecture-plan.md.
 import (
 	_ "update-detector/internal/checker/debian"
+	_ "update-detector/internal/checker/rhel"
 	_ "update-detector/internal/checker/ubuntu"
 	_ "update-detector/internal/cve/debian"
 )

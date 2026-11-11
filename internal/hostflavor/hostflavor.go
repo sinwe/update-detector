@@ -21,6 +21,8 @@ func Detect(osReleaseFile string) string {
 	switch id {
 	case "debian", "raspbian":
 		return "debian"
+	case "fedora", "rhel", "centos", "rocky", "almalinux", "ol":
+		return "rhel"
 	default:
 		return "ubuntu"
 	}
