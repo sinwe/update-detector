@@ -4,7 +4,6 @@ package companion
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 )
 
