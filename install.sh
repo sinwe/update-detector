@@ -1771,6 +1771,25 @@ offer_docker_down() {
   esac
 }
 
+# unregister_agent AGGREGATOR_URL IDENTITY_FILE -> best-effort removal of
+# this host from the aggregator's registry via POST .../forget. Never
+# fatal: the local uninstall proceeds regardless.
+unregister_agent() {
+  _agg_url="$1"; _identity_file="$2"
+  [ -z "$_agg_url" ] && return 0
+  [ -f "$_identity_file" ] || return 0
+  _agent_id="$(sed -n 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_identity_file" 2>/dev/null | head -1)"
+  [ -z "$_agent_id" ] && return 0
+  echo "install.sh: unregistering $_agent_id from $_agg_url ..." >&2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -o /dev/null -X POST "$_agg_url/admin/agents/$_agent_id/forget" 2>/dev/null \
+      || echo "install.sh: warning: could not unregister from aggregator (continuing)" >&2
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --post-data="" -O /dev/null "$_agg_url/admin/agents/$_agent_id/forget" 2>/dev/null \
+      || echo "install.sh: warning: could not unregister from aggregator (continuing)" >&2
+  fi
+}
+
 uninstall_agent() {
   native=0
   native_unit_present update-detector && native=1
@@ -1797,6 +1816,11 @@ uninstall_agent() {
         agent_state_dir="$(eval echo "~$brew_owner")/.update-detector"
       fi
     fi
+    if [ -n "$agent_state_dir" ] && [ -f "$agent_state_dir/agent.env" ]; then
+      _agg_url="$(env_value "$agent_state_dir/agent.env" AGGREGATOR_URL)"
+      _identity_file="$(env_value "$agent_state_dir/agent.env" AGENT_IDENTITY_FILE)"
+      unregister_agent "$_agg_url" "$_identity_file"
+    fi
     if [ -n "$agent_state_dir" ] && [ "$agent_state_dir" != "." ] && [ "$agent_state_dir" != "/" ]; then
       echo "install.sh: removing $agent_state_dir (includes this agent's aggregator identity)"
       rm -rf "$agent_state_dir"
@@ -1809,6 +1833,9 @@ uninstall_agent() {
     rm -f /etc/systemd/system/update-detector.service
     systemctl daemon-reload
     rm -f /usr/local/bin/update-detector
+    _agg_url="$(env_value /etc/default/update-detector AGGREGATOR_URL)"
+    _identity_file="$(env_value /etc/default/update-detector AGENT_IDENTITY_FILE)"
+    unregister_agent "$_agg_url" "$_identity_file"
     rm -f /etc/default/update-detector
     # dirname on an empty/malformed path returns "." or "/" -- guard
     # against both, or a degenerate case turns into `rm -rf .` as root.
