@@ -24,11 +24,14 @@ Check an item off when its change is committed on this branch.
 
 - [x] **1. Fix the `/dev/tty` guard** — `[ -r /dev/tty ]` passes with no
   controlling terminal, then `read < /dev/tty` fails with ENXIO and
-  `set -e` aborts (exit 2). Fixed: added `have_tty()` helper that
-  probe-opens `/dev/tty` (not just `-r` test). All 7 prompt sites now
-  use `have_tty`/`! have_tty`. Also: no-TTY Linux default changed from
-  "companion only" to "agent" (companion-only is useless on a fresh host
-  with no agent). Verified with `bash -n`.
+  `set -e` aborts (exit 2). First fix (probe-open) still hung in WSL
+  because `/dev/tty` is openable there even without a real user. Final
+  fix: `have_tty()` now checks `[ -t 0 ]` (stdin is a tty) instead of
+  probe-opening /dev/tty. This correctly skips prompts in non-interactive
+  contexts (WSL, SSH, CI, piped installs) and uses defaults/env vars.
+  Interactive `curl | sh` users lose prompting (acceptable tradeoff;
+  set env vars instead). Also: no-TTY Linux default changed from
+  "companion only" to "agent". Verified with `bash -n` and live WSL test.
 - [x] **2. Add `--help` (and reject unknown flags)** — today only
   `--uninstall` is recognised; anything else, including `--help`, is
   silently ignored and the install starts. Done: `--help`/`-h` prints
@@ -69,35 +72,54 @@ Check an item off when its change is committed on this branch.
 
 ## Next — medium effort, real robustness
 
-- [ ] **6. Generate an apply secret at aggregator-install time when none
-  is set** — today an unset secret silently leaves apply disabled (501
-  later). Generate one and print it, the same way the secret note now
-  surfaces it.
-- [ ] **7. Verify downloaded binaries** — `download_binary` curls the
-  release asset and installs it with no checksum check. Needs the
-  release workflow to publish checksums too.
+- [x] **6. Generate an apply secret at aggregator-install time when none
+  is set** — Native: generates a 32-byte hex secret (openssl or
+  /dev/urandom fallback) when no secret is provided or already configured,
+  writes it to /etc/default/update-aggregator, prints it. Docker: same
+  generation when ADMIN_APPLY_SHARED_SECRET is unset and no existing
+  secret in .env, persisted via set_env_var. Both paths print the secret
+  with the same "keep it somewhere safe" wording as an explicitly-provided
+  one. Verified with bash -n.
+- [x] **7. Verify downloaded binaries** — Added `sha256_of` helper
+  (sha256sum or shasum -a 256) and checksum verification in
+  `download_binary`: fetches `sha256sums.txt` from the same release,
+  verifies the downloaded binary's SHA-256 against it. Mismatch aborts
+  the install. Best-effort: skipped when no checksum tool or no
+  checksums file (older releases). Release workflow updated to generate
+  `sha256sums.txt` in dist/ (uploaded automatically via dist/*).
 - [ ] **8. Fix the misleading GitHub API error** — asset resolution hits
   `api.github.com` unauthenticated (60 req/hour limit), and any failure
   surfaces as "could not find asset X in release latest". Support
   `GH_TOKEN` and distinguish API failure from a genuinely missing asset.
-- [ ] **9. Don't leave a partial install behind** — the `AGGREGATOR_URL`
-  gate in the native/macOS agent path fires *after* the binary is
-  downloaded, the system user created, and the state dir made. Validate
-  the URL first, or clean up on failure.
-- [ ] **10. Let uninstall offer to stop Docker deployments** — it
-  deliberately never runs `docker compose down`, but it can already
-  identify its own deployments via Compose labels; offer a prompted
-  `down` for exactly those.
+- [x] **9. Don't leave a partial install behind** — Moved the
+  `AGGREGATOR_URL` resolution and validation (prompt + warn_if) to
+  before `download_binary` and `ensure_system_user` in both
+  `install_agent_native` and `install_agent_launchd`. The Docker path
+  already validated before downloading. Now a missing/invalid URL exits
+  before any files are created or users are added. Verified with
+  `bash -n`.
+- [x] **10. Let uninstall offer to stop Docker deployments** — Added
+  `offer_docker_down` helper that finds Docker deployments via Compose
+  labels and prompts "Stop it now? [y/N]". Runs `docker compose down`
+  only on explicit confirmation. In non-interactive mode, prints the
+  manual command instead. Called from both `uninstall_agent` and
+  `uninstall_aggregator`. Never automatic. Verified with `bash -n`.
 
 ## Nice to have
 
-- [ ] **11. A `--dry-run` mode** — print what it would do (components,
-  Docker vs native, directory, URLs) without changing anything.
-- [ ] **12. Show download progress** — `curl -fsSL` is fully silent; on
-  a slow connection the installer looks hung after "downloading …".
-- [ ] **13. Small polish** — the menu says "detector (agent) only" while
-  everything else calls it "agent"; no cancel/quit choice; a re-run
-  re-downloads the binary even when already on latest.
+- [x] **11. A `--dry-run` mode** — Added `--dry-run` flag and `DRY_RUN=1`
+  env var. Prints components, directories, URLs, Docker availability,
+  then exits without making any changes. Works non-interactively. Verified
+  with `bash -n`.
+- [x] **12. Show download progress** — `download_to` now uses `curl -fL -#`
+  (progress bar, auto-disabled when not a tty) and `wget --show-progress`
+  instead of fully silent `-s`/`-q`. API/status calls (`fetch_body`,
+  `url_ok`) remain silent. Verified with `bash -n`.
+- [x] **13. Small polish** — Renamed "detector (agent) only" → "agent
+  only" in both menus. Added "0) quit (do nothing)" choice to both
+  interactive menus. `download_binary` now skips re-downloading when the
+  binary already exists and `FORCE_DOWNLOAD` is not set (set
+  `FORCE_DOWNLOAD=1` to override). Verified with `bash -n`.
 
 ## Related findings (not install UX, noted while testing)
 

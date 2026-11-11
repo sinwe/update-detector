@@ -82,13 +82,88 @@
 
 set -eu
 
-# have_tty -> returns 0 if /dev/tty can actually be opened for reading.
-# [ -r /dev/tty ] is NOT enough: the device node exists and is readable
-# even with no controlling terminal, but `read < /dev/tty` then fails with
-# ENXIO and, under set -e, aborts the whole script (exit 2). Probe-open
-# the device instead.
+# Defensive defaults so prompt variables are never unbound under `set -u`,
+# even when a read fails before assigning them.
+reply=""; choice=""; token=""; chat=""; url=""; dir=""; _top_action=""
+# have_tty -> true if an interactive terminal is available for prompting.
+# Checks stdin first ([ -t 0 ]): a real terminal or `sudo sh install.sh`
+# run directly. Falls back to probe-opening /dev/tty with a short timeout
+# so `curl | sh` piped installs at a real terminal still get prompts
+# (stdin is the pipe there, but /dev/tty is the user's terminal). The
+# timeout prevents hanging on WSL/SSH pseudo-ttys where /dev/tty is
+# openable but no one is typing. An exit status of 0 (input arrived) or
+# 124 (timeout, terminal present but idle) means a tty is there; any
+# other status (open/read error) means there isn't one.
 have_tty() {
-  { : < /dev/tty; } 2>/dev/null
+  if [ -t 0 ]; then
+    return 0
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    _rc=0
+    # --foreground lets the probe read from the TTY when install.sh is
+    # not itself the foreground process (e.g. piped via `curl | sh`).
+    if timeout --foreground 0 true >/dev/null 2>&1; then
+      timeout --foreground 1 sh -c 'read x < /dev/tty' >/dev/null 2>&1 || _rc=$?
+    else
+      timeout 1 sh -c 'read x < /dev/tty' >/dev/null 2>&1 || _rc=$?
+    fi
+    if [ "$_rc" -eq 0 ] || [ "$_rc" -eq 124 ]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# read_tty VAR -> read a line from /dev/tty into VAR, with a 30s
+# timeout so a non-interactive session (WSL, SSH without input) doesn't
+# hang forever. Returns 1 on timeout or failure. Uses a safe assignment
+# (no eval of untrusted input) and never aborts under `set -e`. Always
+# defines VAR (empty on failure) so callers under `set -u` are safe.
+read_tty() {
+  _var="$1"
+  # Prefer the shell builtin `read -t`: it needs no subprocess and no
+  # separate process group, which `timeout` requires and which can fail to
+  # reach the controlling TTY under `sudo` (the `curl | sudo sh` case).
+  # Fall back to `timeout` only when the builtin lacks -t support.
+  if printf 'x\n' | ( read -t 1 _probe ) >/dev/null 2>&1; then
+    _rc=0
+    _val=""
+    if IFS= read -t 30 -r _val < /dev/tty; then
+      _rc=0
+    else
+      _rc=$?
+    fi
+    if [ "$_rc" -ne 0 ]; then
+      eval "$_var=''"
+      return 1
+    fi
+    _escaped=$(printf '%s' "$_val" | sed "s/'/'\\''/g")
+    eval "$_var='$_escaped'"
+    return 0
+  fi
+
+  if command -v timeout >/dev/null 2>&1; then
+    _rc=0
+    if timeout --foreground 0 true >/dev/null 2>&1; then
+      _val="$(timeout --foreground 30 sh -c 'IFS= read -r x < /dev/tty && printf "%s" "$x"' 2>/dev/null)" || _rc=$?
+    else
+      _val="$(timeout 30 sh -c 'IFS= read -r x < /dev/tty && printf "%s" "$x"' 2>/dev/null)" || _rc=$?
+    fi
+    if [ "$_rc" -ne 0 ]; then
+      eval "$_var=''"
+      return 1
+    fi
+    _escaped=$(printf '%s' "$_val" | sed "s/'/'\\''/g")
+    eval "$_var='$_escaped'"
+    return 0
+  fi
+
+  # Last resort: plain blocking read.
+  if read -r "$_var" < /dev/tty; then
+    return 0
+  fi
+  eval "$_var=''"
+  return 1
 }
 
 # --help never needs root, and an unknown argument must fail fast
@@ -100,7 +175,7 @@ have_tty() {
 # all, only env vars (see internal/companion/selfupdate_unix.go).
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   cat <<EOF
-Usage: install.sh [--help] [--uninstall]
+Usage: install.sh [--help] [--uninstall] [--dry-run]
 
   Installs update-detector's agent, aggregator, and/or companion.
   Run as root:
@@ -112,6 +187,8 @@ Options:
   --uninstall  Remove a native install. A Docker-based agent/aggregator is
                left alone -- run 'docker compose down' in its directory
                yourself (the script prints where it found one).
+  --dry-run    Print what would be done (components, Docker vs native,
+               directories, URLs) without changing anything.
 
 Environment (scripted/non-interactive use):
   INSTALL_COMPONENTS   agent,aggregator,companion (comma-separated)
@@ -133,13 +210,18 @@ EOF
   exit 0
 fi
 case "${1:-}" in
-  "" | --uninstall) ;;
+  "" | --uninstall | --dry-run) ;;
   *)
     echo "install.sh: unknown argument: $1" >&2
     echo "install.sh: run with --help for usage." >&2
     exit 1
     ;;
 esac
+
+# --dry-run: print the plan without changing anything.
+if [ "${1:-}" = "--dry-run" ] || [ "${DRY_RUN:-}" = "1" ]; then
+  DRY_RUN=1
+fi
 
 GITHUB_API="https://api.github.com/repos/sinwe/update-detector"
 INSTALL_SH_RAW_URL="https://raw.githubusercontent.com/sinwe/update-detector/main/install.sh"
@@ -168,11 +250,11 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
 fi
 
 fetch_body() {
-  url="$1" ua="${2:-update-detector-install.sh}"
+  _url="$1" _ua="${2:-update-detector-install.sh}"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -H "User-Agent: $ua" "$url"
+    curl -fsSL -H "User-Agent: $_ua" "$_url"
   else
-    wget -qO- --user-agent="$ua" "$url"
+    wget -qO- --user-agent="$_ua" "$_url"
   fi
 }
 
@@ -184,18 +266,20 @@ download_to() {
   # agent install path.)
   _url="$1" _dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$_url" -o "$_dest"
+    # -# shows a progress bar (auto-disabled when not a tty) instead of
+    # the fully silent -s, so a slow connection doesn't look hung.
+    curl -fL -# "$_url" -o "$_dest"
   else
-    wget -qO "$_dest" "$_url"
+    wget --show-progress -O "$_dest" "$_url"
   fi
 }
 
 url_ok() {
-  url="$1"
+  _url="$1"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS -o /dev/null --max-time 5 "$url"
+    curl -fsS -o /dev/null --max-time 5 "$_url"
   else
-    wget -q --spider --timeout=5 "$url"
+    wget -q --spider --timeout=5 "$_url"
   fi
 }
 
@@ -281,11 +365,33 @@ resolve_asset_url() {
     | sed -E 's/.*"(https[^"]+)"$/\1/'
 }
 
+# sha256_of FILE -> prints the sha256 hex digest of FILE, or nothing if
+# no suitable tool is available.
+sha256_of() {
+  file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  else
+    echo ""
+  fi
+}
+
 # download_binary NAME DEST -> downloads NAME-$goos-$goarch to DEST,
 # atomically (via a .new + mv, so a partial download never replaces a
-# working binary) and executable.
+# working binary) and executable. Verifies the SHA-256 against the
+# release's sha256sums.txt when both the checksum tool and the checksums
+# file are available; a mismatch aborts the install.
 download_binary() {
   name="$1" dest="$2"
+  # Skip re-downloading when the binary already exists and the caller
+  # hasn't asked for a forced refresh. Re-running install.sh on a host
+  # that's already on the requested version shouldn't re-fetch ~10MB.
+  if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
+    echo "install.sh: $dest already present -- skipping download (set FORCE_DOWNLOAD=1 to override)"
+    return 0
+  fi
   resolve_goarch
   asset_name="$name-$(goos_name)-$goarch"
   echo "install.sh: resolving $asset_name from release $INSTALL_VERSION..."
@@ -301,6 +407,28 @@ download_binary() {
     exit 1
   fi
   chmod 0755 "$dest.new"
+
+  # Best-effort checksum verification: fetch sha256sums.txt from the same
+  # release and verify the downloaded binary against it. Skipped silently
+  # when no sha256 tool or no checksums file is available, so older
+  # releases (without checksums) and minimal hosts still work.
+  if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+    checksums_url="${download_url%/*}/sha256sums.txt"
+    if download_to "$checksums_url" "$dest.sha256sums" 2>/dev/null; then
+      expected="$(grep "  $asset_name\$" "$dest.sha256sums" 2>/dev/null | awk '{print $1}')"
+      if [ -n "$expected" ]; then
+        actual="$(sha256_of "$dest.new")"
+        if [ "$actual" != "$expected" ]; then
+          echo "install.sh: checksum mismatch for $asset_name (expected $expected, got $actual) -- aborting" >&2
+          rm -f "$dest.new" "$dest.sha256sums"
+          exit 1
+        fi
+        echo "install.sh: checksum verified ($actual)"
+      fi
+      rm -f "$dest.sha256sums"
+    fi
+  fi
+
   mv "$dest.new" "$dest"
 }
 
@@ -581,7 +709,7 @@ prompt_use_docker() {
     return
   fi
   printf "Docker is available -- use it for the %s (recommended)? [Y/n]: " "$1" >&2
-  read -r reply < /dev/tty
+  read_tty reply || true
   case "$reply" in
     [nN]*) echo 0 ;;
     *) echo 1 ;;
@@ -699,6 +827,36 @@ install_agent_native() {
     return
   fi
   echo "install.sh: installing update-detector (agent) natively..."
+
+  # Read back whatever's already configured (a re-install/upgrade of an
+  # existing native agent) so re-running this doesn't reset every value to
+  # blank -- and so the AGGREGATOR_URL gate below can use the stored
+  # value instead of forcing the user to re-enter it.
+  env_file="/etc/default/update-detector"
+  existing_hostname_override="" existing_bot_token="" existing_chat_id="" existing_agg_url=""
+  if [ -f "$env_file" ]; then
+    existing_hostname_override="$(env_value "$env_file" HOSTNAME_OVERRIDE)"
+    existing_bot_token="$(env_value "$env_file" TELEGRAM_BOT_TOKEN)"
+    existing_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
+    existing_agg_url="$(env_value "$env_file" AGGREGATOR_URL)"
+  fi
+
+  # Validate AGGREGATOR_URL BEFORE downloading anything or creating
+  # users/state dirs, so a missing URL doesn't leave a partial install.
+  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
+  if [ "$resolved_aggregator_url" = "CANCEL" ]; then
+    echo "install.sh: cancelled -- nothing installed." >&2
+    exit 0
+  fi
+  if [ -z "$resolved_aggregator_url" ]; then
+    echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
+    exit 1
+  fi
+  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
+
+  # Optional Telegram setup (prompts only if not already configured).
+  prompt_telegram
+
   bin_path="/usr/local/bin/update-detector"
   download_binary update-detector "$bin_path"
 
@@ -720,48 +878,6 @@ install_agent_native() {
       echo "install.sh: warning: could not install update-notifier-common -- security-pocket counts will be best-effort" >&2
     fi
   fi
-  # Read back whatever's already configured (a re-install/upgrade of an
-  # existing native agent) so re-running this doesn't reset every value to
-  # blank just because the shell re-running it doesn't happen to have
-  # these exported again -- confirmed live, this is exactly what made a
-  # WSL2 host with an already-connected agent look like it had "forgotten"
-  # its own AGGREGATOR_URL on a later agent-only re-run. Empty strings
-  # (fresh install, nothing to read yet) are harmless as fallbacks below.
-  env_file="/etc/default/update-detector"
-  existing_hostname_override="" existing_bot_token="" existing_chat_id="" existing_agg_url=""
-  if [ -f "$env_file" ]; then
-    existing_hostname_override="$(env_value "$env_file" HOSTNAME_OVERRIDE)"
-    existing_bot_token="$(env_value "$env_file" TELEGRAM_BOT_TOKEN)"
-    existing_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
-    existing_agg_url="$(env_value "$env_file" AGGREGATOR_URL)"
-  fi
-
-  # Every file-path var is set to its real absolute value here, never the
-  # config package's Docker-oriented /host/... defaults -- there's no
-  # container boundary to cross on a native install, so /host/etc/... etc.
-  # would just be wrong. RELEASE_UPGRADES_FILE and REBOOT_REQUIRED_FILE
-  # point at paths WSL2 may never populate, which internal/checker/reboot
-  # and the release-upgrades reader already handle gracefully (treated as
-  # false/empty, not an error).
-  # Mandatory: without one, this agent can never enroll with (or be
-  # applied through) an aggregator at all, and a companion could never
-  # pair with it either -- there's no meaningful standalone mode for a
-  # native install the way there arguably is for a bare Docker Compose
-  # deployment. Prompts only when interactive and nothing's already known
-  # -- neither a fresh value from the environment nor one already
-  # configured on this host from before (see existing_agg_url above) --
-  # so a re-run never hangs a scripted/non-interactive install waiting for
-  # input that will never come; that case is fatal instead, same as a
-  # human leaving the prompt blank on a genuinely first-time install.
-  resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
-  if [ -z "$resolved_aggregator_url" ]; then
-    echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
-    exit 1
-  fi
-  warn_if_aggregator_unreachable "$resolved_aggregator_url" "$env_file"
-
-  # Optional Telegram setup (prompts only if not already configured).
-  prompt_telegram
 
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${LISTEN_ADDR:-:8080}
@@ -844,21 +960,6 @@ install_agent_launchd() {
   mkdir -p "$state_dir"
   chown "$brew_owner" "$state_dir"
 
-  bin_path="$state_dir/update-detector"
-  download_binary update-detector "$bin_path"
-  chown "$brew_owner" "$bin_path"
-
-  # Sidecar env file: the single source of truth for the plist's own
-  # EnvironmentVariables below, so a re-run can read back what's already
-  # configured (same reason install_agent_native reads back
-  # /etc/default/update-detector) instead of resetting everything.
-  # Read back whatever's already configured (a re-install/upgrade of an
-  # existing native agent) so re-running this doesn't reset every value
-  # to blank/default just because the shell re-running it doesn't happen
-  # to have these exported again -- same reason install_agent_native
-  # reads back /etc/default/update-detector on Linux (confirmed live: a
-  # macOS reinstall silently moved a customized :8081 agent back to
-  # :8080).
   env_file="$state_dir/agent.env"
   existing_hostname_override="" existing_listen_addr="" existing_check_interval=""
   existing_bot_token="" existing_chat_id="" existing_agg_url=""
@@ -870,7 +971,13 @@ install_agent_launchd() {
     existing_chat_id="$(env_value "$env_file" TELEGRAM_CHAT_ID)"
     existing_agg_url="$(env_value "$env_file" AGGREGATOR_URL)"
   fi
+
+  # Validate AGGREGATOR_URL BEFORE downloading the binary.
   resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-$existing_agg_url}")"
+  if [ "$resolved_aggregator_url" = "CANCEL" ]; then
+    echo "install.sh: cancelled -- nothing installed." >&2
+    exit 0
+  fi
   if [ -z "$resolved_aggregator_url" ]; then
     echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
     exit 1
@@ -879,6 +986,10 @@ install_agent_launchd() {
 
   # Optional Telegram setup (prompts only if not already configured).
   prompt_telegram
+
+  bin_path="$state_dir/update-detector"
+  download_binary update-detector "$bin_path"
+  chown "$brew_owner" "$bin_path"
 
   resolved_listen_addr="${LISTEN_ADDR:-$existing_listen_addr}"
   resolved_listen_addr="${resolved_listen_addr:-:8080}"
@@ -1014,13 +1125,17 @@ install_agent_docker() {
       suggested_dir="$(default_docker_dir)"
       if have_tty; then
         printf "Directory for the update-detector Compose deployment [%s]: " "$suggested_dir" >&2
-        read -r dir < /dev/tty
+        read_tty dir || true
       fi
       dir="${dir:-$suggested_dir}"
     fi
     echo "install.sh: setting up update-detector (agent) via Docker Compose in $dir..."
 
     resolved_aggregator_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+    if [ "$resolved_aggregator_url" = "CANCEL" ]; then
+      echo "install.sh: cancelled -- nothing installed." >&2
+      exit 0
+    fi
     if [ -z "$resolved_aggregator_url" ]; then
       echo "install.sh: AGGREGATOR_URL is required -- set it and re-run." >&2
       exit 1
@@ -1084,6 +1199,18 @@ install_aggregator_native() {
     existing_admin_secret="$(env_value "$env_file" ADMIN_APPLY_SHARED_SECRET)"
   fi
   resolved_admin_secret="${ADMIN_APPLY_SHARED_SECRET:-$existing_admin_secret}"
+
+  # Generate a secret if none was provided or already configured, so apply/
+  # self-update work out of the box instead of silently staying disabled
+  # (501) until someone notices.
+  if [ -z "$resolved_admin_secret" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      resolved_admin_secret="$(openssl rand -hex 32)"
+    else
+      resolved_admin_secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n')"
+    fi
+    echo "install.sh: generated ADMIN_APPLY_SHARED_SECRET (no secret was set)" >&2
+  fi
 
   cat > "$env_file" <<EOF
 LISTEN_ADDR=${AGGREGATOR_LISTEN_ADDR:-:9090}
@@ -1168,7 +1295,7 @@ install_aggregator_docker() {
       suggested_dir="$(default_docker_dir)"
       if have_tty; then
         printf "Directory for the update-aggregator Compose deployment [%s]: " "$suggested_dir" >&2
-        read -r dir < /dev/tty
+        read_tty dir || true
       fi
       dir="${dir:-$suggested_dir}"
     fi
@@ -1184,6 +1311,25 @@ install_aggregator_docker() {
     # systemd equivalent.
     set_env_var_if_set "$dir/.env" TELEGRAM_BOT_TOKEN "${AGGREGATOR_TELEGRAM_BOT_TOKEN:-}"
     set_env_var_if_set "$dir/.env" TELEGRAM_CHAT_ID "${AGGREGATOR_TELEGRAM_CHAT_ID:-}"
+    # Generate a secret if none was provided or already configured, so
+    # apply/self-update work out of the box instead of staying disabled
+    # (501) until someone notices.
+    if [ -z "${ADMIN_APPLY_SHARED_SECRET:-}" ]; then
+      if [ -f "$dir/.env" ]; then
+        existing="$(env_value "$dir/.env" ADMIN_APPLY_SHARED_SECRET)"
+      else
+        existing=""
+      fi
+      if [ -z "$existing" ]; then
+        if command -v openssl >/dev/null 2>&1; then
+          resolved_secret="$(openssl rand -hex 32)"
+        else
+          resolved_secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n')"
+        fi
+        ADMIN_APPLY_SHARED_SECRET="$resolved_secret"
+        echo "install.sh: generated ADMIN_APPLY_SHARED_SECRET (no secret was set)" >&2
+      fi
+    fi
     set_env_var "$dir/.env" ADMIN_APPLY_SHARED_SECRET "${ADMIN_APPLY_SHARED_SECRET:-}"
     # The channel the aggregator's own update checks follow (see
     # SELF_UPDATE_CHANNEL in docs/reference.md): persisted only when
@@ -1351,6 +1497,10 @@ install_companion() {
   if [ -z "$agg_url" ]; then
     agg_url="$(prompt_aggregator_url "")"
   fi
+  if [ "$agg_url" = "CANCEL" ]; then
+    echo "install.sh: cancelled -- nothing installed." >&2
+    exit 0
+  fi
   if [ -z "$agg_url" ]; then
     echo "install.sh: no AGGREGATOR_URL available -- the companion has no purpose without one." >&2
     echo "  Set AGGREGATOR_URL and re-run, or configure it on the agent this host" >&2
@@ -1449,6 +1599,10 @@ install_companion_launchd() {
 
   if [ -z "$agg_url" ]; then
     agg_url="$(prompt_aggregator_url "${AGGREGATOR_URL:-}")"
+  fi
+  if [ "$agg_url" = "CANCEL" ]; then
+    echo "install.sh: cancelled -- nothing installed." >&2
+    exit 0
   fi
   if [ -z "$agg_url" ]; then
     echo "install.sh: no AGGREGATOR_URL available -- the companion has no purpose without one." >&2
@@ -1587,6 +1741,36 @@ warn_docker_not_managed() {
   fi
 }
 
+# offer_docker_down PATTERN COMPOSE_CMD -> if a Docker deployment matching
+# PATTERN exists, offer (prompted, never automatic) to run `docker compose
+# down` for exactly that deployment. Only runs when a terminal is
+# available; in non-interactive mode it just prints the manual command.
+offer_docker_down() {
+  pattern="$1" compose_cmd="${2:-docker compose}"
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  container_id=$(docker_container_for "$pattern")
+  [ -z "$container_id" ] && return 0
+  dir=$(docker_compose_dir_for "$pattern") || dir=""
+  [ -z "$dir" ] && return 0
+  if ! have_tty; then
+    echo "install.sh: Docker deployment found at $dir -- stop it with: cd $dir && $compose_cmd down" >&2
+    return 0
+  fi
+  echo "install.sh: found a Docker deployment at $dir" >&2
+  printf "Stop it now with \`%s down\`? [y/N]: " "$compose_cmd" >&2
+  read_tty reply || true
+  case "$reply" in
+    y|Y|yes|YES)
+      ( cd "$dir" && $compose_cmd down ) || echo "install.sh: docker compose down failed" >&2
+      ;;
+    *)
+      echo "install.sh: leaving Docker deployment running. Stop later: cd $dir && $compose_cmd down" >&2
+      ;;
+  esac
+}
+
 uninstall_agent() {
   native=0
   native_unit_present update-detector && native=1
@@ -1637,6 +1821,9 @@ uninstall_agent() {
 
   warn_docker_not_managed update-detector '(^|/)update-detector(:|$)'
 
+  # Offer (prompted, never automatic) to stop a Docker deployment too.
+  offer_docker_down '(^|/)update-detector(:|$)' "docker compose"
+
   if native_unit_present update-detector-companion; then
     echo "install.sh: note: update-detector-companion is still installed on this" >&2
     echo "  host and depends on the agent -- consider uninstalling it too." >&2
@@ -1666,6 +1853,10 @@ uninstall_aggregator() {
   fi
 
   warn_docker_not_managed update-aggregator '(^|/)update-aggregator(:|$)' \
+    "docker compose -f docker-compose.aggregator.yml -p $AGGREGATOR_COMPOSE_PROJECT"
+
+  # Offer (prompted, never automatic) to stop a Docker deployment too.
+  offer_docker_down '(^|/)update-aggregator(:|$)' \
     "docker compose -f docker-compose.aggregator.yml -p $AGGREGATOR_COMPOSE_PROJECT"
 }
 
@@ -1739,15 +1930,19 @@ prompt_components() {
     echo "Which of update-detector's pieces would you like to set up on this host? (agent and" >&2
     echo "companion both run as LaunchDaemons; there is no aggregator or Docker path on macOS)" >&2
     echo >&2
-    echo "  1) detector (agent) only" >&2
-    echo "  2) companion only (pairs through an already-installed agent)" >&2
-    echo "  3) both" >&2
-    printf "Choose [1-3]: " >&2
-    read -r choice < /dev/tty
+    echo "  0) quit (do nothing)" >&2
+    echo "  1) agent only" >&2
+    echo "  2) agent + companion" >&2
+    printf "Choose [0-2]: " >&2
+    if ! read_tty choice; then
+      echo "install.sh: no input received -- defaulting to agent" >&2
+      echo "agent"
+      return
+    fi
     case "$choice" in
+      0) echo "install.sh: cancelled -- nothing installed." >&2; exit 0 ;;
       1) echo "agent" ;;
-      2) echo "companion" ;;
-      3) echo "agent,companion" ;;
+      2) echo "agent,companion" ;;
       *) echo "install.sh: invalid choice: $choice" >&2; exit 1 ;;
     esac
     return
@@ -1763,16 +1958,22 @@ prompt_components() {
   echo "here; the companion is always native, since it needs real root to run" >&2
   echo "apt-get)" >&2
   echo >&2
+  echo "  0) quit (do nothing)" >&2
   echo "  1) aggregator only" >&2
-  echo "  2) detector (agent) only" >&2
-  echo "  3) companion only" >&2
+  echo "  2) agent only" >&2
+  echo "  3) agent + companion" >&2
   echo "  4) all three" >&2
-  printf "Choose [1-4]: " >&2
-  read -r choice < /dev/tty
+  printf "Choose [0-4]: " >&2
+  if ! read_tty choice; then
+    echo "install.sh: no input received -- defaulting to agent" >&2
+    echo "agent"
+    return
+  fi
   case "$choice" in
+    0) echo "install.sh: cancelled -- nothing installed." >&2; exit 0 ;;
     1) echo "aggregator" ;;
     2) echo "agent" ;;
-    3) echo "companion" ;;
+    3) echo "agent,companion" ;;
     4) echo "aggregator,agent,companion" ;;
     *) echo "install.sh: invalid choice: $choice" >&2; exit 1 ;;
   esac
@@ -1802,13 +2003,13 @@ prompt_telegram() {
   echo "install.sh: Telegram update alerts (optional)" >&2
   echo "  Get a bot token from @BotFather and your chat ID from @userinfobot." >&2
   printf "Enable Telegram notifications? [y/N]: " >&2
-  read -r reply < /dev/tty
+  read_tty reply || true
   case "$reply" in
     y|Y|yes|YES)
       printf "Bot token: " >&2
-      read -r token < /dev/tty
+      read_tty token || true
       printf "Chat ID: " >&2
-      read -r chat < /dev/tty
+      read_tty chat || true
       if [ -n "$token" ] && [ -n "$chat" ]; then
         export TELEGRAM_BOT_TOKEN="$token"
         export TELEGRAM_CHAT_ID="$chat"
@@ -1835,9 +2036,22 @@ prompt_aggregator_url() {
   echo "  You only need one aggregator, reachable from this host -- it doesn't" >&2
   echo "  have to be on the same network as this host; anywhere reachable over" >&2
   echo "  the internet works fine too, as long as this installer can reach it." >&2
-  printf "Enter the aggregator's URL (e.g. http://aggregator-host:9090): " >&2
-  read -r url < /dev/tty
-  printf '%s' "$url"
+  while :; do
+    printf "Enter the aggregator's URL (e.g. http://aggregator-host:9090), or 'q' to quit: " >&2
+    read_tty url || true
+    case "$url" in
+      q|Q)
+        echo "install.sh: cancelled -- nothing installed." >&2
+        printf 'CANCEL'
+        return
+        ;;
+    esac
+    if [ -n "$url" ]; then
+      printf '%s' "$url"
+      return
+    fi
+    echo "install.sh: AGGREGATOR_URL is required." >&2
+  done
 }
 
 # warn_if_aggregator_unreachable URL WHERE -> best-effort check that the
@@ -1855,34 +2069,34 @@ prompt_aggregator_url() {
 # /status (or /healthz) after install_unit has restarted it. Waits
 # briefly for the first successful response. Never fatal.
 verify_agent() {
-  base="${1:-http://localhost:8080}"
-  url="${base%/}/status"
-  echo "install.sh: verifying at $url ..."
-  i=0
-  while [ "$i" -lt 15 ]; do
-    resp="$(fetch_body "$url" 2>/dev/null || true)"
-    if [ -n "$resp" ]; then
-      echo "install.sh: service is up: $resp"
+  _base="${1:-http://localhost:8080}"
+  _url="${_base%/}/status"
+  echo "install.sh: verifying at $_url ..."
+  _i=0
+  while [ "$_i" -lt 15 ]; do
+    _resp="$(fetch_body "$_url" 2>/dev/null || true)"
+    if [ -n "$_resp" ]; then
+      echo "install.sh: service is up: $_resp"
       return 0
     fi
     # /status may not exist (aggregator) -- try /healthz
-    resp="$(fetch_body "${base%/}/healthz" 2>/dev/null || true)"
-    if [ -n "$resp" ]; then
-      echo "install.sh: service is up: $resp"
+    _resp="$(fetch_body "${_base%/}/healthz" 2>/dev/null || true)"
+    if [ -n "$_resp" ]; then
+      echo "install.sh: service is up: $_resp"
       return 0
     fi
     sleep 1
-    i=$((i+1))
+    _i=$((_i+1))
   done
-  echo "install.sh: warning: service did not answer $url within 15s -- check: systemctl status (or docker compose logs)" >&2
+  echo "install.sh: warning: service did not answer $_url within 15s -- check: systemctl status (or docker compose logs)" >&2
 }
 
 # install already does (see install_companion); WHERE names the file
 # holding the AGGREGATOR_URL so the warning can point at it.
 warn_if_aggregator_unreachable() {
-  url="$1" where="$2"
-  if [ -n "$url" ] && ! url_ok "$url/openapi.yaml"; then
-    echo "install.sh: warning: $url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
+  _url="$1" where="$2"
+  if [ -n "$_url" ] && ! url_ok "$_url/openapi.yaml"; then
+    echo "install.sh: warning: $_url doesn't look reachable from this host right now -- continuing anyway, but check AGGREGATOR_URL in $where if the agent never enrolls" >&2
   fi
 }
 
@@ -1968,9 +2182,9 @@ prompt_uninstall_components() {
       return
     fi
     printf "Uninstall:%s? [y/N]: " "$found" >&2
-    read -r choice < /dev/tty
+    read_tty choice || true
     case "$choice" in
-      y|Y|yes|YES) echo "$found" | sed 's/^ *//' ;;
+      y|Y|yes|YES) echo "$found" | sed 's/^ *//; s/  */,/g' ;;
       *) echo "install.sh: cancelled -- nothing uninstalled." >&2; return ;;
     esac
     return
@@ -1990,7 +2204,7 @@ prompt_uninstall_components() {
   echo "  3) companion" >&2
   echo "  4) all three" >&2
   printf "Choose [1-4]: " >&2
-  read -r choice < /dev/tty
+  read_tty choice || true
   case "$choice" in
     1) echo "aggregator" ;;
     2) echo "agent" ;;
@@ -2027,8 +2241,58 @@ existing_agent_native=0
 native_unit_present update-detector && existing_agent_native=1
 existing_agent_docker=$(docker_container_for '(^|/)update-detector(:|$)') || existing_agent_docker=""
 
+# --dry-run: print the plan without changing anything.
+if [ "${DRY_RUN:-}" = "1" ]; then
+  echo "install.sh: DRY RUN -- no changes will be made" >&2
+  echo >&2
+  echo "Components:" >&2
+  if [ -n "${INSTALL_COMPONENTS:-}" ]; then
+    echo "  $INSTALL_COMPONENTS (from INSTALL_COMPONENTS)" >&2
+  elif is_macos; then
+    echo "  agent (macOS default)" >&2
+  elif is_wsl2; then
+    echo "  agent (WSL2 default)" >&2
+  else
+    echo "  (would prompt interactively)" >&2
+  fi
+  echo >&2
+  echo "Directories:" >&2
+  echo "  STATE_DIR=${STATE_DIR:-/var/lib/update-detector}" >&2
+  echo "  DOCKER_DIR=${DOCKER_DIR:-<default>}" >&2
+  echo "  AGGREGATOR_DOCKER_DIR=${AGGREGATOR_DOCKER_DIR:-<default>}" >&2
+  echo >&2
+  echo "URLs:" >&2
+  echo "  AGGREGATOR_URL=${AGGREGATOR_URL:-<not set>}" >&2
+  echo "  INSTALL_VERSION=${INSTALL_VERSION:-latest}" >&2
+  echo "  SELF_UPDATE_CHANNEL=${SELF_UPDATE_CHANNEL:-release}" >&2
+  echo >&2
+  echo "Docker available: $(docker_available && echo yes || echo no)" >&2
+  exit 0
+fi
+
+# Interactive top-level action: lets a user uninstall without having to
+# know the --uninstall flag, while non-interactive (no TTY) runs keep
+# the scripted default of proceeding with an install.
+if [ "$uninstall_requested" = "0" ] && have_tty; then
+  echo "What would you like to do?" >&2
+  echo "  1) install or update components (default)" >&2
+  echo "  2) uninstall components" >&2
+  echo "  0) quit (do nothing)" >&2
+  printf "Choose [0-2]: " >&2
+  read_tty _top_action || true
+  case "$_top_action" in
+    0) echo "install.sh: cancelled -- nothing done." >&2; exit 0 ;;
+    2) uninstall_requested=1 ;;
+    *) ;; # default: proceed with install
+  esac
+fi
+
 if [ "$uninstall_requested" = "1" ]; then
   components=$(prompt_uninstall_components)
+  # Normalize any whitespace-separated lists to comma-separated so the
+  # case dispatch below matches regardless of how the components were
+  # supplied (env var, interactive prompt, macOS multi-select).
+  components=$(printf '%s' "$components" | tr ' ' ',' | tr -s ',')
   if [ -z "$components" ]; then
     echo "install.sh: nothing to uninstall" >&2
     exit 0
@@ -2054,6 +2318,7 @@ if [ "$uninstall_requested" = "1" ]; then
 # "just install the companion against it" default still applies.
 elif [ -n "${INSTALL_COMPONENTS:-}" ] || is_wsl2 || { [ "$existing_agent_native" = "0" ] && [ -z "$existing_agent_docker" ]; }; then
   components=$(prompt_components)
+  components=$(printf '%s' "$components" | tr ' ' ',' | tr -s ',')
   assert_macos_components "$components"
   case ",$components," in
     *,aggregator,*)
