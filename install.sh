@@ -177,11 +177,16 @@ fetch_body() {
 }
 
 download_to() {
-  url="$1" dest="$2"
+  # Use throwaway locals so this helper never clobbers the caller's
+  # `url`/`dest` globals -- download_binary relies on `dest` surviving
+  # the call (it appends ".new" after), and a clobber there produced a
+  # doubled ".new.new" path and a failed chmod. (Bug seen on the macOS
+  # agent install path.)
+  _url="$1" _dest="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$dest"
+    curl -fsSL "$_url" -o "$_dest"
   else
-    wget -qO "$dest" "$url"
+    wget -qO "$_dest" "$_url"
   fi
 }
 
@@ -290,7 +295,11 @@ download_binary() {
     exit 1
   fi
   echo "install.sh: downloading $download_url"
-  download_to "$download_url" "$dest.new"
+  if ! download_to "$download_url" "$dest.new"; then
+    echo "install.sh: failed to download $download_url" >&2
+    rm -f "$dest.new"
+    exit 1
+  fi
   chmod 0755 "$dest.new"
   mv "$dest.new" "$dest"
 }
