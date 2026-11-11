@@ -1268,6 +1268,19 @@ func (s *Server) handleAdminCVEEnabled(w http.ResponseWriter, r *http.Request, i
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	// CVE detection is only implemented for Debian/Ubuntu hosts today.
+	// Reject the toggle for anything else so an unsupported platform can't
+	// end up with CVEEnabled=true (which would never produce results).
+	if rec, ok := s.registry.Get(id); ok {
+		platform := ""
+		if rec.LastReport != nil {
+			platform = rec.LastReport.Platform
+		}
+		if !cveSupportedPlatform(platform) {
+			http.Error(w, "CVE detection is not supported on this platform", http.StatusBadRequest)
+			return
+		}
+	}
 	if err := s.registry.SetCVEEnabled(id, req.Enabled); err != nil {
 		if err == ErrNotFound {
 			http.Error(w, "agent not found", http.StatusNotFound)
