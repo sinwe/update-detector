@@ -17,7 +17,10 @@ func TestDetect(t *testing.T) {
 		{name: "ubuntu", content: "ID=ubuntu\nVERSION_ID=\"24.04\"\n", want: "ubuntu"},
 		{name: "debian", content: "ID=debian\nVERSION_ID=\"13\"\n", want: "debian"},
 		{name: "raspbian", content: "ID=raspbian\nVERSION_ID=\"12\"\n", want: "debian"},
-		{name: "unrecognized falls back to ubuntu", content: "ID=fedora\n", want: "ubuntu"},
+		{name: "fedora maps to rhel", content: "ID=fedora\n", want: "rhel"},
+		{name: "rhel maps to rhel", content: "ID=rhel\n", want: "rhel"},
+		{name: "rocky maps to rhel", content: "ID=rocky\n", want: "rhel"},
+		{name: "unrecognized falls back to ubuntu", content: "ID=foobar\n", want: "ubuntu"},
 		{name: "missing ID falls back to ubuntu", content: "VERSION_ID=\"1\"\n", want: "ubuntu"},
 	}
 
