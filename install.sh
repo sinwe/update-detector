@@ -2200,7 +2200,7 @@ prompt_uninstall_components() {
   echo "Which would you like to uninstall?" >&2
   echo >&2
   echo "  1) aggregator" >&2
-  echo "  2) detector (agent)" >&2
+  echo "  2) agent (and companion, if installed)" >&2
   echo "  3) companion" >&2
   echo "  4) all three" >&2
   printf "Choose [1-4]: " >&2
@@ -2293,6 +2293,16 @@ if [ "$uninstall_requested" = "1" ]; then
   # case dispatch below matches regardless of how the components were
   # supplied (env var, interactive prompt, macOS multi-select).
   components=$(printf '%s' "$components" | tr ' ' ',' | tr -s ',')
+  # The companion cannot run without an agent: uninstalling the agent
+  # always takes the companion with it.
+  case ",$components," in
+    *,agent,*)
+      case ",$components," in
+        *,companion,*) ;;
+        *) components="$components,companion" ;;
+      esac
+      ;;
+  esac
   if [ -z "$components" ]; then
     echo "install.sh: nothing to uninstall" >&2
     exit 0
