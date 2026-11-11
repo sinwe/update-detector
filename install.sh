@@ -2294,8 +2294,13 @@ if [ "$uninstall_requested" = "1" ]; then
   # supplied (env var, interactive prompt, macOS multi-select).
   components=$(printf '%s' "$components" | tr ' ' ',' | tr -s ',')
   # The companion cannot run without an agent: uninstalling the agent
-  # always takes the companion with it.
+  # always takes the companion with it. Likewise, the aggregator is the
+  # central hub -- uninstalling it makes agents and companions pointless,
+  # so it takes everything with it.
   case ",$components," in
+    *,aggregator,*)
+      components="aggregator,agent,companion"
+      ;;
     *,agent,*)
       case ",$components," in
         *,companion,*) ;;
