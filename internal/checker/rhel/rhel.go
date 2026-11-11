@@ -8,23 +8,27 @@ package rhel
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"update-detector/internal/checker"
+	"update-detector/internal/osrelease"
 )
 
 func init() {
 	checker.Register("rhel", func(f checker.Fields) (checker.Checker, error) {
 		return New(Config{
-			Hostname: f["hostname"],
+			Hostname:      f["hostname"],
+			OSReleaseFile: f["os_release_file"],
 		})
 	})
 }
 
 type Config struct {
-	Hostname string
+	Hostname      string
+	OSReleaseFile string
 }
 
 type Checker struct {
@@ -42,6 +46,19 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 		Hostname:  c.cfg.Hostname,
 		Platform:  c.Platform(),
 		CheckedAt: time.Now(),
+	}
+
+	// OS release info.
+	osPath := c.cfg.OSReleaseFile
+	if osPath == "" {
+		osPath = "/etc/os-release"
+	}
+	if raw, err := os.ReadFile(osPath); err == nil {
+		parsed := osrelease.Parse(string(raw))
+		status.OS = checker.OSInfo{
+			CurrentVersion: parsed["VERSION_ID"],
+			CurrentCodename: parsed["VERSION_CODENAME"],
+		}
 	}
 
 	// `dnf check-update` exits 100 when updates are available, 0 when
