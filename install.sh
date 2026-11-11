@@ -348,21 +348,19 @@ docker_available() {
 # for $INSTALL_VERSION, or nothing if not found in that release.
 resolve_asset_url() {
   asset_name="$1"
+  # Build the download URL directly instead of querying the GitHub API.
+  # The API is rate-limited to 60 requests/hour for unauthenticated
+  # callers and returns 403 once exhausted, which made installs fail with
+  # "could not find asset" even though the release and its assets exist.
+  # The release asset URL follows a fixed, predictable pattern, and
+  # /releases/latest/download/<asset> redirects to the newest release's
+  # asset, so neither path needs the API at all. A missing asset surfaces
+  # as a 404 on the subsequent download_to call.
   if [ "$INSTALL_VERSION" = "latest" ]; then
-    release_url="$GITHUB_API/releases/latest"
+    echo "https://github.com/sinwe/update-detector/releases/latest/download/$asset_name"
   else
-    release_url="$GITHUB_API/releases/tags/$INSTALL_VERSION"
+    echo "https://github.com/sinwe/update-detector/releases/download/$INSTALL_VERSION/$asset_name"
   fi
-  # Deliberately not `curl -f ... | jq ...`: same reasoning as
-  # release.yml's own publish step -- a failed request here would silently
-  # produce an empty result via a suppressed body, rather than a clear
-  # error. grep+sed avoids needing jq on the *installing* host too, which
-  # (unlike the release workflow's own runner) we don't control.
-  # GitHub's API rejects requests with no User-Agent at all (403).
-  fetch_body "$release_url" "update-detector-install.sh" \
-    | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
-    | head -1 \
-    | sed -E 's/.*"(https[^"]+)"$/\1/'
 }
 
 # sha256_of FILE -> prints the sha256 hex digest of FILE, or nothing if
