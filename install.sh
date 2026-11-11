@@ -1933,7 +1933,8 @@ prompt_components() {
     echo "  0) quit (do nothing)" >&2
     echo "  1) agent only" >&2
     echo "  2) agent + companion" >&2
-    printf "Choose [0-2]: " >&2
+    echo "  3) companion only (requires an already-installed agent)" >&2
+    printf "Choose [0-3]: " >&2
     if ! read_tty choice; then
       echo "install.sh: no input received -- defaulting to agent" >&2
       echo "agent"
@@ -1943,6 +1944,7 @@ prompt_components() {
       0) echo "install.sh: cancelled -- nothing installed." >&2; exit 0 ;;
       1) echo "agent" ;;
       2) echo "agent,companion" ;;
+      3) echo "companion" ;;
       *) echo "install.sh: invalid choice: $choice" >&2; exit 1 ;;
     esac
     return
