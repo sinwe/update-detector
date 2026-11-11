@@ -32,7 +32,7 @@ The aggregator is unchanged.
 - [x] Checker scaffold + hostflavor mapping
 - [x] dnf applier scaffold
 - [x] OS version + security detection
-- [ ] Reboot detection (`needs-restarting`)
+- [x] Reboot detection (`needs-restarting`)
 - [ ] CVE integration
 - [ ] Installer (`install.sh`) dnf-aware native path
 - [ ] Fixture-based parsing tests
