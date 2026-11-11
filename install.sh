@@ -2248,7 +2248,9 @@ prompt_uninstall_components() {
   echo "  1) aggregator" >&2
   echo "  2) agent (and companion, if installed)" >&2
   echo "  3) companion" >&2
-  echo "  4) all three" >&2
+  if echo "$found" | grep -q 'aggregator'; then
+    echo "  4) all three" >&2
+  fi
   printf "Choose [1-4]: " >&2
   read_tty choice || true
   case "$choice" in
