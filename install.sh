@@ -2217,7 +2217,6 @@ prompt_uninstall_components() {
     # Build the menu from what's actually present.
     echo "Which would you like to uninstall?" >&2
     echo "  0) cancel" >&2
-    echo >&2
     _opt=1
     if echo "$found" | grep -q 'agent'; then
       echo "  $_opt) agent (and companion, if installed)" >&2
