@@ -227,10 +227,12 @@ func runTrivy(ctx context.Context, cacheDir string) (checker.VulnerabilityInfo, 
 	if err != nil {
 		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "/")
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "/")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
+		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	var rep trivyReport
 	if err := json.Unmarshal(out, &rep); err != nil {

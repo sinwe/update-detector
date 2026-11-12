@@ -6,6 +6,7 @@
 package rhel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,10 +65,12 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 		// surface as ErrNoScanner so callers preserve the previous value.
 		return checker.VulnerabilityInfo{}, ErrNoScanner
 	}
-	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "/")
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "/")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
+		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	var rep trivyReport
 	if err := json.Unmarshal(out, &rep); err != nil {
