@@ -690,12 +690,12 @@ func ensureTrivy(ctx context.Context, cacheDir string) (string, error) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err
 	}
-	arch := "amd64"
+	arch := "64bit"
 	switch runtime.GOARCH {
 	case "arm64":
-		arch = "arm64"
+		arch = "ARM64"
 	}
-	const ver = "0.69.3"
+	const ver = "0.76.2"
 	url := "https://github.com/aquasecurity/trivy/releases/download/v" + ver + "/trivy_" + ver + "_Linux-" + arch + ".tar.gz"
 	tmp := bin + ".tmp"
 	f, err := os.Create(tmp)
