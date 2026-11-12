@@ -22,7 +22,7 @@ below.
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](docs/reference.md#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
 | Actual Windows OS (Windows Update) | ✅ supported — detection, `install.bat`, and companion apply/self-update confirmed against a real Windows host, see [Limitations](docs/reference.md#platform-limitations); **winget is not supported** |
-| Actual macOS host (`softwareupdate`, `brew`) | ✅ supported — detection confirmed live on a real Mac host (agent-only `install.sh` path; companion runs as root via LaunchDaemon) |
+| Actual macOS host (`softwareupdate`, `brew`) | ✅ supported — OS updates via `softwareupdate --list`; package updates via Homebrew (`brew outdated`) only (agent-only `install.sh` path; companion runs as root via LaunchDaemon) |
 
 ## Installation
 
