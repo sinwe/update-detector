@@ -33,6 +33,6 @@ The aggregator is unchanged.
 - [x] dnf applier scaffold
 - [x] OS version + security detection
 - [x] Reboot detection (`needs-restarting`)
-- [ ] CVE integration
+- [x] CVE integration
 - [x] Installer (`install.sh`) dnf-aware native path
 - [x] Fixture-based parsing tests

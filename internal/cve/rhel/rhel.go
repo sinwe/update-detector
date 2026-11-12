@@ -1,0 +1,110 @@
+//go:build !windows
+
+// Package rhel implements cve.Detector for RHEL-family hosts using trivy
+// (rootfs scan), which supports RPM-based distributions. debsecan is
+// Debian/Ubuntu-only and is intentionally not used here.
+package rhel
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"update-detector/internal/cve"
+	"update-detector/internal/cve/debian"
+
+	"update-detector/internal/checker"
+)
+
+// ErrNoScanner is returned when trivy is not available.
+var ErrNoScanner = fmt.Errorf("no vulnerability scanner found (trivy)")
+
+func init() {
+	cve.Register("rhel", func(f cve.Fields) (cve.Detector, error) {
+		return New(Config{
+			CVEToolsCacheDir: f["cve_tools_cache_dir"],
+		})
+	})
+}
+
+type Config struct {
+	CVEToolsCacheDir string
+}
+
+type Detector struct {
+	cfg Config
+}
+
+func New(cfg Config) (*Detector, error) {
+	return &Detector{cfg: cfg}, nil
+}
+
+func (d *Detector) Platform() string { return "rhel" }
+
+type trivyReport struct {
+	Results []struct {
+		Vulnerabilities []struct {
+			VulnerabilityID string `json:"VulnerabilityID"`
+			PkgName         string `json:"PkgName"`
+			Severity        string `json:"Severity"`
+			FixedVersion    string `json:"FixedVersion"`
+		} `json:"Vulnerabilities"`
+	} `json:"Results"`
+}
+
+func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.VulnerabilityInfo, error) {
+	bin, err := debian.EnsureTrivy(ctx, d.cfg.CVEToolsCacheDir)
+	if err != nil {
+		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		// EnsureTrivy returns a path that may not exist if download failed;
+		// surface as ErrNoScanner so callers preserve the previous value.
+		return checker.VulnerabilityInfo{}, ErrNoScanner
+	}
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "/")
+	out, err := cmd.Output()
+	if err != nil {
+		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
+	}
+	var rep trivyReport
+	if err := json.Unmarshal(out, &rep); err != nil {
+		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: bad json: %w", err)
+	}
+	info := checker.VulnerabilityInfo{Scanner: "trivy"}
+	seen := map[string]bool{}
+	for _, r := range rep.Results {
+		for _, v := range r.Vulnerabilities {
+			if v.VulnerabilityID == "" || seen[v.VulnerabilityID] {
+				continue
+			}
+			seen[v.VulnerabilityID] = true
+			sev := cve.NormalizeSeverity(strings.ToLower(v.Severity))
+			info.Total++
+			bumpSeverity(&info, sev)
+			info.Items = append(info.Items, checker.Vulnerability{
+				ID:       v.VulnerabilityID,
+				Severity: sev,
+				Package:  v.PkgName,
+				Source:   "trivy",
+				Fixed:    v.FixedVersion != "",
+			})
+		}
+	}
+	return info, nil
+}
+
+func bumpSeverity(info *checker.VulnerabilityInfo, sev string) {
+	switch sev {
+	case cve.SeverityCritical:
+		info.Critical++
+	case cve.SeverityHigh:
+		info.High++
+	case cve.SeverityMedium:
+		info.Medium++
+	case cve.SeverityLow:
+		info.Low++
+	}
+}

@@ -11,4 +11,5 @@ import (
 	_ "update-detector/internal/checker/rhel"
 	_ "update-detector/internal/checker/ubuntu"
 	_ "update-detector/internal/cve/debian"
+	_ "update-detector/internal/cve/rhel"
 )

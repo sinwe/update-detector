@@ -669,6 +669,13 @@ func parseDebsecanReport(out string) checker.VulnerabilityInfo {
 // ensureTrivy returns the path to a trivy binary, downloading it into
 // cacheDir on first use so the agent image stays small. The download is
 // best-effort; on failure the caller falls through to the next scanner.
+// EnsureTrivy is the exported entry point used by other cve detectors
+// (e.g. the RHEL one) to obtain a trivy binary, downloading it into
+// cacheDir on first use.
+func EnsureTrivy(ctx context.Context, cacheDir string) (string, error) {
+	return ensureTrivy(ctx, cacheDir)
+}
+
 func ensureTrivy(ctx context.Context, cacheDir string) (string, error) {
 	if cacheDir == "" {
 		cacheDir = "/var/lib/update-detector/tools"

@@ -230,7 +230,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 // Windows and macOS hosts must not be offered the toggle (or show CVE
 // counts) until a detector exists for them.
 func cveSupportedPlatform(platform string) bool {
-	return platform == "ubuntu" || platform == "debian"
+	return platform == "ubuntu" || platform == "debian" || platform == "rhel"
 }
 
 func shortID(id string) string {

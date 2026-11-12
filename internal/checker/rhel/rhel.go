@@ -15,29 +15,46 @@ import (
 
 	"update-detector/internal/checker"
 	"update-detector/internal/checker/reboot"
+	"update-detector/internal/cve"
 	"update-detector/internal/osrelease"
 )
 
 func init() {
 	checker.Register("rhel", func(f checker.Fields) (checker.Checker, error) {
 		return New(Config{
-			Hostname:      f["hostname"],
-			OSReleaseFile: f["os_release_file"],
+			Hostname:         f["hostname"],
+			OSReleaseFile:    f["os_release_file"],
+			CVECommand:       f["cve_command"],
+			CVEScanners:      f["cve_scanners"],
+			CVESuite:         f["cve_suite"],
+			CVEToolsCacheDir: f["cve_tools_cache_dir"],
 		})
 	})
 }
 
 type Config struct {
-	Hostname      string
-	OSReleaseFile string
+	Hostname         string
+	OSReleaseFile    string
+	CVECommand       string
+	CVEScanners      string
+	CVESuite         string
+	CVEToolsCacheDir string
 }
 
 type Checker struct {
-	cfg Config
+	cfg         Config
+	cveDetector cve.Detector
 }
 
 func New(cfg Config) (*Checker, error) {
-	return &Checker{cfg: cfg}, nil
+	c := &Checker{cfg: cfg}
+	det, err := cve.New("rhel", cve.Fields{
+		"cve_tools_cache_dir": cfg.CVEToolsCacheDir,
+	})
+	if err == nil {
+		c.cveDetector = det
+	}
+	return c, nil
 }
 
 func (c *Checker) Platform() string { return "rhel" }
@@ -113,6 +130,18 @@ func (c *Checker) Check(ctx context.Context, previous *checker.Status) (checker.
 	} else {
 		status.RebootRequired = required
 		status.RebootRequiredPackages = pkgs
+	}
+
+	// CVE / vulnerability detection (opt-in, gated by checker.CVEEnabled).
+	if c.cveDetector != nil && checker.CVEEnabled() {
+		if vulns, err := c.cveDetector.Detect(ctx, previous); err != nil {
+			status.Errors = append(status.Errors, fmt.Sprintf("cve: %v", err))
+			if previous != nil {
+				status.Vulnerabilities = previous.Vulnerabilities
+			}
+		} else {
+			status.Vulnerabilities = vulns
+		}
 	}
 
 	status.OK = checker.ComputeOK(status)
