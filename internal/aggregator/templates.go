@@ -1173,10 +1173,20 @@ const adminTemplateSrc = `<!DOCTYPE html>
       const btns = Array.from(document.querySelectorAll(sel));
       if (btns.length === 0) { alert('No out-of-sync ' + component + 's to update.'); return; }
       if (!confirm('Trigger self-update for ' + btns.length + ' ' + component + '(s) to {{.LatestVersion}}?')) return;
-      for (const b of btns) {
-        const m = (b.getAttribute('onclick') || '').match(/postSelfUpdate\('([^']+)'/);
-        if (m) await postSelfUpdate(m[1], component, '{{.LatestVersion}}');
-      }
+      try {
+        const resp = await fetch('/admin/self-update-all', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Admin-Apply-Secret': secret},
+          body: JSON.stringify({component: component, target_version: '{{.LatestVersion}}'}),
+        });
+        if (!resp.ok) {
+          if (resp.status === 403) { localStorage.removeItem('adminApplySecret'); alert('failed (403): wrong secret'); }
+          else alert('fleet update failed (' + resp.status + '): ' + await resp.text());
+          return;
+        }
+        const data = await resp.json();
+        for (const a of (data.actions || [])) openLiveOutput(a.id, {component: component, targetVersion: '{{.LatestVersion}}'});
+      } catch (e) { alert('fleet update failed: ' + e); }
     }
 
     function watchAggregatorRestart() {
