@@ -927,13 +927,13 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		data.SelfUpdateChannel = s.selfUpdate.Channel()
 		if latest, _, ok := s.selfUpdate.Latest(); ok {
 			data.LatestVersion = latest
-			if cmp, err := version.Compare(latest, version.Version); err == nil && cmp > 0 {
+			if cmp, err := version.Compare(latest, version.Version); err == nil && (cmp > 0 || outOfChannel(version.Version, data.SelfUpdateChannel)) {
 				data.AggregatorUpdateAvailable = true
 			}
 		}
 	}
 	for _, rec := range s.registry.List() {
-		v := toAgentView(rec, s.hub, data.LatestVersion)
+		v := toAgentView(rec, s.hub, data.LatestVersion, data.SelfUpdateChannel)
 		switch rec.Status {
 		case StatusPending:
 			data.Pending = append(data.Pending, v)
@@ -1435,7 +1435,11 @@ func (s *Server) handleAdminSelfUpdateAll(w http.ResponseWriter, r *http.Request
 		} else {
 			current = companionVersion
 		}
-		if !updateAvailable(req.TargetVersion, current) {
+		channel := "release"
+		if s.selfUpdate != nil {
+			channel = s.selfUpdate.Channel()
+		}
+		if !(updateAvailable(req.TargetVersion, current) || outOfChannel(current, channel)) {
 			continue
 		}
 		// Trigger per-host self-update with silent=true so no per-host
