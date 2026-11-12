@@ -59,7 +59,7 @@ the failure is listed under `errors` in the response.
 The agent runs inside an Ubuntu-based container regardless of which host
 it's deployed on, so at startup it reads the *host's* (host-mounted)
 `/etc/os-release` `ID` field to decide which checker implementation to run
-— logged as `detected host OS flavor: <ubuntu|debian>`. This matters because
+— logged as `detected host OS flavor: <ubuntu|debian|rhel>`. This matters because
 `apt-check` (used above) is Ubuntu-only tooling; it doesn't exist on plain
 Debian or Raspberry Pi OS.
 
@@ -79,6 +79,18 @@ On a Debian-flavored host (`ID=debian` or `ID=raspbian`), detection instead:
    `false` on this flavor; `os.current_version`/`current_codename` are still
    populated.
 
+On a RHEL-family host (`ID` in `fedora`, `rhel`, `centos`, `rocky`,
+`almalinux`, `ol`), detection instead:
+
+1. Runs `dnf check-update -q` (exit 100 = updates available) and parses
+   `name.arch  version  repo` lines; the arch suffix is stripped.
+2. Classifies security updates via a parallel `dnf check-update -q --security`.
+3. Detects a pending reboot via `needs-restarting -r` (from dnf-utils),
+   falling back to the `/var/run/reboot-required` marker.
+4. Populates `os.current_version`/`current_codename` from `/etc/os-release`.
+   `os.update_available` stays `false` (no machine-readable RHEL release
+   feed is consulted).
+
 ### Platform limitations
 
 Third-party repos (Docker, Tailscale, VS Code, etc.) sign with a key
@@ -97,12 +109,15 @@ into a WSL2 Ubuntu/Debian distro, if that's what you're running it in.
 Monitoring the actual Windows or macOS OS needs a native, non-container
 agent — the checker is designed as an interface specifically so that's a
 new implementation, not a rewrite (see
-`docs/plugin-architecture-plan.md`). macOS is still planned; Windows has
-an experimental implementation (`internal/checker/windows`), with
-detection, `install.bat`, and companion apply/self-update now confirmed
-against a real Windows host. **winget is not supported** — see the
-dedicated bullet below for why — Windows Update is the only signal this
-project relies on for Windows.
+`docs/plugin-architecture-plan.md`). Windows, macOS, and the RHEL family
+now have native, non-container agents: Windows uses Windows Update
+(detection, `install.bat`, and companion apply/self-update confirmed
+against a real Windows host), macOS uses `softwareupdate`/`brew`
+(detection confirmed against a real Mac host), and RHEL-family hosts use
+`dnf` with security classification and `needs-restarting` reboot
+detection. **winget is not supported** — see the dedicated bullet below
+for why — Windows Update is the only signal this project relies on for
+Windows.
 
 - **Windows Update (primary, and only supported, signal)**: queries the
   Windows Update Agent API — the same COM interface
@@ -180,9 +195,9 @@ project relies on for Windows.
 - **Roadmap, not started**: Windows Update above covers the OS itself;
   a genuinely supported Windows package-manager signal (Scoop and
   Chocolatey are candidates, since winget isn't a viable one — see
-  above), a Homebrew-based macOS checker (see the macOS row above), and
-  Docker image update detection on Linux (tag/digest drift, a different
-  kind of "update" than an OS package manager reports) are all intended
+  above), and Docker image update detection on Linux (tag/digest drift, a
+  different kind of "update" than an OS package manager reports) are all
+  intended
   future checker plugins, none of them started.
 
 On WSL2 specifically, `docker` being on `PATH` doesn't necessarily mean
