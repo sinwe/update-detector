@@ -252,9 +252,9 @@ fi
 fetch_body() {
   _url="$1" _ua="${2:-update-detector-install.sh}"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -H "User-Agent: $_ua" "$_url"
+    curl -fsSL --connect-timeout 10 --max-time 60 -H "User-Agent: $_ua" "$_url"
   else
-    wget -qO- --user-agent="$_ua" "$_url"
+    wget -qO- --timeout=60 --user-agent="$_ua" "$_url"
   fi
 }
 
@@ -268,9 +268,9 @@ download_to() {
   if command -v curl >/dev/null 2>&1; then
     # -# shows a progress bar (auto-disabled when not a tty) instead of
     # the fully silent -s, so a slow connection doesn't look hung.
-    curl -fL -# "$_url" -o "$_dest"
+    curl -fL -# --connect-timeout 10 --max-time 300 "$_url" -o "$_dest"
   else
-    wget --show-progress -O "$_dest" "$_url"
+    wget --show-progress -T 300 -O "$_dest" "$_url"
   fi
 }
 
@@ -348,21 +348,19 @@ docker_available() {
 # for $INSTALL_VERSION, or nothing if not found in that release.
 resolve_asset_url() {
   asset_name="$1"
+  # Build the download URL directly instead of querying the GitHub API.
+  # The API is rate-limited to 60 requests/hour for unauthenticated
+  # callers and returns 403 once exhausted, which made installs fail with
+  # "could not find asset" even though the release and its assets exist.
+  # The release asset URL follows a fixed, predictable pattern, and
+  # /releases/latest/download/<asset> redirects to the newest release's
+  # asset, so neither path needs the API at all. A missing asset surfaces
+  # as a 404 on the subsequent download_to call.
   if [ "$INSTALL_VERSION" = "latest" ]; then
-    release_url="$GITHUB_API/releases/latest"
+    echo "https://github.com/sinwe/update-detector/releases/latest/download/$asset_name"
   else
-    release_url="$GITHUB_API/releases/tags/$INSTALL_VERSION"
+    echo "https://github.com/sinwe/update-detector/releases/download/$INSTALL_VERSION/$asset_name"
   fi
-  # Deliberately not `curl -f ... | jq ...`: same reasoning as
-  # release.yml's own publish step -- a failed request here would silently
-  # produce an empty result via a suppressed body, rather than a clear
-  # error. grep+sed avoids needing jq on the *installing* host too, which
-  # (unlike the release workflow's own runner) we don't control.
-  # GitHub's API rejects requests with no User-Agent at all (403).
-  fetch_body "$release_url" "update-detector-install.sh" \
-    | grep -o "\"browser_download_url\":[^,]*$asset_name\"" \
-    | head -1 \
-    | sed -E 's/.*"(https[^"]+)"$/\1/'
 }
 
 # sha256_of FILE -> prints the sha256 hex digest of FILE, or nothing if
@@ -385,13 +383,6 @@ sha256_of() {
 # file are available; a mismatch aborts the install.
 download_binary() {
   name="$1" dest="$2"
-  # Skip re-downloading when the binary already exists and the caller
-  # hasn't asked for a forced refresh. Re-running install.sh on a host
-  # that's already on the requested version shouldn't re-fetch ~10MB.
-  if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
-    echo "install.sh: $dest already present -- skipping download (set FORCE_DOWNLOAD=1 to override)"
-    return 0
-  fi
   resolve_goarch
   asset_name="$name-$(goos_name)-$goarch"
   echo "install.sh: resolving $asset_name from release $INSTALL_VERSION..."
@@ -400,6 +391,46 @@ download_binary() {
     echo "install.sh: could not find asset $asset_name in release $INSTALL_VERSION" >&2
     exit 1
   fi
+
+  # Skip re-downloading when the binary already exists at the requested
+  # version AND its checksum matches the release's published sha256sums.txt.
+  # Comparing only versions is not enough: a corrupted/partial binary or a
+  # re-published asset with the same version string would otherwise be
+  # left in place. A version mismatch, a checksum mismatch, or a missing
+  # checksums file (older releases) falls through to a fresh download.
+  # FORCE_DOWNLOAD=1 always overrides.
+  if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
+    # Do not invoke the binary to read its version: older builds that predate
+    # the --version flag ignore it and run as a daemon (hanging the install).
+    # The checksum comparison below is authoritative instead.
+    skip=1
+      # Best-effort checksum comparison with a short timeout so a slow or
+      # stalled network can never make the "already up to date" path hang.
+      if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+        checksums_url="${download_url%/*}/sha256sums.txt"
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL --connect-timeout 5 --max-time 10 -o "$dest.sha256sums" "$checksums_url" 2>/dev/null
+        else
+          wget -qO "$dest.sha256sums" --timeout=10 "$checksums_url" 2>/dev/null
+        fi
+        if [ -f "$dest.sha256sums" ]; then
+          expected="$(grep "  $asset_name\$" "$dest.sha256sums" 2>/dev/null | awk '{print $1}')"
+          if [ -n "$expected" ]; then
+            actual="$(sha256_of "$dest")"
+            if [ "$actual" != "$expected" ]; then
+              skip=0
+              echo "install.sh: $dest checksum differs from release (expected $expected, got $actual) -- re-downloading"
+            fi
+          fi
+          rm -f "$dest.sha256sums"
+        fi
+      fi
+      if [ "$skip" = "1" ]; then
+        echo "install.sh: $dest already matches release checksum -- skipping download (set FORCE_DOWNLOAD=1 to override)"
+        return 0
+      fi
+  fi
+
   echo "install.sh: downloading $download_url"
   if ! download_to "$download_url" "$dest.new"; then
     echo "install.sh: failed to download $download_url" >&2

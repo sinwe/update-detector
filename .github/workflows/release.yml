@@ -99,7 +99,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Publish the GitHub release (with native binary assets) BEFORE the
+      # Docker build, so a flaky apt mirror in the image build can't block
+      # native installs (install.sh) or leave the release unpublished.
+      - name: Publish release with binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          PRERELEASE_FLAG=""
+          if [ "${{ steps.prerelease.outputs.is_prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes $PRERELEASE_FLAG
+          fi
+
       - name: Build and push multi-arch images
+        continue-on-error: true
         run: |
           set -eu
           TAG="${{ github.ref_name }}"
@@ -132,21 +152,6 @@ jobs:
           build_and_push update-detector ./Dockerfile
           build_and_push update-aggregator ./Dockerfile.aggregator
 
-      # gh is preinstalled on GitHub-hosted runners and handles
-      # create-or-update, multi-asset upload, and the prerelease flag
-      # natively -- no hand-rolled REST needed.
-      - name: Publish release with binaries
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          TAG="${{ github.ref_name }}"
-          PRERELEASE_FLAG=""
-          if [ "${{ steps.prerelease.outputs.is_prerelease }}" = "true" ]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-          else
-            gh release create "$TAG" dist/* --title "$TAG" --generate-notes $PRERELEASE_FLAG
-          fi
+      # Docker build is allowed to fail (continue-on-error above) so a
+      # flaky apt mirror can't block native installs or the release itself;
+      # the release + binaries are already published by the step above.
