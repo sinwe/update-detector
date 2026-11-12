@@ -152,7 +152,23 @@ func updateAvailable(latest, current string) bool {
 	return err == nil && cmp > 0
 }
 
-func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agentView {
+// outOfChannel reports whether current is a version that does not meet the
+// channel's minimum stability (e.g. a pre-release installed on the release
+// channel), so the host should be offered the channel's latest even when
+// that latest is older by version number. Used to allow moving off a
+// pre-release track onto a more restrictive one.
+func outOfChannel(current, channel string) bool {
+	if current == "" || channel == "" {
+		return false
+	}
+	ok, err := version.MeetsChannel(current, channel)
+	if err != nil {
+		return false
+	}
+	return !ok
+}
+
+func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion, channel string) agentView {
 	kind, connected := hub.Kind(rec.ID)
 	companionVersion := hub.CompanionVersion(rec.ID)
 	// aggregatorBehind mirrors handleAdminSelfUpdate's own dependency-
@@ -174,7 +190,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		AnyStreamConnected:       connected,
 		CompanionConnected:       connected && kind == KindCompanion,
 		CompanionVersion:         companionVersion,
-		CompanionUpdateAvailable: updateAvailable(latestVersion, companionVersion) && !aggregatorBehind,
+		CompanionUpdateAvailable: (updateAvailable(latestVersion, companionVersion) || outOfChannel(companionVersion, channel)) && !aggregatorBehind,
 		AggregatorPresent:        hub.AggregatorPresent(rec.ID),
 		AgentPresent:             hub.AgentPresent(rec.ID),
 	}
@@ -210,7 +226,7 @@ func toAgentView(rec AgentRecord, hub *CompanionHub, latestVersion string) agent
 		v.CVETotal = rec.LastReport.Vulnerabilities.Total
 		v.CVEScanner = rec.LastReport.Vulnerabilities.Scanner
 		v.CVEItems = rec.LastReport.Vulnerabilities.Items
-		v.AgentUpdateAvailable = updateAvailable(latestVersion, v.AgentVersion) && !aggregatorBehind
+		v.AgentUpdateAvailable = (updateAvailable(latestVersion, v.AgentVersion) || outOfChannel(v.AgentVersion, channel)) && !aggregatorBehind
 	}
 	// Results() is oldest-first; show most recent first.
 	results := hub.Results(rec.ID)
@@ -585,6 +601,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
     <div class="banner banner-warn">
       <strong>{{.LatestVersion}}</strong> is available (running <strong>{{.AggregatorVersion}}</strong>).
       Use "Update aggregator" from the host that runs it.
+    </div>
+    {{end}}
+
+    {{if .LatestVersion}}
+    <div class="channel-row" style="margin-top:.5rem">
+      Fleet update:
+      <button class="btn-sm" onclick="updateAll('agent')" title="Trigger self-update for every approved host whose agent is behind {{.LatestVersion}}">Update all agents</button>
+      <button class="btn-sm" onclick="updateAll('companion')" title="Trigger self-update for every approved host whose companion is behind {{.LatestVersion}}">Update all companions</button>
     </div>
     {{end}}
 
@@ -1156,6 +1180,29 @@ const adminTemplateSrc = `<!DOCTYPE html>
         closeLiveOutput(id, es);
         alert('self-update failed: ' + e);
       }
+    }
+
+    async function updateAll(component) {
+      const secret = getAdminApplySecret();
+      if (!secret) return;
+      const sel = "button[onclick*=\"postSelfUpdate(\"][onclick*=\"'" + component + "'\"]";
+      const btns = Array.from(document.querySelectorAll(sel));
+      if (btns.length === 0) { alert('No out-of-sync ' + component + 's to update.'); return; }
+      if (!confirm('Trigger self-update for ' + btns.length + ' ' + component + '(s) to {{.LatestVersion}}?')) return;
+      try {
+        const resp = await fetch('/admin/self-update-all', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Admin-Apply-Secret': secret},
+          body: JSON.stringify({component: component, target_version: '{{.LatestVersion}}'}),
+        });
+        if (!resp.ok) {
+          if (resp.status === 403) { localStorage.removeItem('adminApplySecret'); alert('failed (403): wrong secret'); }
+          else alert('fleet update failed (' + resp.status + '): ' + await resp.text());
+          return;
+        }
+        const data = await resp.json();
+        for (const a of (data.actions || [])) openLiveOutput(a.id, {component: component, targetVersion: '{{.LatestVersion}}'});
+      } catch (e) { alert('fleet update failed: ' + e); }
     }
 
     function watchAggregatorRestart() {

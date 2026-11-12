@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"update-detector/internal/checker"
@@ -67,6 +68,11 @@ type Server struct {
 	// consults it before falling back to notifyMgr. Nil means every host
 	// uses the fleet-wide bot, exactly as before.
 	notifyStore *NotifyStore
+	// silentActions holds action IDs triggered by the fleet ("update all")
+	// buttons, whose per-host Telegram notifications are suppressed in
+	// favor of a single consolidated notification sent at trigger time.
+	silentActions map[string]struct{}
+	silentMu      sync.Mutex
 	// newTelegram builds the notifier for one token/chat pair. Swappable
 	// so tests can assert delivery without touching the network.
 	newTelegram func(botToken, chatID string) notifier.Notifier
@@ -86,6 +92,7 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 		selfUpdate:       selfUpdate,
 		outputHub:        outputHub,
 		adminHub:         adminHub,
+		silentActions:    map[string]struct{}{},
 		mux:              http.NewServeMux(),
 		newTelegram: func(botToken, chatID string) notifier.Notifier {
 			return notifier.NewTelegram(botToken, chatID)
@@ -102,6 +109,7 @@ func NewServerWithAdminHub(shutdownCtx context.Context, registry *Registry, hub 
 	s.mux.HandleFunc("/admin", s.handleAdmin)
 	s.mux.HandleFunc("/admin/events", s.handleAdminEvents)
 	s.mux.HandleFunc("/admin/self-update-channel", s.handleAdminSelfUpdateChannel)
+	s.mux.HandleFunc("/admin/self-update-all", s.handleAdminSelfUpdateAll)
 	s.mux.HandleFunc("/admin/alert-settings", s.handleAdminAlertSettings)
 	s.mux.HandleFunc("/admin/notifications", s.handleAdminNotifications)
 	s.mux.HandleFunc("/admin/agents/", s.handleAdminAction)
@@ -592,7 +600,12 @@ func (s *Server) handleCompanionResult(w http.ResponseWriter, r *http.Request) {
 
 	if s.notifyMgr != nil {
 		actionType, known := s.hub.PendingType(rec.ID, req.ActionID)
-		s.notifyMgr.Send(r.Context(), resultEvent(rec, actionType, known, req.Success, req.Message))
+		// Suppress per-host notifications for actions triggered by the
+		// fleet ("update all") buttons -- those get a single consolidated
+		// notification at trigger time instead of one per host.
+		if !s.isSilentAction(req.ActionID) {
+			s.notifyMgr.Send(r.Context(), resultEvent(rec, actionType, known, req.Success, req.Message))
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
@@ -914,13 +927,13 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		data.SelfUpdateChannel = s.selfUpdate.Channel()
 		if latest, _, ok := s.selfUpdate.Latest(); ok {
 			data.LatestVersion = latest
-			if cmp, err := version.Compare(latest, version.Version); err == nil && cmp > 0 {
+			if cmp, err := version.Compare(latest, version.Version); err == nil && (cmp > 0 || outOfChannel(version.Version, data.SelfUpdateChannel)) {
 				data.AggregatorUpdateAvailable = true
 			}
 		}
 	}
 	for _, rec := range s.registry.List() {
-		v := toAgentView(rec, s.hub, data.LatestVersion)
+		v := toAgentView(rec, s.hub, data.LatestVersion, data.SelfUpdateChannel)
 		switch rec.Status {
 		case StatusPending:
 			data.Pending = append(data.Pending, v)
@@ -1242,6 +1255,7 @@ func (s *Server) handleAdminNotifyDown(w http.ResponseWriter, r *http.Request, i
 type selfUpdateRequest struct {
 	Component     string `json:"component"`
 	TargetVersion string `json:"target_version"`
+	Silent        bool   `json:"silent"`
 }
 
 // handleAdminSelfUpdate pushes an ActionSelfUpdate to the companion
@@ -1354,6 +1368,126 @@ func (s *Server) handleAdminSelfUpdate(w http.ResponseWriter, r *http.Request, i
 	s.beginAgentOutput(id, action.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"action_id": action.ID})
+}
+
+// handleAdminSelfUpdateAll triggers a self-update for every approved host
+// whose agent (or companion) version is behind data.LatestVersion, and
+// sends a single consolidated notification instead of one per host.
+func (s *Server) handleAdminSelfUpdateAll(w http.ResponseWriter, r *http.Request) {
+	if s.adminApplySecret == "" {
+		http.Error(w, "self-update is disabled: ADMIN_APPLY_SHARED_SECRET is not configured", http.StatusNotImplemented)
+		return
+	}
+	presented := r.Header.Get("X-Admin-Apply-Secret")
+	if presented == "" || subtle.ConstantTimeCompare([]byte(presented), []byte(s.adminApplySecret)) != 1 {
+		http.Error(w, "invalid or missing X-Admin-Apply-Secret", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Component     string `json:"component"`
+		TargetVersion string `json:"target_version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	switch req.Component {
+	case "agent", "companion":
+	default:
+		http.Error(w, "component must be one of: agent, companion", http.StatusBadRequest)
+		return
+	}
+	if req.TargetVersion == "" {
+		http.Error(w, "target_version is required", http.StatusBadRequest)
+		return
+	}
+	// Target must not be newer than the aggregator itself.
+	cmp, err := version.Compare(req.TargetVersion, version.Version)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("target_version %q: %v", req.TargetVersion, err), http.StatusBadRequest)
+		return
+	}
+	if cmp > 0 {
+		http.Error(w, fmt.Sprintf(
+			"target_version %s is newer than this aggregator's own version %s -- update the aggregator first",
+			req.TargetVersion, version.Version), http.StatusConflict)
+		return
+	}
+
+	type triggered struct {
+		ID       string `json:"id"`
+		ActionID string `json:"action_id"`
+	}
+	var triggeredList []triggered
+	for _, rec := range s.registry.List() {
+		if rec.Status != StatusApproved {
+			continue
+		}
+		agentVersion := ""
+		companionVersion := ""
+		if rec.LastReport != nil {
+			agentVersion = rec.LastReport.AgentVersion
+			companionVersion = s.hub.CompanionVersion(rec.ID)
+		}
+		var current string
+		if req.Component == "agent" {
+			current = agentVersion
+		} else {
+			current = companionVersion
+		}
+		channel := "release"
+		if s.selfUpdate != nil {
+			channel = s.selfUpdate.Channel()
+		}
+		if !(updateAvailable(req.TargetVersion, current) || outOfChannel(current, channel)) {
+			continue
+		}
+		// Trigger per-host self-update with silent=true so no per-host
+		// Telegram fires; the single consolidated notification below covers it.
+		action := Action{
+			ID:            newActionID(),
+			Type:          ActionSelfUpdate,
+			Component:     req.Component,
+			TargetVersion: req.TargetVersion,
+			CreatedAt:     time.Now(),
+		}
+		if err := s.hub.Push(rec.ID, action); err != nil {
+			continue
+		}
+		s.markSilentAction(action.ID)
+		s.beginAgentOutput(rec.ID, action.ID)
+		triggeredList = append(triggeredList, triggered{ID: rec.ID, ActionID: action.ID})
+	}
+
+	if s.notifyMgr != nil && len(triggeredList) > 0 {
+		ev := notifier.Event{
+			Title:   fmt.Sprintf("fleet self-update: %d %s(s) triggered to %s", len(triggeredList), req.Component, req.TargetVersion),
+			Brief:   true,
+			Changes: []string{fmt.Sprintf("%d host(s) updating", len(triggeredList))},
+		}
+		s.notifyMgr.Send(r.Context(), ev)
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"triggered": len(triggeredList),
+		"actions":   triggeredList,
+	})
+}
+
+func (s *Server) markSilentAction(id string) {
+	s.silentMu.Lock()
+	defer s.silentMu.Unlock()
+	s.silentActions[id] = struct{}{}
+}
+
+func (s *Server) isSilentAction(id string) bool {
+	s.silentMu.Lock()
+	defer s.silentMu.Unlock()
+	_, ok := s.silentActions[id]
+	if ok {
+		delete(s.silentActions, id)
+	}
+	return ok
 }
 
 // handleAdminAgentVersion reports id's currently-known agent/companion
