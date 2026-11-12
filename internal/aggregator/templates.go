@@ -588,6 +588,14 @@ const adminTemplateSrc = `<!DOCTYPE html>
     </div>
     {{end}}
 
+    {{if .LatestVersion}}
+    <div class="channel-row" style="margin-top:.5rem">
+      Fleet update:
+      <button class="btn-sm" onclick="updateAll('agent')" title="Trigger self-update for every approved host whose agent is behind {{.LatestVersion}}">Update all agents</button>
+      <button class="btn-sm" onclick="updateAll('companion')" title="Trigger self-update for every approved host whose companion is behind {{.LatestVersion}}">Update all companions</button>
+    </div>
+    {{end}}
+
     <div class="links-row">
       <a href="/admin/notifications">🔔 Notifications</a>
       <a href="/widgets/packages">All packages</a>
@@ -1155,6 +1163,19 @@ const adminTemplateSrc = `<!DOCTYPE html>
       } catch (e) {
         closeLiveOutput(id, es);
         alert('self-update failed: ' + e);
+      }
+    }
+
+    async function updateAll(component) {
+      const secret = getAdminApplySecret();
+      if (!secret) return;
+      const sel = "button[onclick*=\"postSelfUpdate(\"][onclick*=\"'" + component + "'\"]";
+      const btns = Array.from(document.querySelectorAll(sel));
+      if (btns.length === 0) { alert('No out-of-sync ' + component + 's to update.'); return; }
+      if (!confirm('Trigger self-update for ' + btns.length + ' ' + component + '(s) to {{.LatestVersion}}?')) return;
+      for (const b of btns) {
+        const m = (b.getAttribute('onclick') || '').match(/postSelfUpdate\('([^']+)'/);
+        if (m) await postSelfUpdate(m[1], component, '{{.LatestVersion}}');
       }
     }
 
