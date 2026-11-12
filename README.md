@@ -18,6 +18,7 @@ below.
 |---|---|
 | Ubuntu (bare metal or VM) | ✅ supported now |
 | Plain Debian / Raspberry Pi OS (bare metal or VM) | ✅ supported now — see [OS flavors](docs/reference.md#os-flavors) |
+| RHEL family (RHEL, Rocky, AlmaLinux, CentOS Stream, Fedora, Oracle Linux) | 🧪 experimental — detection via `dnf`, companion apply via `dnf`, reboot detection via `needs-restarting`, CVE via trivy; see `docs/rhel-checker.md` |
 | Raspberry Pi 4B (arm64, either flavor above) | ✅ supported now — see [Releases](docs/reference.md#releases) |
 | WSL2 Ubuntu/Debian distro on Windows | ✅ supported now — see [WSL2](docs/wsl2.md) (Docker Desktop's WSL2 integration is usually a CLI shim, not a real engine — `install.sh` offers a native, no-Docker install for this reason) |
 | Actual Windows OS (Windows Update) | 🧪 experimental — detection, `install.bat`, and companion apply/self-update confirmed against a real Windows host, see [Limitations](docs/reference.md#platform-limitations); **winget is not supported** |

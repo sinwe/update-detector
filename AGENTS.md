@@ -39,7 +39,7 @@ Data flow: `agent --HTTP push--> aggregator <--SSE-- companion --GET /status--> 
 
 Key packages:
 - `internal/checker` — `Checker` interface, `Fields map[string]string` registry, `Status`/`PackageInfo` types
-- `internal/checker/{ubuntu,debian,windows}` — platform checkers (Windows: Windows Update primary, winget supplementary-but-unsupported)
+- `internal/checker/{ubuntu,debian,rhel,windows}` — platform checkers (RHEL family via dnf; Windows: Windows Update primary, winget supplementary-but-unsupported)
 - `internal/hostflavor` — detects `ID` from `/host/etc/os-release` to select checker
 - `internal/companion` — `Applier` interface (`applier.go`), `apt` vs Windows Update appliers, self-update, output streaming
 - `internal/config` / `internal/aggregatorconfig` — env-based config with host-mount defaults
@@ -49,7 +49,7 @@ Key packages:
 ## Platform / Build Tags
 
 - `//go:build !windows` vs `//go:build windows` splits all OS-specific code. Keep platform files thin (only `exec.Command`); put parsing in tag-free files with fixture tests.
-- Never import platform checker packages directly in `main.go`. Register via `init()` (`checker.Register`, `registerApplier`). Wiring is in `cmd/update-detector/platforms_unix.go` (blank-imports `ubuntu`+`debian`) and `platforms_windows.go` (blank-imports `windows`) — `checker.New()` selects at runtime.
+- Never import platform checker packages directly in `main.go`. Register via `init()` (`checker.Register`, `registerApplier`). Wiring is in `cmd/update-detector/platforms_unix.go` (blank-imports `ubuntu`+`debian`+`rhel`) and `platforms_windows.go` (blank-imports `windows`) — `checker.New()` selects at runtime.
 - Config → checker bridge is `checker.Fields` (`map[string]string`), not typed structs, to avoid circular imports. `config.Config.CheckerFields()` populates all keys; unused keys are ignored.
 - Companion token handoff is OS-split: Unix socket (`token_unix.go`) vs named pipe (`token_windows.go` via `go-winio`).
 
