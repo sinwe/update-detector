@@ -22,16 +22,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X update-detector/internal/vers
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN for i in 1 2 3 4 5; do \
-      apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 && break || sleep 15; \
-    done && \
-    apt-get install -y --no-install-recommends \
-      ca-certificates \
-      apt \
-      curl \
-      debsecan \
-      update-notifier-common \
-    && rm -rf /var/lib/apt/lists/*
+RUN for i in 1 2 3; do \
+      apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 && \
+      apt-get install -y --no-install-recommends \
+        ca-certificates apt curl debsecan update-notifier-common && \
+      { rm -rf /var/lib/apt/lists/*; exit 0; }; \
+      echo "apt attempt $i failed, retrying in 15s..." >&2; \
+      sleep 15; \
+    done; \
+    exit 1
 
 # Note: trivy is NOT baked into the image. It is downloaded on first use
 # by internal/cve/debian (ensureTrivy) and cached in /var/lib/update-detector/

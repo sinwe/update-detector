@@ -149,8 +149,10 @@ jobs:
               --push .
           }
 
-          build_and_push update-detector ./Dockerfile
-          build_and_push update-aggregator ./Dockerfile.aggregator
+          # Build each image independently so a flaky apt mirror in the
+          # agent image doesn't also block the (apt-free) aggregator image.
+          build_and_push update-detector ./Dockerfile || echo "WARN: agent image build failed"
+          build_and_push update-aggregator ./Dockerfile.aggregator || echo "WARN: aggregator image build failed"
 
       # Docker build is allowed to fail (continue-on-error above) so a
       # flaky apt mirror can't block native installs or the release itself;
