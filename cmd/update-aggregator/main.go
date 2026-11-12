@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +23,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version" || os.Args[1] == "version") {
+		fmt.Printf("update-aggregator %s\n", version.Version)
+		return
+	}
 	if err := start(); err != nil {
 		log.Fatal(err)
 	}
