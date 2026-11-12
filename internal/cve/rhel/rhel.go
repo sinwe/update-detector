@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -56,16 +57,16 @@ type trivyReport struct {
 }
 
 func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.VulnerabilityInfo, error) {
-	bin, err := debian.EnsureTrivy(ctx, d.cfg.CVEToolsCacheDir)
+	cacheDir := d.cfg.CVEToolsCacheDir
+	if cacheDir == "" {
+		cacheDir = "/var/lib/update-detector/tools"
+	}
+	bin, err := debian.EnsureTrivy(ctx, cacheDir)
 	if err != nil {
 		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
 	}
-	if _, err := exec.LookPath(bin); err != nil {
-		// EnsureTrivy returns a path that may not exist if download failed;
-		// surface as ErrNoScanner so callers preserve the previous value.
-		return checker.VulnerabilityInfo{}, ErrNoScanner
-	}
-	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "/")
+	_ = os.MkdirAll(cacheDir, 0o755)
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "--cache-dir", cacheDir, "/")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
