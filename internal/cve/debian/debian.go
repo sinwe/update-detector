@@ -227,7 +227,11 @@ func runTrivy(ctx context.Context, cacheDir string) (checker.VulnerabilityInfo, 
 	if err != nil {
 		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "/")
+	if cacheDir == "" {
+		cacheDir = "/var/lib/update-detector/tools"
+	}
+	_ = os.MkdirAll(cacheDir, 0o755)
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "--cache-dir", cacheDir, "/")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
