@@ -231,7 +231,7 @@ func runTrivy(ctx context.Context, cacheDir string) (checker.VulnerabilityInfo, 
 		cacheDir = "/var/lib/update-detector/tools"
 	}
 	_ = os.MkdirAll(cacheDir, 0o755)
-	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "--cache-dir", cacheDir, "/")
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "--cache-dir", cacheDir, "--skip-dirs", "/proc,/sys,/dev,/mnt", "/")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

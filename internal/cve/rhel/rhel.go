@@ -66,7 +66,7 @@ func (d *Detector) Detect(ctx context.Context, _ *checker.Status) (checker.Vulne
 		return checker.VulnerabilityInfo{}, fmt.Errorf("trivy: %w", err)
 	}
 	_ = os.MkdirAll(cacheDir, 0o755)
-	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "--cache-dir", cacheDir, "/")
+	cmd := exec.CommandContext(ctx, bin, "rootfs", "--format", "json", "--quiet", "--exit-code", "0", "--cache-dir", cacheDir, "--skip-dirs", "/proc,/sys,/dev,/mnt", "/")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
