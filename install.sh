@@ -400,9 +400,10 @@ download_binary() {
   # checksums file (older releases) falls through to a fresh download.
   # FORCE_DOWNLOAD=1 always overrides.
   if [ -x "$dest" ] && [ "${FORCE_DOWNLOAD:-}" != "1" ]; then
-    existing_version="$("$dest" --version 2>/dev/null | awk '{print $NF}')"
-    if [ -n "$existing_version" ] && [ "$existing_version" = "$INSTALL_VERSION" ]; then
-      skip=1
+    # Do not invoke the binary to read its version: older builds that predate
+    # the --version flag ignore it and run as a daemon (hanging the install).
+    # The checksum comparison below is authoritative instead.
+    skip=1
       # Best-effort checksum comparison with a short timeout so a slow or
       # stalled network can never make the "already up to date" path hang.
       if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
@@ -425,10 +426,9 @@ download_binary() {
         fi
       fi
       if [ "$skip" = "1" ]; then
-        echo "install.sh: $dest already at $INSTALL_VERSION -- skipping download (set FORCE_DOWNLOAD=1 to override)"
+        echo "install.sh: $dest already matches release checksum -- skipping download (set FORCE_DOWNLOAD=1 to override)"
         return 0
       fi
-    fi
   fi
 
   echo "install.sh: downloading $download_url"
