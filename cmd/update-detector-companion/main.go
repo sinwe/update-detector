@@ -154,7 +154,7 @@ func run(ctx context.Context) error {
 			log.Printf("companion: action %s failed: %s", action.ID, result.Message)
 		}
 		report(result)
-	})
+	}, nil)
 
 	log.Println("companion: shutting down")
 	return nil

@@ -53,13 +53,28 @@ var errSuperseded = errors.New("superseded by a higher-priority connection")
 // up front (e.g. via companion.AggregatorColocated), not per reconnect
 // attempt, since it shells out to systemctl/docker and this host's
 // deploy shape essentially never changes within one process's lifetime.
-func Run(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent, agentPresent bool, onAction func(aggregator.Action)) {
+// Run drives the long-lived SSE connection to the aggregator, reconnecting
+// with backoff on any failure. onAction handles server-pushed actions.
+// onConnect, if non-nil, is invoked after each successful connection (a
+// reconnect following a drop counts too) — used by the agent to trigger an
+// out-of-band detection cycle when the machine wakes or the network returns,
+// rather than waiting for the next scheduled tick. A nil onConnect is fine.
+func Run(ctx context.Context, aggregatorURL string, identity aggregatorclient.Identity, kind aggregator.ClientKind, aggregatorPresent, agentPresent bool, onAction func(aggregator.Action), onConnect func()) {
 	backoff := time.Second
+	first := true
 	for ctx.Err() == nil {
 		err := runOnce(ctx, aggregatorURL, identity, kind, aggregatorPresent, agentPresent, onAction)
 		if err != nil && ctx.Err() != nil {
 			return
 		}
+
+		// A successful connection (err == nil) means we're (re)connected.
+		// Fire onConnect on reconnects only, not on the very first attempt
+		// -- the caller already ran its initial check before connecting.
+		if err == nil && !first && onConnect != nil {
+			onConnect()
+		}
+		first = false
 
 		wait, next := nextRetryDelay(err, backoff)
 		backoff = next
