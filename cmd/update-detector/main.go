@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -324,6 +325,35 @@ func run(ctx context.Context) error {
 
 	runCheck(true, nil)
 
+	// On macOS, a sleeping (lid-closed) Mac occasionally wakes briefly;
+	// use that window to run an out-of-band check instead of waiting for
+	// the next scheduled tick. Detected by watching wall-clock jumps: a
+	// sleep suspends time.Sleep, so a gap much larger than the poll
+	// interval means the system was asleep. Harmless on other platforms
+	// (no such jumps occur on a server), but only wired up on darwin.
+	wakeCh := make(chan struct{}, 1)
+	if runtime.GOOS == "darwin" {
+		go func() {
+			const poll = 30 * time.Second
+			last := time.Now()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(poll):
+				}
+				now := time.Now()
+				if now.Sub(last) > 3*poll {
+					select {
+					case wakeCh <- struct{}{}:
+					default:
+					}
+				}
+				last = now
+			}
+		}()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -338,6 +368,10 @@ func run(ctx context.Context) error {
 			runCheck(false, nil)
 		case <-srv.Recheck():
 			log.Println("out-of-band recheck requested")
+			runCheck(false, nil)
+			ticker.Reset(cfg.CheckInterval)
+		case <-wakeCh:
+			log.Println("system wake detected, running out-of-band check")
 			runCheck(false, nil)
 			ticker.Reset(cfg.CheckInterval)
 		}
