@@ -43,7 +43,7 @@ func TestRunInvokesOnAction(t *testing.T) {
 	received := make(chan aggregator.Action, 1)
 	go Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "agent-1", Token: "tok"}, aggregator.KindCompanion, false, false, func(a aggregator.Action) {
 		received <- a
-	})
+	}, nil)
 
 	select {
 	case got := <-received:
@@ -64,7 +64,7 @@ func TestRunStopsOnContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(aggregator.Action) {})
+		Run(ctx, srv.URL, aggregatorclient.Identity{AgentID: "a", Token: "t"}, aggregator.KindAgent, false, false, func(aggregator.Action) {}, nil)
 		close(done)
 	}()
 
